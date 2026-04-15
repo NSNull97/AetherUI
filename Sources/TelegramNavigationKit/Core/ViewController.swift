@@ -421,16 +421,15 @@ public enum TabBarItemContextActionType {
 
     // MARK: - Push/Pop
 
+    /// Push a new controller on the nearest enclosing navigation stack.
+    ///
+    /// Routing is straightforward now that the architecture is
+    /// native-iOS-shape (TabBarController → per-tab NavigationController
+    /// → screens): we just walk up to the nearest
+    /// `TelegramNavigationController` and push there. Tab bar visibility
+    /// stays whatever it is — it is the TabBarController's concern, not
+    /// this call's.
     open func push(_ controller: ViewController, animated: Bool = true) {
-        // UIKit-standard `hidesBottomBarWhenPushed`: when `false` and we're
-        // embedded inside a TelegramTabBarController, push goes into the
-        // ACTIVE TAB's local nav stack so the tab bar stays visible. When
-        // `true`, push escapes to the outer NavigationController and the
-        // tab bar disappears with the full-screen transition.
-        if !controller.hidesBottomBarWhenPushed, let tabs = nearestTelegramTabBarController {
-            tabs.pushInCurrentTab(controller, animated: animated)
-            return
-        }
         if let navigationController = telegramNavigationController {
             navigationController.pushViewController(controller, animated: animated)
         } else {
@@ -439,29 +438,11 @@ public enum TabBarItemContextActionType {
     }
 
     open func pop(animated: Bool = true) {
-        // Mirror push: prefer the local tab nav stack when it has anything
-        // to pop (i.e. we're inside a tab and at least one push happened).
-        if let tabs = nearestTelegramTabBarController, tabs.popInCurrentTab(animated: animated) != nil {
-            return
-        }
         if let navigationController = telegramNavigationController {
             navigationController.popViewController(animated: animated)
         } else {
             self.navigationController?.popViewController(animated: animated)
         }
-    }
-
-    /// Walks up the parent chain to find an enclosing `TelegramTabBarController`.
-    /// Returns nil if the controller isn't embedded in tabs.
-    private var nearestTelegramTabBarController: TelegramTabBarController? {
-        var current: UIViewController? = self.parent
-        while let c = current {
-            if let tabs = c as? TelegramTabBarController {
-                return tabs
-            }
-            current = c.parent
-        }
-        return nil
     }
 
     /// Present a `.modal` controller above the current stack (sheet-style).

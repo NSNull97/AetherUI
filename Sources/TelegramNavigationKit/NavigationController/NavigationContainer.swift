@@ -26,23 +26,6 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
     public var readyChanged: (() -> Void)?
 
     public var controllerRemoved: ((ViewController) -> Void)?
-    /// Fires at the START of an interactive swipe-back commit (right when
-    /// the pan gesture lifts past the commit threshold and animateCompletion
-    /// begins), NOT at the end of the animation. Outer observers — typically
-    /// a TabBarController syncing the shared nav bar — need this so they can
-    /// animate alongside the commit rather than snapping state at the end.
-    public var controllerWillBeRemoved: ((ViewController) -> Void)?
-    /// Interactive-gesture lifecycle for the shared outer nav bar to drive a
-    /// progress-dependent crossfade between the "from" and "to" states.
-    /// `interactivePopStarted` fires at `.began` — caller captures two
-    /// snapshots. `interactivePopProgressed(progress)` fires at `.changed`.
-    /// `interactivePopCancelled` fires when the gesture releases without
-    /// committing. A committing end fires `controllerWillBeRemoved` (as it
-    /// already does today); the caller cleans up the interactive snapshots
-    /// from that hook.
-    public var interactivePopStarted: ((_ popping: ViewController, _ previous: ViewController) -> Void)?
-    public var interactivePopProgressed: ((CGFloat) -> Void)?
-    public var interactivePopCancelled: (() -> Void)?
     public var requestLayout: ((ContainedViewLayoutTransition) -> Void)?
 
     // MARK: - Init
@@ -247,29 +230,20 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             self.transitionCoordinator = coordinator
             coordinator.updateProgress(0.0, transition: .immediate, completion: {})
 
-            interactivePopStarted?(currentController, previousController)
-
         case .changed:
             transitionCoordinator?.updateProgress(progress, transition: .immediate, completion: {})
-            interactivePopProgressed?(progress)
 
         case .ended, .cancelled:
             let shouldComplete = progress > 0.3 || velocity.x > 500
             if shouldComplete {
-                // Commit the pop IMMEDIATELY in the controllers array so
-                // outer sync (nav bar) can animate alongside the swipe's
-                // slide animation. The view stays in the hierarchy until
-                // the animation completes and we removeFromSuperview.
-                let removing = controllers.removeLast()
-                controllerWillBeRemoved?(removing)
                 transitionCoordinator?.animateCompletion(velocity: velocity.x) { [weak self] in
                     guard let self = self else { return }
-                    removing.view.removeFromSuperview()
+                    let removed = self.controllers.removeLast()
+                    removed.view.removeFromSuperview()
                     self.transitionCoordinator = nil
-                    self.controllerRemoved?(removing)
+                    self.controllerRemoved?(removed)
                 }
             } else {
-                interactivePopCancelled?()
                 transitionCoordinator?.animateCancel { [weak self] in
                     guard let self = self else { return }
                     let previousController = self.controllers[self.controllers.count - 2]

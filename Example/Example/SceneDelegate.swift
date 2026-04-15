@@ -13,81 +13,91 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let window = UIWindow(windowScene: windowScene)
 
-        let chatsController = ChatListExampleController()
-        chatsController.tabBarItem = UITabBarItem(
-            title: "Чаты",
-            image: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-            selectedImage: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-        )
-        chatsController.tabBarItem.badgeValue = "4"
+        // Native-iOS shape:
+        //   TelegramTabBarController  (window root, owns tab bar, no nav bar)
+        //     └─ TelegramNavigationController per tab
+        //         └─ root screen (plus any pushed details)
+        //
+        // Each tab's navigation controller manages its own stack and its
+        // own nav bar. Push/pop inside a tab slides the screen + its bar
+        // together; the tab bar stays visible.
 
-        let callsController = CallsExampleController()
-        callsController.tabBarItem = UITabBarItem(
-            title: "Звонки",
-            image: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-            selectedImage: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-        )
+        func makeTab(_ root: ViewController, tabBarItem: UITabBarItem) -> TelegramNavigationController {
+            root.tabBarItem = tabBarItem
+            let nav = TelegramNavigationController(mode: .single, theme: .liquidGlass())
+            nav.setViewControllers([root], animated: false)
+            // Propagate the tab bar item onto the nav controller itself —
+            // that's the controller the tab bar sees and renders for.
+            nav.tabBarItem = tabBarItem
+            return nav
+        }
 
-        let contactsController = ContactsExampleController()
-        contactsController.tabBarItem = UITabBarItem(
-            title: "Контакты",
-            image: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-            selectedImage: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+        let contacts = makeTab(
+            ContactsExampleController(),
+            tabBarItem: UITabBarItem(
+                title: "Контакты",
+                image: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                selectedImage: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+            )
         )
-
-        let settingsController = SettingsExampleController()
-        settingsController.tabBarItem = UITabBarItem(
-            title: "Настройки",
-            image: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-            selectedImage: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+        let calls = makeTab(
+            CallsExampleController(),
+            tabBarItem: UITabBarItem(
+                title: "Звонки",
+                image: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                selectedImage: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+            )
+        )
+        let chatsRoot = ChatListExampleController()
+        let chats = makeTab(
+            chatsRoot,
+            tabBarItem: UITabBarItem(
+                title: "Чаты",
+                image: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                selectedImage: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+            )
+        )
+        chats.tabBarItem.badgeValue = "4"
+        let settings = makeTab(
+            SettingsExampleController(),
+            tabBarItem: UITabBarItem(
+                title: "Настройки",
+                image: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                selectedImage: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+            )
         )
 
         let tabs = TelegramTabBarController(
-            navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass()),
             tabBarTheme: TabBarView.Theme(
                 tabBarSelectedIconColor: .systemBlue,
                 tabBarSelectedTextColor: .systemBlue,
                 style: .liquidGlass
             )
         )
-        tabs.setControllers([contactsController, callsController, chatsController, settingsController], selectedIndex: 2)
-        // iOS 26-style search showcase capsule sitting next to the tab pill.
-        tabs.searchShowcase = TabBarView.SearchShowcase {
-            // Hook up to an actual search presentation in real apps.
-            print("Search showcase tapped")
-        }
+        tabs.setControllers([contacts, calls, chats, settings], selectedIndex: 2)
 
-        let navigation = TelegramNavigationController(
-            mode: .single,
-            theme: .liquidGlass()
-        )
-        navigation.setViewControllers([tabs], animated: false)
-
-        window.rootViewController = navigation
+        window.rootViewController = tabs
         window.makeKeyAndVisible()
         self.window = window
 
         // Demo-only: auto-push a detail screen after launch so screenshots can
         // verify the back-button glass capsule layout without UI automation.
         if ProcessInfo.processInfo.environment["TG_NAV_DEMO_PUSH"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak navigation] in
-                navigation?.pushViewController(
-                    ChatDetailExampleController(title: "Pool Duck"),
-                    animated: true
-                )
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chatsRoot] in
+                guard let chatsRoot else { return }
+                chatsRoot.push(ChatDetailExampleController(title: "Pool Duck"))
             }
         }
 
         // Demo-only: auto-present the sticker-pack modal to verify the sheet
         // transition and Figma-style modal nav bar.
         if ProcessInfo.processInfo.environment["TG_NAV_DEMO_MODAL"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak navigation] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chats] in
                 let modal = StickerPackModalController(
                     navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass())
                 )
-                navigation?.presentModal(modal, animated: true)
+                chats?.presentModal(modal, animated: true)
             }
         }
-
     }
 }
