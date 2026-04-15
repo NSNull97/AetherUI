@@ -1,0 +1,46 @@
+name: Example
+options:
+  bundleIdPrefix: com.telegramnavigationkit.example
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  TelegramNavigationKit:
+    path: ../
+
+targets:
+  Example:
+    type: application
+    platform: iOS
+    sources:
+      - path: Example
+    dependencies:
+      - package: TelegramNavigationKit
+    info:
+      path: Example/Info.plist
+      properties:
+        CFBundleDisplayName: Example
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIViewControllerBasedStatusBarAppearance: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.telegramnavigationkit.example
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Example/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
