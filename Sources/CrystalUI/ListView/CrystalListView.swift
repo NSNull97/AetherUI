@@ -119,7 +119,7 @@ open class CrystalListView: UIView, UIScrollViewDelegate {
             scrollView.automaticallyAdjustsScrollIndicatorInsets = true
         }
         if #available(iOS 11.0, *) {
-            scrollView.contentInsetAdjustmentBehavior = .never
+            scrollView.contentInsetAdjustmentBehavior = .automatic
         }
         addSubview(scrollView)
 
