@@ -121,7 +121,7 @@ final class ChatListExampleController: ViewController {
         let searchBar = CrystalSearchBarContent()
         searchBar.placeholder = "Поиск"
         searchBar.isDark = traitCollection.userInterfaceStyle == .dark
-        searchBar.onTap = { print("Search tapped") }
+        searchBar.onTap = { [weak self] in self?.activateSearch() }
         searchBar.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: searchBar.nominalHeight)
         let _ = searchBar.updateLayout(
             size: searchBar.frame.size,
@@ -150,6 +150,42 @@ final class ChatListExampleController: ViewController {
                 }
             }
         }
+    }
+
+    // MARK: - Search
+
+    private var activeSearchBar: CrystalActiveSearchBar?
+
+    override func tabBarActivateSearch() {
+        activateSearch()
+    }
+
+    override func tabBarDeactivateSearch() {
+        deactivateSearch()
+    }
+
+    private func activateSearch() {
+        guard activeSearchBar == nil else { return }
+
+        let searchBar = CrystalActiveSearchBar()
+        searchBar.placeholder = "Поиск"
+        searchBar.cancelTitle = "Отмена"
+        searchBar.onTextChanged = { text in
+            // TODO: filter chat list
+        }
+        searchBar.onCancel = { [weak self] in
+            self?.deactivateSearch()
+        }
+        activeSearchBar = searchBar
+        navigationBarContent = searchBar
+        requestLayout(transition: .animated(duration: 0.3, curve: .spring))
+    }
+
+    private func deactivateSearch() {
+        guard activeSearchBar != nil else { return }
+        activeSearchBar = nil
+        navigationBarContent = filterBar
+        requestLayout(transition: .animated(duration: 0.3, curve: .spring))
     }
 
     @objc private func editTapped() {}

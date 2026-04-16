@@ -78,7 +78,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         tabs.setControllers([contacts, calls, chats, settings], selectedIndex: 2)
         tabs.searchShowcase = TabBarView.SearchShowcase(
             icon: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))!,
-            action: { print("Search tapped") }
+            action: { [weak tabs] in tabs?.activateSearch() }
         )
 
         window.contentController = tabs
