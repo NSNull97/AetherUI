@@ -62,17 +62,16 @@ public final class CrystalSearchController {
 
     /// Activate search: pill becomes text field, close button appears.
     public func activate() {
-        guard !isActive, let vc = viewController else { return }
+        guard !isActive, let vc = viewController, let navBar = vc.navigationBarView else { return }
         isActive = true
 
         // Save current state
-        savedRightBarButtonItem = vc.navigationItem.rightBarButtonItem
         savedNavigationBarContent = vc.navigationBarContent
 
-        // Hide only the icon and label inside the pill — keep the glass background
+        // Transition pill to active: hide icon/label, keep glass
         searchBar.setSearchActive(true)
 
-        // Insert text field into the pill (above the glass bg)
+        // Text field inside the pill
         let tf = UITextField()
         tf.placeholder = placeholder
         tf.font = .systemFont(ofSize: 17)
@@ -94,26 +93,33 @@ public final class CrystalSearchController {
         tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textField = tf
 
-        // Hide filters: set raw content to nil (only search pill remains)
+        // Hide filters (only search pill in nav bar)
         vc._rawNavigationBarContent = nil
         vc.rebuildNavigationBarContent()
 
-        // Glass close button added directly to the nav bar view
+        // Glass close button added directly to the nav bar (not via UIBarButtonItem)
         let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
         let close = GlassBarButtonView(icon: closeIcon, state: .glass)
         close.contentTintColor = .label
+        let closeSize: CGFloat = 36.0
+        // Position in top-right of nav bar
+        let navBarBounds = navBar.bounds
+        close.frame = CGRect(
+            x: navBarBounds.width - closeSize - 16,
+            y: navBarBounds.height - closeSize - 10,
+            width: closeSize,
+            height: closeSize
+        )
+        close.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
         close.alpha = 0
         close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        navBar.addSubview(close)
         closeButton = close
 
-        // Use UIBarButtonItem with fixed size
-        close.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            close.widthAnchor.constraint(equalToConstant: 36),
-            close.heightAnchor.constraint(equalToConstant: 36),
-        ])
-        vc.navigationItem.rightBarButtonItem = UIBarButtonItem(customView: close)
+        // Hide existing right button
+        savedRightBarButtonItem = vc.navigationItem.rightBarButtonItem
+        vc.navigationItem.rightBarButtonItems = []
 
         tf.becomeFirstResponder()
         vc.requestLayout(transition: .animated(duration: 0.35, curve: .spring))
@@ -145,12 +151,13 @@ public final class CrystalSearchController {
     private func cleanup(vc: ViewController) {
         textField?.removeFromSuperview()
         textField = nil
+        closeButton?.removeFromSuperview()
         closeButton = nil
 
-        // Restore pill to inactive state
+        // Restore pill to inactive
         searchBar.setSearchActive(false)
 
-        // Restore original content and right button
+        // Restore original content and buttons
         vc.navigationItem.rightBarButtonItem = savedRightBarButtonItem
         vc._rawNavigationBarContent = savedNavigationBarContent
         vc.rebuildNavigationBarContent()
