@@ -153,10 +153,17 @@ public final class TabBarView: UIView {
 
         if animated {
             positionSearchViewsAtOrigin()
+            // Start capsule and circle small for glass-morph feel
+            searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             // Show keyboard simultaneously with the morph animation
             searchTextField?.becomeFirstResponder()
-            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
+                self.searchCapsule?.transform = .identity
+                self.searchTabCircle?.transform = .identity
+                self.searchCloseButton?.transform = .identity
                 self.tabBarGlassContainer.alpha = 0.0
                 self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 1.0
@@ -176,12 +183,21 @@ public final class TabBarView: UIView {
         searchTextField?.resignFirstResponder()
 
         if animated {
-            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-                self.positionSearchViewsAtOrigin()
+            // Phase 1: quick fade of search elements + shrink toward origins
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                // Fade + scale-down all search elements
+                self.searchCapsule?.alpha = 0.0
+                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+                self.searchTextField?.alpha = 0.0
+                self.searchCloseButton?.alpha = 0.0
+                self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchTabCircle?.alpha = 0.0
+                self.searchTabCircle?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchDimView?.alpha = 0.0
+
+                // Restore tab bar
                 self.tabBarGlassContainer.alpha = 1.0
                 self.tabBarGlassContainer.transform = .identity
-                self.searchDimView?.alpha = 0.0
-                self.searchTextField?.alpha = 0.0
             } completion: { _ in
                 self.teardownSearchViews()
             }
