@@ -347,31 +347,40 @@ public final class TabBarView: UIView {
         let sideInset: CGFloat = 16.0
         let bottomInset: CGFloat = 25.0
         let innerPadding: CGFloat = 2.0
+        let showcaseSpacing: CGFloat = 7.0
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 
-        // Pill fills the full available width (with side padding).
-        // Search button is included as part of the pill on the right.
-        let pillWidth = availableWidth
+        // Search is a separate circle to the right of the pill (like Apple Music).
+        // Both share the same glass container so they merge on iOS 26+.
+        let showcaseSize: CGFloat = searchShowcaseView != nil ? contentHeight : 0.0
+        let showcaseFootprint = showcaseSize > 0.0 ? showcaseSize + showcaseSpacing : 0.0
+
+        // Pill fills remaining width after the search circle.
+        let pillWidth = max(0.0, availableWidth - showcaseFootprint)
         let lensSize = CGSize(width: pillWidth, height: contentHeight)
 
         let pillX = sideInset
+        let showcaseX = bounds.width - sideInset - showcaseSize
         let pillY = bounds.height - bottomInset - contentHeight
 
-        let containerFrame = CGRect(x: pillX, y: pillY, width: pillWidth, height: contentHeight)
+        // Glass container spans from pill left edge to search right edge.
+        let containerWidth = showcaseSize > 0.0 ? (showcaseX + showcaseSize) - pillX : pillWidth
+        let containerFrame = CGRect(x: pillX, y: pillY, width: containerWidth, height: contentHeight)
         tabBarGlassContainer.frame = containerFrame
         tabBarGlassContainer.update(size: containerFrame.size, isDark: isEffectivelyDark, transition: .immediate)
 
+        // Lens covers just the pill (not the search circle).
         liquidLensView.frame = CGRect(origin: .zero, size: lensSize)
 
-        // Search showcase is inside the pill (right side), not a separate capsule.
-        let showcaseWidth: CGFloat = searchShowcaseView != nil ? contentHeight : 0.0
+        // Search circle anchored to the right inside the container.
         if let showcase = searchShowcaseView {
-            showcase.frame = CGRect(x: pillWidth - showcaseWidth, y: 0.0, width: showcaseWidth, height: contentHeight)
+            let localX = showcaseX - pillX
+            showcase.frame = CGRect(x: localX, y: 0.0, width: showcaseSize, height: showcaseSize)
         }
 
-        // Tab items fill remaining width (after search), with inner side padding.
-        let tabAreaWidth = pillWidth - showcaseWidth - innerPadding * 2.0
+        // Tab items fill the pill width with inner side padding.
+        let tabAreaWidth = pillWidth - innerPadding * 2.0
         let itemWidth = max(1.0, tabAreaWidth / CGFloat(count))
         var selectionFrame = CGRect(x: 0.0, y: 0.0, width: max(56.0, itemWidth), height: lensSize.height)
 
