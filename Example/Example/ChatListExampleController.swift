@@ -160,12 +160,10 @@ final class ChatListExampleController: ViewController {
 
     private func setupSearchMode() {
         if hasTabBar {
-            // With tab controller: search pill + filters in nav bar (framework handles it)
+            // With tab controller: search pill + filters in nav bar
             let search = CrystalSearchController()
             search.placeholder = "Поиск"
-            search.onTextChanged = { text in
-                // TODO: filter chat list
-            }
+            search.delegate = self
             crystalSearchController = search
             navigationBarContent = filterBar
         } else {
@@ -413,6 +411,20 @@ final class ChatListExampleController: ViewController {
 
     @objc private func composeTapped() {}
 }
+
+// MARK: - CrystalSearchControllerDelegate
+
+extension ChatListExampleController: CrystalSearchControllerDelegate {
+    func searchController(_ controller: CrystalSearchController, didChangeText text: String) {
+        // TODO: filter chat list by text
+    }
+
+    func searchController(_ controller: CrystalSearchController, didSubmitText text: String) {
+        // TODO: perform search
+    }
+}
+
+// MARK: - UITableViewDataSource & Delegate
 
 extension ChatListExampleController: UITableViewDataSource, UITableViewDelegate {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
