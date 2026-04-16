@@ -152,15 +152,14 @@ public final class TabBarView: UIView {
         buildSearchViews()
 
         if animated {
-            // Initial state: capsule starts at search showcase's frame, circle at active tab's frame
             positionSearchViewsAtOrigin()
+            // Show keyboard simultaneously with the morph animation
+            searchTextField?.becomeFirstResponder()
             UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
                 self.tabBarGlassContainer.alpha = 0.0
                 self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 1.0
-            } completion: { _ in
-                self.searchTextField?.becomeFirstResponder()
             }
         } else {
             positionSearchViewsExpanded()
@@ -199,7 +198,8 @@ public final class TabBarView: UIView {
         let dim = UIView()
         dim.backgroundColor = .systemBackground
         dim.alpha = 0.0
-        insertSubview(dim, at: 0)
+        // Insert above the edge effect so the frost still renders
+        insertSubview(dim, aboveSubview: edgeEffectView)
         searchDimView = dim
 
         let capsule = GlassBackgroundView(style: .regular)
