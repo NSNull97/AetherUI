@@ -255,7 +255,9 @@ open class CrystalTabBarController: ViewController {
             additionalSafeAreaInsets = desiredChildInsets
         }
 
-        let tabBarY: CGFloat = tabBarHidden ? layout.size.height : (layout.size.height - tabBarHeight)
+        // When tab bar search is active AND keyboard is visible, lift the tab bar above the keyboard
+        let keyboardLift: CGFloat = tabBarView.isSearchActive ? (layout.inputHeight ?? 0) : 0
+        let tabBarY: CGFloat = tabBarHidden ? layout.size.height : (layout.size.height - tabBarHeight - keyboardLift)
         let tabBarFrame = CGRect(x: 0, y: tabBarY, width: layout.size.width, height: tabBarHeight)
         transition.updateFrame(view: tabBarView, frame: tabBarFrame)
         tabBarView.layoutSubviews()
@@ -294,25 +296,18 @@ open class CrystalTabBarController: ViewController {
         view.bringSubviewToFront(tabBarView)
     }
 
-    /// Activate search: expands the tab bar search button into a search field.
+    /// Activate tab bar search: expands the search button into a search field.
+    /// Does NOT affect the navigation bar — that's a separate action.
     public func activateSearch() {
         tabBarView.activateSearchMode(animated: true)
         tabBarView.onSearchDismissed = { [weak self] in
             self?.deactivateSearch()
         }
-        (currentController as? ViewController)?.tabBarActivateSearch()
-        if let nav = currentController as? CrystalNavigationController {
-            (nav.topController)?.tabBarActivateSearch()
-        }
     }
 
-    /// Deactivate search: collapses the search field back to the tab bar.
+    /// Deactivate tab bar search: collapses the search field back to the tab bar.
     public func deactivateSearch() {
         tabBarView.deactivateSearchMode(animated: true)
-        (currentController as? ViewController)?.tabBarDeactivateSearch()
-        if let nav = currentController as? CrystalNavigationController {
-            (nav.topController)?.tabBarDeactivateSearch()
-        }
     }
 
     // MARK: - Private

@@ -141,6 +141,7 @@ public final class TabBarView: UIView {
     private var searchTextField: UITextField?
     private var searchCloseButton: GlassBarButtonView?
     private var searchGlassBackground: GlassBackgroundView?
+    private var searchDimView: UIView?
 
     /// Expand the search showcase button into a full search field.
     public func activateSearchMode(animated: Bool) {
@@ -159,6 +160,12 @@ public final class TabBarView: UIView {
     }
 
     private func buildSearchField() {
+        // Opaque background covering entire tab bar when search is active
+        let dimView = UIView()
+        dimView.backgroundColor = .systemBackground
+        insertSubview(dimView, at: 0)
+        searchDimView = dimView
+
         let bg = GlassBackgroundView(style: .regular)
         addSubview(bg)
         searchGlassBackground = bg
@@ -195,13 +202,22 @@ public final class TabBarView: UIView {
     }
 
     private func layoutSearchMode(animated: Bool) {
+        // Initial state: search views start invisible at showcase button position
+        searchGlassBackground?.alpha = 0.0
+        searchTextField?.alpha = 0.0
+        searchCloseButton?.alpha = 0.0
+        searchDimView?.alpha = 0.0
+        layoutSearchFieldFrame()
+
         let apply = {
             // Hide tab bar items
             self.tabBarGlassContainer.alpha = 0.0
             self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
-
-            // Position search field
-            self.layoutSearchFieldFrame()
+            // Show search views
+            self.searchGlassBackground?.alpha = 1.0
+            self.searchTextField?.alpha = 1.0
+            self.searchCloseButton?.alpha = 1.0
+            self.searchDimView?.alpha = 1.0
         }
 
         if animated {
@@ -219,13 +235,18 @@ public final class TabBarView: UIView {
     private func layoutSearchFieldFrame() {
         guard let bg = searchGlassBackground, let tf = searchTextField, let close = searchCloseButton else { return }
 
-        let contentHeight: CGFloat = Self.defaultHeight - safeAreaInsets.bottom
+        let safeBottom = safeAreaInsets.bottom
+        let contentHeight: CGFloat = Self.defaultHeight - safeBottom
         let hInset: CGFloat = 16.0
-        let closeSize: CGFloat = contentHeight - 16.0
+        let vPad: CGFloat = 10.0
+        let pillHeight = contentHeight - vPad * 2
+        let closeSize = pillHeight
         let closeX = bounds.width - hInset - closeSize
         let pillWidth = closeX - hInset - 8.0
-        let pillY: CGFloat = 8.0
-        let pillHeight = contentHeight - 16.0
+        let pillY = vPad
+
+        // Opaque background covers whole tab bar
+        searchDimView?.frame = bounds
 
         let bgFrame = CGRect(x: hInset, y: pillY, width: pillWidth, height: pillHeight)
         bg.frame = bgFrame
@@ -241,7 +262,7 @@ public final class TabBarView: UIView {
 
         tf.frame = CGRect(x: hInset + 8, y: pillY, width: pillWidth - 16, height: pillHeight)
 
-        let closeFrame = CGRect(x: closeX, y: pillY + (pillHeight - closeSize) / 2, width: closeSize, height: closeSize)
+        let closeFrame = CGRect(x: closeX, y: pillY, width: closeSize, height: closeSize)
         close.frame = closeFrame
     }
 
@@ -249,9 +270,11 @@ public final class TabBarView: UIView {
         let tf = searchTextField
         let bg = searchGlassBackground
         let close = searchCloseButton
+        let dim = searchDimView
         searchTextField = nil
         searchGlassBackground = nil
         searchCloseButton = nil
+        searchDimView = nil
 
         let apply = {
             self.tabBarGlassContainer.alpha = 1.0
@@ -259,12 +282,14 @@ public final class TabBarView: UIView {
             tf?.alpha = 0.0
             bg?.alpha = 0.0
             close?.alpha = 0.0
+            dim?.alpha = 0.0
         }
 
         let cleanup = {
             tf?.removeFromSuperview()
             bg?.removeFromSuperview()
             close?.removeFromSuperview()
+            dim?.removeFromSuperview()
         }
 
         if animated {
