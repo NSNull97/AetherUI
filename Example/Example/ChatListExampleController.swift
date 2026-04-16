@@ -51,8 +51,9 @@ final class ChatListExampleController: ViewController {
     ]
 
     init() {
-        let barTheme = NavigationBarTheme.liquidGlass()
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: barTheme))
+        // No per-controller bar: the enclosing TelegramNavigationController
+        // owns the single shared nav bar.
+        super.init(navigationBarPresentationData: nil)
 
         // Title: "Чаты" with a paper-plane icon after the text (Figma reference).
         navigationItem.title = "Чаты"
@@ -407,7 +408,7 @@ private final class ChatListTitleView: UIView {
 
 final class ChatDetailExampleController: ViewController {
     init(title: String) {
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass()))
+        super.init(navigationBarPresentationData: nil)
         navigationItem.title = title
     }
 

@@ -155,44 +155,6 @@ final class NavigationTransitionCoordinator {
 
         transition.updateFrame(view: bottomView, frame: bottomFrame)
 
-        // --- Nav bar pinning + crossfade ---
-        // Each controller's nav bar lives inside its view (which slides
-        // during push/pop). To achieve a stock-iOS feel where the bar
-        // surface stays fixed and only its content crossfades, we:
-        //   1. Apply a compensating translateX so the bar visually stays
-        //      at x = 0 regardless of parent slide.
-        //   2. Crossfade alpha between the outgoing and incoming bars.
-        if let topBar {
-            let barCompensation = CGAffineTransform(translationX: -topFrame.minX, y: 0)
-            transition.updateTransform(view: topBar, transform: barCompensation)
-        }
-        if let bottomBar {
-            let barCompensation = CGAffineTransform(translationX: -bottomFrame.minX, y: 0)
-            transition.updateTransform(view: bottomBar, transform: barCompensation)
-        }
-
-        // Top bar is the INCOMING on push / OUTGOING on pop.
-        // position = 0 means transition complete (both views at rest).
-        // position = 1 means transition at start (top fully off-screen right).
-        // For push: top starts at alpha 0, grows to 1.
-        // For pop: top starts at alpha 1, shrinks to 0.
-        let topBarAlpha: CGFloat
-        let bottomBarAlpha: CGFloat
-        switch direction {
-        case .push:
-            topBarAlpha = 1.0 - position      // 0 → 1
-            bottomBarAlpha = position          // 1 → 0
-        case .pop:
-            topBarAlpha = position             // 1 → 0
-            bottomBarAlpha = 1.0 - position    // 0 → 1
-        }
-        if let topBar {
-            transition.updateAlpha(view: topBar, alpha: topBarAlpha)
-        }
-        if let bottomBar {
-            transition.updateAlpha(view: bottomBar, alpha: bottomBarAlpha)
-        }
-
         let shadowFrame = CGRect(
             x: topFrame.minX - navigationShadowWidth,
             y: 0.0,
@@ -249,7 +211,6 @@ final class NavigationTransitionCoordinator {
             case .pop:
                 self.bottomView.removeFromSuperview()
             }
-            self.restoreNavBars()
             self.cleanupOverlays()
             self.restoreTopViewCorners()
             let hook = self.currentCompletion
@@ -278,22 +239,11 @@ final class NavigationTransitionCoordinator {
     // MARK: - Teardown
 
     private func finish() {
-        restoreNavBars()
         cleanupOverlays()
         restoreTopViewCorners()
         let hook = currentCompletion
         currentCompletion = nil
         hook?()
-    }
-
-    /// Reset nav bars to their natural state after the transition.
-    /// The pinning transform + alpha override must be removed so the
-    /// bar renders normally when no transition is in flight.
-    private func restoreNavBars() {
-        topBar?.transform = .identity
-        topBar?.alpha = 1.0
-        bottomBar?.transform = .identity
-        bottomBar?.alpha = 1.0
     }
 
     private func cleanupOverlays() {

@@ -3,7 +3,7 @@ import TelegramNavigationKit
 
 final class ContactsExampleController: ViewController {
     init() {
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass()))
+        super.init(navigationBarPresentationData: nil)
         navigationItem.title = "Контакты"
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -24,7 +24,7 @@ final class ContactsExampleController: ViewController {
 
 final class CallsExampleController: ViewController {
     init() {
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass()))
+        super.init(navigationBarPresentationData: nil)
         navigationItem.title = "Звонки"
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -45,7 +45,7 @@ final class CallsExampleController: ViewController {
 
 final class SettingsExampleController: ViewController {
     init() {
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass()))
+        super.init(navigationBarPresentationData: nil)
         navigationItem.title = "Настройки"
     }
     required init?(coder: NSCoder) { fatalError() }

@@ -59,6 +59,12 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     private let mode: NavigationControllerMode
     private var theme: NavigationControllerTheme
 
+    /// Single shared navigation bar for this stack — like UINavigationBar
+    /// on UINavigationController. Lives on the nav controller's own view,
+    /// above the container. Children's own bars are hidden
+    /// (`displayNavigationBar = false`) so this is the only visible one.
+    public let navigationBar: NavigationBarImpl
+
     private var rootContainer: RootContainer?
     private var modalContainers: [NavigationModalContainer] = []
     private var overlayContainers: [NavigationOverlayContainer] = []
@@ -150,6 +156,9 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         self.mode = mode
         self.theme = theme
         self.currentStatusBarStyle = theme.statusBar
+        self.navigationBar = NavigationBarImpl(
+            presentationData: NavigationBarPresentationData(theme: theme.navigationBar)
+        )
 
         super.init(nibName: nil, bundle: nil)
     }
@@ -164,7 +173,17 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         super.viewDidLoad()
 
         view.backgroundColor = theme.emptyAreaColor
+
+        navigationBar.backPressed = { [weak self] in
+            self?.popViewController(animated: true)
+        }
+        navigationBar.requestContainerLayout = { [weak self] transition in
+            self?.requestLayout(transition: transition)
+        }
+        view.addSubview(navigationBar)
+
         wireControllers(_viewControllers)
+        syncBarToTopController(animated: false)
         requestLayout(transition: .immediate)
     }
 
@@ -211,6 +230,7 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     public func setViewControllers(_ viewControllers: [ViewController], animated: Bool = true) {
         _viewControllers = viewControllers
         wireControllers(viewControllers)
+        syncBarToTopController(animated: false)
 
         if let layout = currentLayoutForComputation() {
             updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
@@ -220,6 +240,7 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     public func pushViewController(_ controller: ViewController, animated: Bool = true) {
         _viewControllers.append(controller)
         wireControllers(_viewControllers)
+        syncBarToTopController(animated: animated)
 
         if let layout = currentLayoutForComputation() {
             updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
@@ -446,16 +467,97 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         }
     }
 
+    // MARK: - Shared navigation bar
+
+    /// Compute the bar's frame and the default content height for the
+    /// current layout. Mirrors `ViewController.navigationLayout` but uses
+    /// our own `navigationBar` instead of a child's.
+    private func barLayout(for layout: ContainerViewLayout) -> (frame: CGRect, defaultHeight: CGFloat) {
+        let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
+        let defaultHeight: CGFloat = 60.0
+        let contentHeight = navigationBar.contentHeight(defaultHeight: defaultHeight)
+        let barHeight = statusBarHeight + contentHeight
+        let frame = CGRect(origin: .zero, size: CGSize(width: layout.size.width, height: barHeight))
+        return (frame, defaultHeight)
+    }
+
+    /// Update the shared bar's `item`, `previousItem`, and `contentView`
+    /// to reflect the current top controller's state.
+    public func syncBarToTopController(animated: Bool) {
+        guard let top = _viewControllers.last else { return }
+        let topIndex = _viewControllers.count - 1
+
+        // Previous item (back button) — point at the controller below
+        // the top, if any.
+        let previous: NavigationPreviousAction?
+        if topIndex > 0 {
+            previous = .item(_viewControllers[topIndex - 1].navigationItem)
+        } else {
+            previous = nil
+        }
+
+        navigationBar.item = top.navigationItem
+        navigationBar.previousItem = previous
+
+        // Forward the top controller's content view (e.g. filter chips)
+        // to the shared bar.
+        navigationBar.setContentView(top.navigationBarContent, animated: animated)
+
+        // Watch for future content-view changes while this controller
+        // is on top.
+        top.navigationBarContentDidChange = { [weak self, weak top] in
+            guard let self, let top, top === self._viewControllers.last else { return }
+            self.navigationBar.setContentView(top.navigationBarContent, animated: true)
+            self.requestLayout(transition: .animated(duration: 0.25, curve: .easeInOut))
+        }
+    }
+
     // MARK: - Private
 
     private func updateVisibleContainers(layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         wireControllers(_viewControllers)
 
-        let navigationLayout = makeNavigationLayout(mode: mode, layout: layout, controllers: _viewControllers)
-        updateRootContainer(for: navigationLayout.root, layout: layout, transition: transition)
+        // Position the shared bar.
+        let bar = barLayout(for: layout)
+        transition.updateFrame(view: navigationBar, frame: bar.frame)
+        navigationBar.updateLayout(
+            size: bar.frame.size,
+            defaultHeight: bar.defaultHeight,
+            additionalTopHeight: 0,
+            additionalContentHeight: 0,
+            additionalBackgroundHeight: 0,
+            leftInset: layout.safeInsets.left,
+            rightInset: layout.safeInsets.right,
+            appearsHidden: false,
+            isLandscape: layout.size.width > layout.size.height,
+            transition: transition
+        )
+        view.bringSubviewToFront(navigationBar)
+
+        // Container layout: carve out the bar's height so children
+        // position content below it.
+        let barTopInset = max(0.0, bar.frame.maxY - layout.safeInsets.top)
+        let containerLayout = ContainerViewLayout(
+            size: layout.size,
+            metrics: layout.metrics,
+            safeInsets: layout.safeInsets,
+            additionalInsets: UIEdgeInsets(
+                top: layout.additionalInsets.top + barTopInset,
+                left: layout.additionalInsets.left,
+                bottom: layout.additionalInsets.bottom,
+                right: layout.additionalInsets.right
+            ),
+            statusBarHeight: layout.statusBarHeight,
+            inputHeight: layout.inputHeight,
+            inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging,
+            inVoiceOver: layout.inVoiceOver
+        )
+
+        let navigationLayout = makeNavigationLayout(mode: mode, layout: containerLayout, controllers: _viewControllers)
+        updateRootContainer(for: navigationLayout.root, layout: containerLayout, transition: transition)
         updateMinimizedContainer(layout: layout, transition: transition)
-        updateModalContainers(for: navigationLayout.modal, layout: layout, transition: transition)
-        updateOverlayContainers(layout: overlayLayout(from: layout), transition: transition)
+        updateModalContainers(for: navigationLayout.modal, layout: containerLayout, transition: transition)
+        updateOverlayContainers(layout: overlayLayout(from: containerLayout), transition: transition)
         cleanupRemovedChildren()
         updateStatusBarAppearance()
     }
@@ -580,41 +682,11 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     }
 
     private func wireControllers(_ viewControllers: [ViewController]) {
-        for (index, controller) in viewControllers.enumerated() {
-            // Modal-presented controllers are conceptually a fresh stack —
-            // they shouldn't inherit a back button from the flat-push stack.
-            // Match Telegram: the first modal in a group gets `previousItem =
-            // nil` (it uses its own "X" close, not a back arrow).
-            let isModal: Bool
-            switch controller.navigationPresentation {
-            case .modal, .flatModal, .standaloneModal, .standaloneFlatModal,
-                 .modalInLargeLayout, .modalInCompactLayout:
-                isModal = true
-            case .default, .master:
-                isModal = false
-            }
-
-            if isModal {
-                controller.previousItem = nil
-            } else if index > 0, !isModal,
-                      !isModalPresentation(viewControllers[index - 1].navigationPresentation) {
-                controller.previousItem = .item(viewControllers[index - 1].navigationItem)
-            } else {
-                controller.previousItem = nil
-            }
-
-            let navigationBar = controller.navigationBarView
-            navigationBar?.item = controller.navigationItem
-            navigationBar?.previousItem = controller.previousItem
-            navigationBar?.enableAutomaticBackButton = true
-            navigationBar?.backPressed = { [weak self, weak controller] in
-                guard let self, let controller else {
-                    return
-                }
-                let _ = controller.attemptNavigation { [weak self] in
-                    self?.popViewController(animated: true)
-                }
-            }
+        for controller in viewControllers {
+            // Children don't render their own bars — the nav controller
+            // owns the single shared bar. This prevents double glass
+            // layers and simplifies transition animations.
+            controller.displayNavigationBar = false
 
             if controller.parent !== self {
                 addChild(controller)
@@ -645,6 +717,7 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
 
     private func handleControllerRemoved(_ controller: ViewController) {
         _viewControllers.removeAll { $0 === controller }
+        syncBarToTopController(animated: false)
         if let layout = validLayout {
             updateVisibleContainers(layout: layout, transition: .immediate)
         }
