@@ -44,11 +44,11 @@ public final class CrystalSearchController {
     /// Reference to the owning view controller (set by ViewController).
     weak var viewController: ViewController?
 
-    /// The original right bar button item (restored on deactivation).
-    var savedRightBarButtonItem: UIBarButtonItem?
-
     /// The original nav bar content (restored on deactivation).
     var savedNavigationBarContent: NavigationBarContentView?
+
+    /// Saved horizontal inset of the search pill.
+    var savedHorizontalInset: CGFloat = 16.0
 
     // MARK: - Init
 
@@ -60,13 +60,18 @@ public final class CrystalSearchController {
 
     // MARK: - Activation
 
-    /// Activate search: pill becomes text field, close button appears.
+    private static let closeButtonSize: CGFloat = 36.0
+
+    /// Activate search: pill becomes text field, close button appears to its right.
     public func activate() {
         guard !isActive, let vc = viewController, let navBar = vc.navigationBarView else { return }
         isActive = true
 
         // Transition pill to active: hide icon/label, keep glass
         searchBar.setSearchActive(true)
+
+        // Shrink pill to make room for close button
+        searchBar.rightExtraInset = Self.closeButtonSize + 8.0
 
         // Text field inside the pill
         let tf = UITextField()
@@ -90,31 +95,32 @@ public final class CrystalSearchController {
         tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textField = tf
 
-        // Glass close button added directly to the nav bar
+        // Glass close button as sibling of the pill (inside same parent)
         let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
         let close = GlassBarButtonView(icon: closeIcon, state: .glass)
         close.contentTintColor = .label
-        let closeSize: CGFloat = 36.0
-        let navBarBounds = navBar.bounds
-        close.frame = CGRect(
-            x: navBarBounds.width - closeSize - 16,
-            y: navBarBounds.height - closeSize - 10,
-            width: closeSize, height: closeSize
-        )
-        close.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
         close.alpha = 0
         close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        navBar.addSubview(close)
+        // Add to searchBar's parent (the stacked content view or nav bar content area)
+        if let parent = searchBar.superview {
+            parent.addSubview(close)
+        } else {
+            navBar.addSubview(close)
+        }
         closeButton = close
 
-        // Activate search mode on the nav bar: title/buttons fade out,
-        // search pill moves up, filters hide, nav bar shrinks
+        // Activate search mode on the nav bar
         navBar.setSearchMode(true, animated: true)
 
         tf.becomeFirstResponder()
 
-        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
+        // Lay out close button position after search mode triggers layout
+        DispatchQueue.main.async { [weak self] in
+            self?.layoutCloseButton()
+        }
+
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
             close.alpha = 1
             close.transform = .identity
         }
@@ -134,6 +140,18 @@ public final class CrystalSearchController {
         }
     }
 
+    /// Position close button to the right of the search pill.
+    func layoutCloseButton() {
+        guard let close = closeButton else { return }
+        let s = Self.closeButtonSize
+        let pillFrame = searchBar.frame
+        let parentBounds = searchBar.superview?.bounds ?? .zero
+        // Close button right-aligned with right inset matching pill's left inset
+        let x = parentBounds.width - s - searchBar.horizontalInset
+        let y = pillFrame.midY - s / 2
+        close.frame = CGRect(x: x, y: y, width: s, height: s)
+    }
+
     @objc private func closeTapped() {
         deactivate()
     }
@@ -144,10 +162,11 @@ public final class CrystalSearchController {
         closeButton?.removeFromSuperview()
         closeButton = nil
 
-        // Restore pill to inactive
+        // Restore pill
         searchBar.setSearchActive(false)
+        searchBar.rightExtraInset = 0
 
-        // Deactivate search mode on nav bar (title/buttons fade back, filters return)
+        // Deactivate search mode on nav bar
         vc.navigationBarView?.setSearchMode(false, animated: true)
 
         savedNavigationBarContent = nil
