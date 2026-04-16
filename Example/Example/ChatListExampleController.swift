@@ -175,8 +175,7 @@ final class ChatListExampleController: ViewController {
     private var bottomEdgeEffect: EdgeEffectView?
     private var isBottomSearchActive = false
 
-    // Active-mode subviews
-    private var bottomSearchCapsule: GlassBackgroundView?
+    // Active-mode subviews (text field goes inside the existing pill)
     private var bottomSearchTextField: UITextField?
     private var bottomSearchCloseButton: GlassBarButtonView?
 
@@ -276,15 +275,11 @@ final class ChatListExampleController: ViewController {
         isBottomSearchActive = true
 
         let h = Self.bottomBarHeight
-        let side: CGFloat = 16.0
-        let isDark = traitCollection.userInterfaceStyle == .dark
 
-        // Create capsule for text field (expands from the pill)
-        let capsule = GlassBackgroundView(style: .regular)
-        view.addSubview(capsule)
-        bottomSearchCapsule = capsule
+        // Replace label placeholder with real text field inside the same pill
+        bottomSearchIcon?.isHidden = true
+        bottomSearchLabel?.isHidden = true
 
-        // Text field
         let tf = UITextField()
         tf.placeholder = "Поиск"
         tf.font = .systemFont(ofSize: 17)
@@ -300,41 +295,28 @@ final class ChatListExampleController: ViewController {
         leftIcon.contentMode = .center
         tf.leftView = leftIcon
         tf.leftViewMode = .always
-        view.addSubview(tf)
+        bottomSearchBar?.contentView.addSubview(tf)
         bottomSearchTextField = tf
 
-        // Close button
+        // Close button appears to the right
         let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
         let close = GlassBarButtonView(icon: closeIcon, state: .glass)
         close.contentTintColor = .label
         close.action = { [weak self] _ in self?.deactivateBottomSearch() }
+        close.alpha = 0
+        close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         view.addSubview(close)
         bottomSearchCloseButton = close
 
-        // Initial positions: same as the pill
+        // Position text field at full width initially, close button at right edge
         let pillFrame = bottomSearchBar?.frame ?? .zero
-        capsule.frame = pillFrame
-        capsule.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-        capsule.alpha = 0
-        tf.frame = CGRect(x: pillFrame.minX + 8, y: pillFrame.minY, width: pillFrame.width - 16, height: h)
-        tf.alpha = 0
-        close.frame = CGRect(x: pillFrame.maxX - h, y: pillFrame.minY, width: h, height: h)
-        close.alpha = 0
-        close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        tf.frame = CGRect(x: 8, y: 0, width: pillFrame.width - 16, height: h)
+        close.frame = CGRect(x: pillFrame.maxX, y: pillFrame.minY, width: h, height: h)
 
-        // Show keyboard immediately
         tf.becomeFirstResponder()
 
-        UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
-            // Fade out original pill
-            self.bottomSearchBar?.alpha = 0
-            self.bottomSearchBar?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-
-            // Expand capsule + close button
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
             self.layoutBottomSearchActive()
-            capsule.transform = .identity
-            capsule.alpha = 1
-            tf.alpha = 1
             close.alpha = 1
             close.transform = .identity
         }
@@ -346,22 +328,18 @@ final class ChatListExampleController: ViewController {
         bottomSearchTextField?.resignFirstResponder()
 
         UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            self.bottomSearchCapsule?.alpha = 0
-            self.bottomSearchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-            self.bottomSearchTextField?.alpha = 0
+            // Close button fades + shrinks
             self.bottomSearchCloseButton?.alpha = 0
-            self.bottomSearchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-
-            self.bottomSearchBar?.alpha = 1
-            self.bottomSearchBar?.transform = .identity
+            self.bottomSearchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            // Pill expands back to full width
+            self.layoutBottomBar()
         } completion: { _ in
-            self.bottomSearchCapsule?.removeFromSuperview()
             self.bottomSearchTextField?.removeFromSuperview()
             self.bottomSearchCloseButton?.removeFromSuperview()
-            self.bottomSearchCapsule = nil
             self.bottomSearchTextField = nil
             self.bottomSearchCloseButton = nil
-            self.layoutBottomBar()
+            self.bottomSearchIcon?.isHidden = false
+            self.bottomSearchLabel?.isHidden = false
         }
     }
 
@@ -369,6 +347,7 @@ final class ChatListExampleController: ViewController {
         let h = Self.bottomBarHeight
         let side: CGFloat = 16.0
         let isDark = traitCollection.userInterfaceStyle == .dark
+        let spacing: CGFloat = 8.0
 
         let kbH = keyboardHeight ?? currentlyAppliedLayout?.inputHeight ?? 0
         let baseY: CGFloat
@@ -378,15 +357,19 @@ final class ChatListExampleController: ViewController {
             baseY = bottomBarY
         }
 
+        // Close button at right
         let closeX = view.bounds.width - side - h
-        let capsuleWidth = closeX - side - 8
-        let capsuleFrame = CGRect(x: side, y: baseY, width: capsuleWidth, height: h)
-
-        bottomSearchCapsule?.frame = capsuleFrame
-        bottomSearchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isDark,
-                                    tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
-        bottomSearchTextField?.frame = CGRect(x: side + 8, y: baseY, width: capsuleWidth - 16, height: h)
         bottomSearchCloseButton?.frame = CGRect(x: closeX, y: baseY, width: h, height: h)
+
+        // Pill shrinks to make room for close button
+        let pillWidth = closeX - side - spacing
+        let pillFrame = CGRect(x: side, y: baseY, width: pillWidth, height: h)
+        bottomSearchBar?.frame = pillFrame
+        bottomSearchBar?.update(size: pillFrame.size, cornerRadius: h / 2, isDark: isDark,
+                                tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+
+        // Text field fills the pill
+        bottomSearchTextField?.frame = CGRect(x: 8, y: 0, width: pillWidth - 16, height: h)
 
         // Edge effect follows
         if let edge = bottomEdgeEffect {
