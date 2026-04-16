@@ -245,13 +245,12 @@ public final class TabBarView: UIView {
 
         separatorView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: UIScreenPixel)
 
-        // Scroll-edge frost anchored to the TOP of the tab bar. Covers the
-        // entire tab bar area; fade zone terminates at the top boundary
-        // (transparent there), transitioning cleanly from the scroll content
-        // above to the floating pill below.
+        // Scroll-edge frost anchored to the TOP of the tab bar. The fade
+        // starts at y=0 so scroll content dissolves exactly at the tab bar
+        // boundary — no content bleeds through below the fade zone.
         if theme.style == .liquidGlass {
             edgeEffectView.isHidden = false
-            let edgeFrame = CGRect(x: 0.0, y: 56, width: bounds.width, height: bounds.height - 56)
+            let edgeFrame = CGRect(x: 0.0, y: 0.0, width: bounds.width, height: bounds.height)
             edgeEffectView.frame = edgeFrame
             let fadeHeight: CGFloat = min(48, edgeFrame.height * 0.4)
             edgeEffectView.update(
@@ -344,64 +343,40 @@ public final class TabBarView: UIView {
     private func layoutLiquidGlassItems(count: Int) {
         liquidLensView.isHidden = false
 
-        // 60pt pill height accommodates 8pt top inset + 30pt icon + 1pt +
-        // 13pt label + 8pt bottom inset for each tab item (per Figma spec).
         let contentHeight: CGFloat = 62.0
-
-        // Figma-spec insets:
-        //  - sides: 25pt
-        //  - bottom: 25pt from the SCREEN bottom (not safe area)
-        //  - gap between pill and search: 8pt
         let sideInset: CGFloat = 16.0
         let bottomInset: CGFloat = 25.0
-        let showcaseSpacing: CGFloat = 8.0
+        let innerPadding: CGFloat = 2.0
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 
-        // Pill sizes to its content — each tab item gets a natural width so the
-        // pill doesn't stretch to fill. Matches Figma where the main pill is a
-        // compact group rather than spanning the screen.
-        let perItemWidth: CGFloat = 72.0
-        let naturalPillWidth = perItemWidth * CGFloat(count)
-
-        let showcaseSize: CGFloat = searchShowcaseView != nil ? contentHeight : 0.0
-        let showcaseFootprint: CGFloat = showcaseSize > 0.0 ? showcaseSize + showcaseSpacing : 0.0
-
-        let pillWidth = min(naturalPillWidth, max(0.0, availableWidth - showcaseFootprint))
+        // Pill fills the full available width (with side padding).
+        // Search button is included as part of the pill on the right.
+        let pillWidth = availableWidth
         let lensSize = CGSize(width: pillWidth, height: contentHeight)
 
-        // Pill is centered in the space that's left after reserving room for
-        // the search circle on the right (which anchors to the right side inset).
-        let pillAvailableWidth = availableWidth - showcaseFootprint
-        let pillX = sideInset + floor((pillAvailableWidth - pillWidth) / 2.0)
-        let showcaseX = bounds.width - sideInset - showcaseSize
-
-        // Pill bottom is pinned 25pt from the bottom of the screen (== bottom
-        // of `bounds` since the tab bar view hugs the screen bottom).
+        let pillX = sideInset
         let pillY = bounds.height - bottomInset - contentHeight
 
-        let containerFrame = CGRect(
-            x: pillX,
-            y: pillY,
-            width: (showcaseSize > 0.0 ? (showcaseX + showcaseSize) - pillX : pillWidth),
-            height: contentHeight
-        )
+        let containerFrame = CGRect(x: pillX, y: pillY, width: pillWidth, height: contentHeight)
         tabBarGlassContainer.frame = containerFrame
         tabBarGlassContainer.update(size: containerFrame.size, isDark: isEffectivelyDark, transition: .immediate)
 
-        // Lens / showcase positions are relative to the container's origin.
         liquidLensView.frame = CGRect(origin: .zero, size: lensSize)
 
+        // Search showcase is inside the pill (right side), not a separate capsule.
+        let showcaseWidth: CGFloat = searchShowcaseView != nil ? contentHeight : 0.0
         if let showcase = searchShowcaseView {
-            let localShowcaseX = showcaseX - pillX
-            showcase.frame = CGRect(x: localShowcaseX, y: 0.0, width: showcaseSize, height: showcaseSize)
+            showcase.frame = CGRect(x: pillWidth - showcaseWidth, y: 0.0, width: showcaseWidth, height: contentHeight)
         }
 
-        let itemWidth = lensSize.width / CGFloat(count)
+        // Tab items fill remaining width (after search), with inner side padding.
+        let tabAreaWidth = pillWidth - showcaseWidth - innerPadding * 2.0
+        let itemWidth = max(1.0, tabAreaWidth / CGFloat(count))
         var selectionFrame = CGRect(x: 0.0, y: 0.0, width: max(56.0, itemWidth), height: lensSize.height)
 
         for (index, itemView) in itemViews.enumerated() {
-            let itemFrame = CGRect(x: CGFloat(index) * itemWidth, y: 0.0, width: itemWidth, height: lensSize.height)
+            let itemFrame = CGRect(x: innerPadding + CGFloat(index) * itemWidth, y: 0.0, width: itemWidth, height: lensSize.height)
             itemView.frame = itemFrame
             if index < selectedItemViews.count {
                 selectedItemViews[index].frame = itemFrame
