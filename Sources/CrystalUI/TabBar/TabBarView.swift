@@ -141,7 +141,8 @@ public final class TabBarView: UIView {
     // Search mode views
     private var searchCapsule: GlassBackgroundView?       // expanded glass capsule for text field
     private var searchTextField: UITextField?               // text field inside capsule
-    private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (close button)
+    private var searchCloseButton: GlassBarButtonView?      // round glass X button
+    private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
     private var searchDimView: UIView?                      // opaque bg
 
     /// Morph: pill → active-tab circle, search button → capsule with text field.
@@ -225,7 +226,16 @@ public final class TabBarView: UIView {
         addSubview(tf)
         searchTextField = tf
 
-        // Circle with active tab's icon — acts as close button
+        // Round glass close button (X)
+        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
+        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
+        close.contentTintColor = .label
+        close.alpha = 0.0
+        close.action = { [weak self] _ in self?.onSearchDismissed?() }
+        addSubview(close)
+        searchCloseButton = close
+
+        // Circle with active tab's icon — tap to go back to tabs
         let activeIcon = activeTabIcon()
         let circle = GlassBarButtonView(icon: activeIcon, state: .glass)
         circle.contentTintColor = theme.tabBarSelectedIconColor
@@ -237,10 +247,12 @@ public final class TabBarView: UIView {
     private func teardownSearchViews() {
         searchCapsule?.removeFromSuperview()
         searchTextField?.removeFromSuperview()
+        searchCloseButton?.removeFromSuperview()
         searchTabCircle?.removeFromSuperview()
         searchDimView?.removeFromSuperview()
         searchCapsule = nil
         searchTextField = nil
+        searchCloseButton = nil
         searchTabCircle = nil
         searchDimView = nil
     }
@@ -269,17 +281,18 @@ public final class TabBarView: UIView {
         return tabBarGlassContainer.convert(itemFrame, to: self)
     }
 
+    private static let searchModeHeight: CGFloat = 42.0
+
     /// Start: capsule at showcase origin, circle at active tab origin.
     private func positionSearchViewsAtOrigin() {
-        let h = theme.pillHeight
+        let h = Self.searchModeHeight
         let showcaseF = searchShowcaseFrame
         let tabF = activeTabFrame
-        let circleSize = h
 
         searchDimView?.frame = bounds
 
         // Capsule starts at search showcase's position (small circle)
-        let capsuleFrame = CGRect(x: showcaseF.midX - h / 2, y: showcaseF.minY, width: h, height: h)
+        let capsuleFrame = CGRect(x: showcaseF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
         searchCapsule?.frame = capsuleFrame
         searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
                               tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
@@ -288,28 +301,36 @@ public final class TabBarView: UIView {
         searchTextField?.frame = CGRect(x: capsuleFrame.minX + 8, y: capsuleFrame.minY, width: max(0, capsuleFrame.width - 16), height: h)
         searchTextField?.alpha = 0.0
 
+        // Close button hidden at capsule right edge
+        searchCloseButton?.frame = CGRect(x: capsuleFrame.maxX - h, y: capsuleFrame.minY, width: h, height: h)
+        searchCloseButton?.alpha = 0.0
+
         // Circle starts at active tab's position
-        let circleFrame = CGRect(x: tabF.midX - circleSize / 2, y: showcaseF.minY, width: circleSize, height: circleSize)
+        let circleFrame = CGRect(x: tabF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
         searchTabCircle?.frame = circleFrame
     }
 
     /// End: capsule fills most of the width, circle at the left edge.
     private func positionSearchViewsExpanded() {
-        let h = theme.pillHeight
+        let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        let pillY = bounds.height - theme.bottomInset - h
-        let circleSize = h
+        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2
         let spacing: CGFloat = 8.0
 
         searchDimView?.frame = bounds
 
         // Circle (active-tab icon) sits at the left
-        let circleFrame = CGRect(x: sideInset, y: pillY, width: circleSize, height: circleSize)
+        let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
         searchTabCircle?.frame = circleFrame
 
-        // Capsule fills remaining space to the right
+        // Close button (glass circle X) at the right
+        let closeFrame = CGRect(x: bounds.width - sideInset - h, y: pillY, width: h, height: h)
+        searchCloseButton?.frame = closeFrame
+        searchCloseButton?.alpha = 1.0
+
+        // Capsule between circle and close button
         let capsuleX = circleFrame.maxX + spacing
-        let capsuleWidth = max(0, bounds.width - capsuleX - sideInset)
+        let capsuleWidth = max(0, closeFrame.minX - capsuleX - spacing)
         let capsuleFrame = CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
         searchCapsule?.frame = capsuleFrame
         searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
