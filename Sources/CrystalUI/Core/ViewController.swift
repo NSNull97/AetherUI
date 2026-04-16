@@ -359,7 +359,9 @@ public enum TabBarItemContextActionType {
             right: 0.0
         )
         if additionalSafeAreaInsets != updatedInsets {
-            additionalSafeAreaInsets = updatedInsets
+            transition.animateView {
+                self.additionalSafeAreaInsets = updatedInsets
+            }
         }
     }
 

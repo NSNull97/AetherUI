@@ -33,6 +33,9 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
     /// Horizontal inset from content edges to pill.
     public var horizontalInset: CGFloat = 16.0
 
+    /// Extra right inset to make room for close button when search is active.
+    public var rightExtraInset: CGFloat = 0.0
+
     // MARK: - Subviews
 
     private let pillView = GlassBackgroundView(style: .regular)
@@ -72,7 +75,7 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
 
     override public func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGSize {
         let insetL = horizontalInset + leftInset
-        let insetR = horizontalInset + rightInset
+        let insetR = horizontalInset + rightInset + rightExtraInset
         let pillWidth = max(0, size.width - insetL - insetR)
         let pillY = floor((size.height - pillHeight) / 2.0)
 
