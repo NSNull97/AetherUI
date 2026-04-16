@@ -134,6 +134,10 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
     /// Size of the glass close button (default 36pt).
     public var closeButtonSize: CGFloat = 36.0
 
+    /// Force search to bottom mode even when a tab bar controller is present.
+    /// Default `false` — placement is determined automatically.
+    public var prefersBottomPlacement: Bool = false
+
     /// Current placement (determined automatically when installed on a ViewController).
     public private(set) var placement: Placement = .navBar
 
@@ -191,7 +195,7 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
                     r = next
                 }
             }
-            self.placement = hasTabBar ? .navBar : .bottom
+            self.placement = (hasTabBar && !self.prefersBottomPlacement) ? .navBar : .bottom
             if self.placement == .bottom {
                 self.installBottomPill(on: vc)
                 // Rebuild nav bar content without search pill
