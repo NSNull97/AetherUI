@@ -347,9 +347,13 @@ public final class TabBarView: UIView {
 
         let contentHeight: CGFloat = 62.0
         let sideInset: CGFloat = 16.0
-        let bottomInset: CGFloat = 25.0
         let innerPadding: CGFloat = 2.0
         let showcaseSpacing: CGFloat = 7.0
+
+        // Pill sits above the safe area with a small gap. On devices
+        // without safe area, use a larger gap for visual clearance.
+        let deviceSafeBottom = window?.safeAreaInsets.bottom ?? 0.0
+        let bottomInset: CGFloat = deviceSafeBottom > 0 ? deviceSafeBottom + 7.0 : 25.0
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 

@@ -238,7 +238,10 @@ open class TelegramTabBarController: ViewController {
         // recursion).
         updateCurrentContainerLayout(layout)
 
-        let tabBarHeight = TabBarView.defaultHeight + layout.safeInsets.bottom
+        // Tab bar total height: pill (62) + gap above safe area (7) + safe area.
+        // Minimum 103pt so there's room for the edge-effect fade zone on
+        // devices without a bottom safe area.
+        let tabBarHeight = max(103.0, 62.0 + 7.0 + layout.safeInsets.bottom)
         let tabBarContentInset = tabBarHidden ? 0.0 : max(0.0, tabBarHeight - layout.safeInsets.bottom)
 
         // Propagate the tab-bar height to embedded children via UIKit's
