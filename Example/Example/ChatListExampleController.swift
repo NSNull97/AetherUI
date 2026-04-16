@@ -13,8 +13,7 @@ struct ChatPreview {
 final class ChatListExampleController: ViewController {
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let filterBar = ChatFilterBarContent()
-    private var navSearchBar: CrystalSearchBarContent?
-    private var stackedContent: CrystalStackedBarContent?
+    // Bottom search bar (no-tab-bar mode)
     private var bottomSearchBar: GlassBackgroundView?
     private var bottomSearchIcon: UIImageView?
     private var bottomSearchLabel: UILabel?
@@ -161,18 +160,17 @@ final class ChatListExampleController: ViewController {
 
     private func setupSearchMode() {
         if hasTabBar {
-            // With tab controller: search pill + filters in nav bar
-            let navSearch = CrystalSearchBarContent()
-            navSearch.placeholder = "Поиск"
-            navSearch.isDark = traitCollection.userInterfaceStyle == .dark
-            navSearch.onTap = { [weak self] in self?.activateNavBarSearch() }
-            self.navSearchBar = navSearch
-            let stacked = CrystalStackedBarContent(views: [navSearch, filterBar])
-            self.stackedContent = stacked
-            self.navigationBarContent = stacked
+            // With tab controller: search pill + filters in nav bar (framework handles it)
+            let search = CrystalSearchController()
+            search.placeholder = "Поиск"
+            search.onTextChanged = { text in
+                // TODO: filter chat list
+            }
+            crystalSearchController = search
+            navigationBarContent = filterBar
         } else {
             // Without tab controller: only filters in nav bar, search is at the bottom
-            self.navigationBarContent = filterBar
+            navigationBarContent = filterBar
             buildBottomSearchBar()
         }
     }
@@ -391,101 +389,14 @@ final class ChatListExampleController: ViewController {
         }
     }
 
-    // MARK: - Nav Bar Search
-
-    private var isNavSearchActive = false
-    private var navSearchTextField: UITextField?
-    private var navSearchCloseButton: GlassBarButtonView?
+    // MARK: - Tab Bar Search Hook
 
     override func tabBarActivateSearch() {
-        activateNavBarSearch()
+        crystalSearchController?.activate()
     }
 
     override func tabBarDeactivateSearch() {
-        deactivateNavBarSearch()
-    }
-
-    private func activateNavBarSearch() {
-        guard hasTabBar, !isNavSearchActive, let searchPill = navSearchBar else { return }
-        isNavSearchActive = true
-
-        // Hide placeholder content, add real text field inside the pill
-        searchPill.subviews.forEach { $0.isHidden = true }
-
-        let tf = UITextField()
-        tf.placeholder = "Поиск"
-        tf.font = .systemFont(ofSize: 17)
-        tf.textColor = .label
-        tf.tintColor = .systemBlue
-        tf.returnKeyType = .search
-        tf.autocorrectionType = .no
-        tf.autocapitalizationType = .none
-        tf.clearButtonMode = .whileEditing
-        let leftIcon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
-        leftIcon.tintColor = .secondaryLabel
-        leftIcon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
-        leftIcon.contentMode = .center
-        tf.leftView = leftIcon
-        tf.leftViewMode = .always
-        searchPill.addSubview(tf)
-        tf.frame = CGRect(x: 8, y: 0, width: searchPill.bounds.width - 16, height: searchPill.bounds.height)
-        tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        navSearchTextField = tf
-
-        // Swap to search-only content (pill moves up to title area, filters hidden)
-        let searchOnlyContent = CrystalStackedBarContent(views: [searchPill])
-        navigationBarContent = searchOnlyContent
-
-        // Create close button in the nav bar's right area
-        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
-        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
-        close.contentTintColor = .label
-        close.frame = CGRect(x: 0, y: 0, width: 36, height: 36)
-        close.alpha = 0
-        close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-        let closeBarItem = UIBarButtonItem(customView: close)
-        close.action = { [weak self] _ in self?.deactivateNavBarSearch() }
-        navSearchCloseButton = close
-        navigationItem.rightBarButtonItem = closeBarItem
-
-        tf.becomeFirstResponder()
-
-        requestLayout(transition: .animated(duration: 0.35, curve: .spring))
-
-        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
-            close.alpha = 1
-            close.transform = .identity
-        }
-    }
-
-    private func deactivateNavBarSearch() {
-        guard isNavSearchActive, let searchPill = navSearchBar else { return }
-        isNavSearchActive = false
-        navSearchTextField?.resignFirstResponder()
-
-        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-            self.navSearchCloseButton?.alpha = 0
-            self.navSearchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-        } completion: { _ in
-            // Remove text field, restore pill subviews
-            self.navSearchTextField?.removeFromSuperview()
-            self.navSearchTextField = nil
-            self.navSearchCloseButton = nil
-            searchPill.subviews.forEach { $0.isHidden = false }
-
-            // Restore original right bar button
-            let addButton = UIBarButtonItem(
-                image: UIImage(systemName: "plus.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                style: .plain,
-                target: self,
-                action: #selector(self.addTapped)
-            )
-            self.navigationItem.rightBarButtonItem = addButton
-
-            // Restore stacked content (search + filters)
-            self.navigationBarContent = self.stackedContent
-            self.requestLayout(transition: .animated(duration: 0.35, curve: .spring))
-        }
+        crystalSearchController?.deactivate()
     }
 
     @objc private func editTapped() {}
