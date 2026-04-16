@@ -125,8 +125,21 @@ public enum TabBarItemContextActionType {
     // MARK: - Search
 
     /// Search controller integrated with the navigation bar.
-    /// When set, a glass search pill appears in the nav bar expansion area.
-    /// Tapping the pill activates search (text field + close button).
+    ///
+    /// When set, a glass search pill appears in the nav bar expansion area
+    /// (between title and content like filter chips). Tapping the pill
+    /// activates search: title/buttons fade, pill becomes a text field,
+    /// glass close button appears, keyboard shows.
+    ///
+    /// Mirrors the `UINavigationItem.searchController` pattern:
+    /// ```swift
+    /// let search = CrystalSearchController()
+    /// search.placeholder = "Search"
+    /// search.delegate = self
+    /// crystalSearchController = search
+    /// ```
+    ///
+    /// Set to `nil` to remove the search pill from the nav bar.
     public var crystalSearchController: CrystalSearchController? {
         didSet {
             oldValue?.viewController = nil
@@ -141,11 +154,10 @@ public enum TabBarItemContextActionType {
         }
     }
 
-    /// Rebuilds `navigationBarContent` to include the search pill (if search
-    /// controller is set) stacked above any existing content.
+    /// Rebuilds the nav bar content view to include the search pill
+    /// (if `crystalSearchController` is set) stacked above `navigationBarContent`.
     internal func rebuildNavigationBarContent() {
         guard let sc = crystalSearchController else {
-            // No search controller — use raw content
             if navigationBarView != nil, displayNavigationBar {
                 navigationBarView?.setContentView(_rawNavigationBarContent, animated: false)
             }
@@ -162,7 +174,9 @@ public enum TabBarItemContextActionType {
         navigationBarContentDidChange?()
     }
 
-    /// The raw content set by the consumer (filters, etc.) — separate from search.
+    /// The raw content set by the consumer (filters, chips, etc.).
+    /// Stored separately from the search pill so `rebuildNavigationBarContent`
+    /// can stack them.
     internal var _rawNavigationBarContent: NavigationBarContentView?
 
     // MARK: - Navigation Bar
