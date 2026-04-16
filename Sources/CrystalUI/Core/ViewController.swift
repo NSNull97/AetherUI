@@ -122,6 +122,49 @@ public enum TabBarItemContextActionType {
         }
     }
 
+    // MARK: - Search
+
+    /// Search controller integrated with the navigation bar.
+    /// When set, a glass search pill appears in the nav bar expansion area.
+    /// Tapping the pill activates search (text field + close button).
+    public var crystalSearchController: CrystalSearchController? {
+        didSet {
+            oldValue?.viewController = nil
+            if let sc = crystalSearchController {
+                sc.viewController = self
+                sc.searchBar.placeholder = sc.placeholder
+                sc.searchBar.isDark = traitCollection.userInterfaceStyle == .dark
+                rebuildNavigationBarContent()
+            } else {
+                rebuildNavigationBarContent()
+            }
+        }
+    }
+
+    /// Rebuilds `navigationBarContent` to include the search pill (if search
+    /// controller is set) stacked above any existing content.
+    private func rebuildNavigationBarContent() {
+        guard let sc = crystalSearchController else {
+            // No search controller — use raw content
+            if navigationBarView != nil, displayNavigationBar {
+                navigationBarView?.setContentView(_rawNavigationBarContent, animated: false)
+            }
+            return
+        }
+        var views: [NavigationBarContentView] = [sc.searchBar]
+        if let raw = _rawNavigationBarContent {
+            views.append(raw)
+        }
+        let stacked = CrystalStackedBarContent(views: views)
+        if navigationBarView != nil, displayNavigationBar {
+            navigationBarView?.setContentView(stacked, animated: false)
+        }
+        navigationBarContentDidChange?()
+    }
+
+    /// The raw content set by the consumer (filters, etc.) — separate from search.
+    private var _rawNavigationBarContent: NavigationBarContentView?
+
     // MARK: - Navigation Bar
 
     public var navigationBarView: NavigationBarView?
@@ -129,18 +172,20 @@ public enum TabBarItemContextActionType {
 
     /// Custom content view installed below the nav bar title row in `.expansion`
     /// mode (filter chips, segmented controls, etc.).
-    /// When the controller is standalone the view is installed on its own
-    /// `navigationBarView`; when embedded in a `CrystalTabBarController`, the
-    /// tab bar controller forwards it to its shared nav bar.
+    ///
+    /// When a `crystalSearchController` is set, the search pill is automatically
+    /// stacked above this content. Set this to filters/chips — don't include
+    /// the search bar manually.
     public var navigationBarContent: NavigationBarContentView? {
-        didSet {
-            if oldValue !== navigationBarContent {
-                // Only install on own nav bar when it's actually displayed.
-                // Otherwise the child's hidden nav bar would keep a stale
-                // reference and try to re-parent/re-layout the view during
-                // every layout pass, fighting the embedding container.
+        get { _rawNavigationBarContent }
+        set {
+            guard _rawNavigationBarContent !== newValue else { return }
+            _rawNavigationBarContent = newValue
+            if crystalSearchController != nil {
+                rebuildNavigationBarContent()
+            } else {
                 if navigationBarView != nil, displayNavigationBar {
-                    navigationBarView?.setContentView(navigationBarContent, animated: false)
+                    navigationBarView?.setContentView(newValue, animated: false)
                 } else {
                     navigationBarView?.setContentView(nil, animated: false)
                 }
