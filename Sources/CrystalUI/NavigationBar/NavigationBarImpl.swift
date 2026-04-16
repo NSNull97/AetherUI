@@ -466,16 +466,33 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
                 buttonsContainerView.alpha = 0.0
             case .expansion:
-                // Buttons only cover the title row (defaultHeight), NOT the expansion content below.
-                // This ensures taps on the expansion content (search bar, filters) are not blocked.
                 let buttonsHeight = defaultHeight
                 transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
                 layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
-                let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
-                transition.updateFrame(view: contentView, frame: contentFrame)
-                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-                buttonsContainerView.alpha = 1.0
+                if isSearchModeActive {
+                    // Search mode: content (search pill) at title position, no offset
+                    let searchPillHeight = (contentView as? CrystalStackedBarContent)?.views.first?.nominalHeight ?? contentView.height
+                    let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: searchPillHeight)
+                    transition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    // Hide non-search children (filters) in stacked content
+                    if let stacked = contentView as? CrystalStackedBarContent {
+                        for (i, v) in stacked.views.enumerated() {
+                            v.alpha = i == 0 ? 1.0 : 0.0
+                        }
+                    }
+                } else {
+                    // Normal: content below title row
+                    let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
+                    transition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    // Restore all children alpha
+                    if let stacked = contentView as? CrystalStackedBarContent {
+                        for v in stacked.views { v.alpha = 1.0 }
+                    }
+                    buttonsContainerView.alpha = 1.0
+                }
             }
             // Buttons always above content view (glass capsules over filter bar).
             clippingView.bringSubviewToFront(buttonsContainerView)
@@ -489,16 +506,6 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             }
         }
 
-        // In search mode: buttons hidden, first content child (search pill) moves to title area
-        if isSearchModeActive, let contentView = _contentView {
-            buttonsContainerView.alpha = 0.0
-            // If the content is a stacked view, position the first child (search pill)
-            // at the title row area, and hide everything else
-            let searchY = buttonsAreaY
-            let searchFrame = CGRect(x: 0, y: searchY, width: size.width, height: contentView.height)
-            transition.updateFrame(view: contentView, frame: searchFrame)
-            let _ = contentView.updateLayout(size: searchFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-        }
     }
 
     // MARK: - Search Mode
@@ -507,24 +514,27 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         guard isSearchModeActive != active else { return }
         isSearchModeActive = active
 
+        // Trigger a full layout cycle through the VC hierarchy.
+        // This recalculates contentHeight (smaller in search mode),
+        // which causes the VC to recompute additionalSafeAreaInsets,
+        // which animates the collection content offset.
+        let transition: ContainedViewLayoutTransition = animated
+            ? .animated(duration: 0.3, curve: .easeInOut)
+            : .immediate
+
         if animated {
-            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.88, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
                 self.buttonsContainerView.alpha = active ? 0.0 : 1.0
                 self.leftButtonsGroup?.alpha = active ? 0.0 : 1.0
                 self.rightButtonsGroup?.alpha = active ? 0.0 : 1.0
-                if let layout = self.validLayout {
-                    self.updateLayout(size: layout.size, defaultHeight: layout.defaultHeight, additionalTopHeight: 0, additionalContentHeight: 0, additionalBackgroundHeight: 0, leftInset: layout.leftInset, rightInset: layout.rightInset, appearsHidden: false, isLandscape: layout.size.width > layout.size.height, transition: .immediate)
-                }
             }
         } else {
             buttonsContainerView.alpha = active ? 0.0 : 1.0
             leftButtonsGroup?.alpha = active ? 0.0 : 1.0
             rightButtonsGroup?.alpha = active ? 0.0 : 1.0
-            if let layout = validLayout {
-                updateLayout(size: layout.size, defaultHeight: layout.defaultHeight, additionalTopHeight: 0, additionalContentHeight: 0, additionalBackgroundHeight: 0, leftInset: layout.leftInset, rightInset: layout.rightInset, appearsHidden: false, isLandscape: layout.size.width > layout.size.height, transition: .immediate)
-            }
         }
-        requestContainerLayout?(.animated(duration: 0.35, curve: .spring))
+
+        requestContainerLayout?(transition)
     }
 
     // MARK: - Private
