@@ -127,17 +127,22 @@ public final class CrystalSearchController {
         }
     }
 
-    /// Deactivate search: close button disappears, pill returns to normal.
+    /// Deactivate search: everything closes simultaneously.
     public func deactivate() {
         guard isActive, let vc = viewController else { return }
         isActive = false
-        textField?.resignFirstResponder()
 
-        UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+        // Resign and cleanup all at once — keyboard dismiss animation
+        // runs in parallel with the nav bar restore animation.
+        textField?.resignFirstResponder()
+        cleanup(vc: vc)
+
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
             self.closeButton?.alpha = 0
             self.closeButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         } completion: { _ in
-            self.cleanup(vc: vc)
+            self.closeButton?.removeFromSuperview()
+            self.closeButton = nil
         }
     }
 
@@ -160,14 +165,12 @@ public final class CrystalSearchController {
     private func cleanup(vc: ViewController) {
         textField?.removeFromSuperview()
         textField = nil
-        closeButton?.removeFromSuperview()
-        closeButton = nil
 
         // Restore pill
         searchBar.setSearchActive(false)
         searchBar.rightExtraInset = 0
 
-        // Deactivate search mode on nav bar
+        // Deactivate search mode on nav bar (animates title/filters back)
         vc.navigationBarView?.setSearchMode(false, animated: true)
 
         savedNavigationBarContent = nil
