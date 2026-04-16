@@ -143,7 +143,7 @@ public final class TabBarView: UIView {
     private var searchTextField: UITextField?               // text field inside capsule
     private var searchCloseButton: GlassBarButtonView?      // round glass X button
     private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
-    private var searchDimView: UIView?                      // opaque bg
+    private var searchDimView: EdgeEffectView?               // edge-effect bg
 
     /// Morph: pill → active-tab circle, search button → capsule with text field.
     public func activateSearchMode(animated: Bool) {
@@ -211,10 +211,9 @@ public final class TabBarView: UIView {
     // -- Build / teardown
 
     private func buildSearchViews() {
-        let dim = UIView()
-        dim.backgroundColor = .systemBackground
+        let dim = EdgeEffectView()
+        dim.isUserInteractionEnabled = false
         dim.alpha = 0.0
-        // Insert above the edge effect so the frost still renders
         insertSubview(dim, aboveSubview: edgeEffectView)
         searchDimView = dim
 
@@ -305,7 +304,7 @@ public final class TabBarView: UIView {
         let showcaseF = searchShowcaseFrame
         let tabF = activeTabFrame
 
-        searchDimView?.frame = bounds
+        updateSearchDimFrame()
 
         // Capsule starts at search showcase's position (small circle)
         let capsuleFrame = CGRect(x: showcaseF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
@@ -333,7 +332,7 @@ public final class TabBarView: UIView {
         let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2
         let spacing: CGFloat = 8.0
 
-        searchDimView?.frame = bounds
+        updateSearchDimFrame()
 
         // Circle (active-tab icon) sits at the left
         let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
@@ -355,6 +354,23 @@ public final class TabBarView: UIView {
         // Text field inside capsule
         searchTextField?.frame = CGRect(x: capsuleX + 8, y: pillY, width: max(0, capsuleWidth - 16), height: h)
         searchTextField?.alpha = 1.0
+    }
+
+    private func updateSearchDimFrame() {
+        guard let dim = searchDimView else { return }
+        dim.frame = bounds
+        let fadeHeight: CGFloat = min(48.0, bounds.height * 0.4)
+        dim.update(
+            content: theme.edgeEffectTintColor ?? theme.tabBarBackgroundColor,
+            blur: true,
+            alpha: theme.edgeEffectAlpha,
+            rect: CGRect(origin: .zero, size: bounds.size),
+            edge: .bottom,
+            edgeSize: fadeHeight,
+            blurRadiusAtEdge: theme.edgeEffectBlurRadius,
+            blurRadiusAtFade: theme.edgeEffectBlurRadius,
+            transition: .immediate
+        )
     }
 
     @objc private func searchTextDidChange() {
