@@ -28,6 +28,12 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
     public var controllerRemoved: ((ViewController) -> Void)?
     public var requestLayout: ((ContainedViewLayoutTransition) -> Void)?
 
+    // Transition callbacks for coordinating nav-bar crossfade with push/pop.
+    var onTransitionStarted: ((_ from: ViewController, _ to: ViewController, _ isPush: Bool, _ isInteractive: Bool) -> Void)?
+    var onTransitionProgress: ((_ progress: CGFloat, _ transition: ContainedViewLayoutTransition) -> Void)?
+    var onTransitionCompleted: (() -> Void)?
+    var onTransitionCancelled: (() -> Void)?
+
     // MARK: - Init
 
     override init(frame: CGRect) {
@@ -153,6 +159,8 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         to.view.frame = frame
         to.containerLayoutUpdated(layout, transition: .immediate)
 
+        onTransitionStarted?(from, to, push, false)
+
         if push {
             addSubview(to.view)
             to.view.frame = frame.offsetBy(dx: frame.width, dy: 0)
@@ -168,9 +176,12 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             )
             self.transitionCoordinator = coordinator
 
+            onTransitionProgress?(1.0, .animated(duration: 0.5, curve: .spring))
+
             coordinator.animateCompletion { [weak self] in
                 from.view.removeFromSuperview()
                 self?.transitionCoordinator = nil
+                self?.onTransitionCompleted?()
             }
         } else {
             insertSubview(to.view, belowSubview: from.view)
@@ -186,10 +197,13 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             )
             self.transitionCoordinator = coordinator
 
+            onTransitionProgress?(1.0, .animated(duration: 0.5, curve: .spring))
+
             coordinator.animateCompletion { [weak self] in
                 from.view.removeFromSuperview()
                 self?.transitionCoordinator = nil
                 self?.controllerRemoved?(from)
+                self?.onTransitionCompleted?()
             }
         }
     }
@@ -230,25 +244,36 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             self.transitionCoordinator = coordinator
             coordinator.updateProgress(0.0, transition: .immediate, completion: {})
 
+            onTransitionStarted?(currentController, previousController, false, true)
+
         case .changed:
             transitionCoordinator?.updateProgress(progress, transition: .immediate, completion: {})
+            onTransitionProgress?(progress, .immediate)
 
         case .ended, .cancelled:
             let shouldComplete = progress > 0.3 || velocity.x > 500
             if shouldComplete {
+                let distance = (1.0 - progress) * width
+                let duration = Double(max(0.05, min(0.2, abs(distance / max(1.0, velocity.x)))))
+                onTransitionProgress?(1.0, .animated(duration: duration, curve: .easeInOut))
+
                 transitionCoordinator?.animateCompletion(velocity: velocity.x) { [weak self] in
                     guard let self = self else { return }
                     let removed = self.controllers.removeLast()
                     removed.view.removeFromSuperview()
                     self.transitionCoordinator = nil
                     self.controllerRemoved?(removed)
+                    self.onTransitionCompleted?()
                 }
             } else {
+                onTransitionProgress?(0.0, .animated(duration: 0.2, curve: .easeInOut))
+
                 transitionCoordinator?.animateCancel { [weak self] in
                     guard let self = self else { return }
                     let previousController = self.controllers[self.controllers.count - 2]
                     previousController.view.removeFromSuperview()
                     self.transitionCoordinator = nil
+                    self.onTransitionCancelled?()
                 }
             }
 

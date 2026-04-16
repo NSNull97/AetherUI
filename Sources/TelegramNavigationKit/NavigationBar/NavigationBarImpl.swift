@@ -449,24 +449,29 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // Layout buttons
         layoutButtons(width: size.width, height: buttonsAreaHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
-        // Content view
+        // Content view — during transitions, the content view frame is
+        // controlled by updateTransitionCrossfade (slides with controller).
         if let contentView = _contentView {
             switch contentView.mode {
             case .replacement:
-                let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
-                transition.updateFrame(view: contentView, frame: contentFrame)
-                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-
-                buttonsContainerView.alpha = 0.0
+                if !isTransitionActive {
+                    let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
+                    transition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    buttonsContainerView.alpha = 0.0
+                }
             case .expansion:
-                let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
-                transition.updateFrame(view: contentView, frame: contentFrame)
-                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-
-                buttonsContainerView.alpha = 1.0
+                if !isTransitionActive {
+                    let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
+                    transition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    buttonsContainerView.alpha = 1.0
+                }
             }
         } else {
-            buttonsContainerView.alpha = 1.0
+            if !isTransitionActive {
+                buttonsContainerView.alpha = 1.0
+            }
         }
     }
 
@@ -481,34 +486,26 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         let titleLeftInset: CGFloat
         let titleRightInset: CGFloat
         if usesGlassStyle {
+            // In glass mode the back button lives INSIDE the left
+            // GlassControlGroup — no separate capsule. The group handles
+            // morphing (fade old items out, new items in) automatically.
             backArrowView.isHidden = true
+            backButtonView.isHidden = true
             let glassButtonHeight: CGFloat = 44.0
             let glassSideInset: CGFloat = 16.0
-            let glassInterGroupSpacing: CGFloat = 8.0
             let glassY = floor((buttonHeight - glassButtonHeight) / 2.0) + 2.0
 
-            // Back button first — in glass mode it is its own capsule and, when
-            // present, pushes subsequent left-side content (leftButtonContainer)
-            // further right so the two do not overlap.
-            let backIsVisible = !backButtonView.isHidden
-            let backSize = backButtonView.sizeThatFits(CGSize(width: width / 2.0, height: glassButtonHeight))
-            backFrame = CGRect(
-                x: leftInset + glassSideInset,
-                y: glassY,
-                width: backSize.width,
-                height: glassButtonHeight
-            )
-            transition.updateFrame(view: backButtonView, frame: backFrame)
+            backFrame = .zero // unused in glass mode
 
-            let leftStart = leftInset + glassSideInset + (backIsVisible ? backSize.width + glassInterGroupSpacing : 0.0)
+            let leftStart = leftInset + glassSideInset
             let leftAvailableWidth = max(1.0, width * 0.5 - leftStart)
             let rightAvailableWidth = max(1.0, width * 0.5 - rightInset - glassSideInset)
 
             transition.updateFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftAvailableWidth, height: glassButtonHeight))
             transition.updateFrame(view: rightButtonContainer, frame: CGRect(x: width * 0.5, y: glassY, width: rightAvailableWidth, height: glassButtonHeight))
 
-            let leftButtonsWidth = layoutBarButtonItems(in: leftButtonContainer, items: item?.leftBarButtonItems, alignment: .left, height: glassButtonHeight)
-            let rightButtonsWidth = layoutBarButtonItems(in: rightButtonContainer, items: item?.rightBarButtonItems, alignment: .right, height: glassButtonHeight)
+            let leftButtonsWidth = layoutBarButtonItems(in: leftButtonContainer, items: item?.leftBarButtonItems, alignment: .left, height: glassButtonHeight, transition: transition)
+            let rightButtonsWidth = layoutBarButtonItems(in: rightButtonContainer, items: item?.rightBarButtonItems, alignment: .right, height: glassButtonHeight, transition: transition)
 
             if leftButtonsWidth > 0.0 {
                 transition.updateFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftButtonsWidth, height: glassButtonHeight))
@@ -517,8 +514,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 transition.updateFrame(view: rightButtonContainer, frame: CGRect(x: width - rightInset - glassSideInset - rightButtonsWidth, y: glassY, width: rightButtonsWidth, height: glassButtonHeight))
             }
 
-            let effectiveLeftWidth = (backIsVisible ? backSize.width + (leftButtonsWidth > 0.0 ? glassInterGroupSpacing + leftButtonsWidth : 0.0) : leftButtonsWidth)
-            titleLeftInset = effectiveLeftWidth > 0.0 ? leftInset + glassSideInset + effectiveLeftWidth + 10.0 : leftInset
+            titleLeftInset = leftButtonsWidth > 0.0 ? leftInset + glassSideInset + leftButtonsWidth + 10.0 : leftInset
             titleRightInset = rightButtonsWidth > 0.0 ? rightInset + glassSideInset + rightButtonsWidth + 10.0 : rightInset
         } else {
             // Back arrow
@@ -577,7 +573,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     }
 
     @discardableResult
-    private func layoutBarButtonItems(in container: UIView, items: [UIBarButtonItem]?, alignment: ButtonAlignment, height: CGFloat) -> CGFloat {
+    private func layoutBarButtonItems(in container: UIView, items: [UIBarButtonItem]?, alignment: ButtonAlignment, height: CGFloat, transition glassTransition: ContainedViewLayoutTransition = .immediate) -> CGFloat {
         let theme = presentationData.theme
 
         if theme.style == .glass {
@@ -610,7 +606,64 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 sub.removeFromSuperview()
             }
 
-            guard let items, !items.isEmpty else {
+            // --- Build group items ---
+            var groupItems: [GlassControlGroup.Item] = []
+
+            // Left group: prepend back button if applicable.
+            if alignment == .left, let prev = self.previousItem, enableAutomaticBackButton {
+                let backText: String
+                switch prev {
+                case let .item(navItem):
+                    backText = navItem.title ?? presentationData.strings.back
+                case .close:
+                    backText = presentationData.strings.close
+                }
+                let contentView = BackButtonContentView(
+                    icon: NavigationBarTheme.generateBackArrowImage(color: theme.buttonColor),
+                    text: backText,
+                    tintColor: theme.buttonColor
+                )
+                groupItems.append(GlassControlGroup.Item(
+                    id: "nav.back" as AnyHashable,
+                    content: .customView(contentView),
+                    contentInsets: UIEdgeInsets(top: 0.0, left: 2.0, bottom: 0.0, right: 6.0),
+                    action: { [weak self] in self?.backPressed() }
+                ))
+            }
+
+            // Regular bar button items.
+            if let items, !items.isEmpty {
+                for item in items {
+                    let content: GlassControlGroup.Item.Content
+                    let insets: UIEdgeInsets
+                    if let customView = item.customView {
+                        content = .customView(customView)
+                        insets = .zero
+                    } else if let image = item.image {
+                        content = .icon(image)
+                        insets = .zero
+                    } else if let title = item.title {
+                        content = .text(title)
+                        insets = UIEdgeInsets(top: 0.0, left: 10.0, bottom: 0.0, right: 10.0)
+                    } else {
+                        content = .text("")
+                        insets = UIEdgeInsets(top: 0.0, left: 10.0, bottom: 0.0, right: 10.0)
+                    }
+
+                    let action: (() -> Void)?
+                    if let selector = item.action, let target = item.target as AnyObject? {
+                        action = { [weak target] in
+                            UIApplication.shared.sendAction(selector, to: target, from: item, for: nil)
+                        }
+                    } else {
+                        action = nil
+                    }
+
+                    groupItems.append(GlassControlGroup.Item(id: ObjectIdentifier(item), content: content, contentInsets: insets, action: action))
+                }
+            }
+
+            guard !groupItems.isEmpty else {
                 group.update(
                     items: [],
                     background: .panel,
@@ -619,41 +672,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     isDark: theme.overallDarkAppearance,
                     availableHeight: height,
                     minWidth: height,
-                    transition: .immediate
+                    transition: glassTransition
                 )
                 return 0.0
-            }
-
-            let groupItems: [GlassControlGroup.Item] = items.map { item in
-                let content: GlassControlGroup.Item.Content
-                // Text buttons get 8pt horizontal inset (Figma spec). Icon and
-                // custom-view buttons use zero inset — their natural size +
-                // `GlassControlGroup`'s per-item min width handles the padding.
-                let insets: UIEdgeInsets
-                if let customView = item.customView {
-                    content = .customView(customView)
-                    insets = .zero
-                } else if let image = item.image {
-                    content = .icon(image)
-                    insets = .zero
-                } else if let title = item.title {
-                    content = .text(title)
-                    insets = UIEdgeInsets(top: 0.0, left: 10.0, bottom: 0.0, right: 10.0)
-                } else {
-                    content = .text("")
-                    insets = UIEdgeInsets(top: 0.0, left: 10.0, bottom: 0.0, right: 10.0)
-                }
-
-                let action: (() -> Void)?
-                if let selector = item.action, let target = item.target as AnyObject? {
-                    action = { [weak target] in
-                        UIApplication.shared.sendAction(selector, to: target, from: item, for: nil)
-                    }
-                } else {
-                    action = nil
-                }
-
-                return GlassControlGroup.Item(id: ObjectIdentifier(item), content: content, contentInsets: insets, action: action)
             }
 
             let size = group.update(
@@ -664,7 +685,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 isDark: theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark,
                 availableHeight: height,
                 minWidth: height,
-                transition: .immediate
+                transition: glassTransition
             )
             return size.width
         }
@@ -803,6 +824,252 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         edgeEffect.isUserInteractionEnabled = false
         insertSubview(edgeEffect, at: 0)
         self.edgeEffectView = edgeEffect
+    }
+
+    // MARK: - Transition
+
+    private var transitionDirection: NavigationTransitionDirection?
+    /// `true` while a push/pop transition is in flight.
+    private(set) var isTransitionActive: Bool = false
+
+    // Floating titles that track controller slide positions (like stock iOS).
+    private var outgoingFloatingTitle: UIView?
+    private var incomingFloatingTitle: UIView?
+    private var outgoingTitleBaseFrame: CGRect = .zero
+    private var incomingTitleBaseFrame: CGRect = .zero
+    private var savedOutgoingTitleText: String?
+    private var savedOutgoingTitleViewSnapshot: UIView?
+
+    // Content view (filter bar) tracking — slides with controller positions.
+    private var outgoingContentViewRef: NavigationBarContentView?
+    private var outgoingContentBaseFrame: CGRect = .zero
+    private var incomingContentViewRef: NavigationBarContentView?
+    private var incomingContentBaseFrame: CGRect = .zero
+
+    /// Phase 1: save outgoing title text and back-button visibility.
+    /// Call BEFORE updating `item`/`previousItem`.
+    func beginTransitionCrossfade(direction: NavigationTransitionDirection) {
+        endTransitionCrossfade()
+        self.transitionDirection = direction
+        self.isTransitionActive = true
+
+        // Capture outgoing title state before item update changes it.
+        if let tv = titleContentView, !tv.isHidden, tv.alpha > 0.01 {
+            savedOutgoingTitleViewSnapshot = tv.snapshotView(afterScreenUpdates: false)
+        }
+        savedOutgoingTitleText = titleLabel.text
+        outgoingTitleBaseFrame = (titleContentView ?? titleLabel).frame
+
+        // Capture outgoing content view (filter bar) — it stays on the bar
+        // during the transition and slides with the outgoing controller.
+        if let cv = _contentView {
+            outgoingContentViewRef = cv
+            outgoingContentBaseFrame = cv.frame
+        }
+    }
+
+    /// Phase 2: item/previousItem are updated. Detect appear/disappear,
+    /// create floating titles, re-layout, set initial animation state.
+    /// - Parameter incomingContentView: the destination controller's content view
+    ///   (e.g. filter bar); added temporarily to slide in with the incoming controller.
+    func commitTransitionCrossfade(incomingContentView: NavigationBarContentView? = nil) {
+        // Re-layout with animated transition so GlassControlGroup morphs
+        // its items (back button ↔ edit button) with a smooth fade.
+        let morphTransition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
+        if let layout = validLayout {
+            let h = buttonsContainerView.bounds.height
+            layoutButtons(
+                width: layout.size.width,
+                height: h > 0 ? h : layout.defaultHeight,
+                leftInset: layout.leftInset,
+                rightInset: layout.rightInset,
+                defaultHeight: layout.defaultHeight,
+                transition: morphTransition
+            )
+        }
+        incomingTitleBaseFrame = (titleContentView ?? titleLabel).frame
+
+        // --- Create floating titles that track controller positions ---
+
+        // Outgoing floating title (old title text, moves with outgoing controller)
+        if let snap = savedOutgoingTitleViewSnapshot {
+            snap.frame = outgoingTitleBaseFrame
+            buttonsContainerView.addSubview(snap)
+            outgoingFloatingTitle = snap
+        } else if let text = savedOutgoingTitleText, !text.isEmpty {
+            let label = UILabel()
+            label.font = titleLabel.font
+            label.textColor = titleLabel.textColor
+            label.textAlignment = .center
+            label.text = text
+            label.frame = outgoingTitleBaseFrame
+            buttonsContainerView.addSubview(label)
+            outgoingFloatingTitle = label
+        }
+
+        // Incoming floating title (new title text, moves with incoming controller)
+        let newText = titleLabel.text ?? ""
+        if !newText.isEmpty && titleContentView == nil {
+            let label = UILabel()
+            label.font = titleLabel.font
+            label.textColor = titleLabel.textColor
+            label.textAlignment = .center
+            label.text = newText
+            label.frame = incomingTitleBaseFrame
+            buttonsContainerView.addSubview(label)
+            incomingFloatingTitle = label
+        } else if let tv = titleContentView {
+            // Custom title view — use the real view, we'll position it.
+            incomingFloatingTitle = tv
+        }
+
+        // Hide the real title — floating titles take over.
+        titleLabel.alpha = 0.0
+        titleContentView?.alpha = 0.0
+
+        // --- Incoming content view (filter bar) — add temporarily, slides in ---
+        if let incoming = incomingContentView, incoming !== outgoingContentViewRef {
+            incoming.alpha = 1.0
+            incoming.requestContainerLayout = { [weak self] transition in
+                self?.requestContainerLayout?(transition)
+            }
+            // Compute frame using same logic as updateLayout's expansion mode.
+            let statusBarHeight = (validLayout?.size.height ?? 0) - contentHeight(defaultHeight: validLayout?.defaultHeight ?? 60)
+            let buttonsAreaY = statusBarHeight
+            let defaultH = validLayout?.defaultHeight ?? 60
+            let cvFrame = CGRect(
+                x: 0,
+                y: buttonsAreaY + defaultH,
+                width: validLayout?.size.width ?? bounds.width,
+                height: incoming.height
+            )
+            incoming.frame = cvFrame
+            if let leftInset = validLayout?.leftInset, let rightInset = validLayout?.rightInset {
+                let _ = incoming.updateLayout(size: cvFrame.size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
+            }
+            clippingView.addSubview(incoming)
+            incomingContentViewRef = incoming
+            incomingContentBaseFrame = cvFrame
+        }
+
+        savedOutgoingTitleText = nil
+        savedOutgoingTitleViewSnapshot = nil
+    }
+
+    /// Drive the transition based on progress (0 = outgoing, 1 = incoming).
+    /// Floating titles track controller X positions; buttons animate glassmorphically.
+    func updateTransitionCrossfade(progress: CGFloat, transition: ContainedViewLayoutTransition) {
+        guard isTransitionActive else { return }
+
+        let p = max(0.0, min(1.0, progress))
+        let w = bounds.width
+        let isPush = transitionDirection == .push
+
+        // ── Floating titles: track controller slide positions ──
+        // Mirror NavigationTransitionCoordinator parallax geometry.
+        let outgoingDx: CGFloat
+        let incomingDx: CGFloat
+        if isPush {
+            // Push: outgoing = bottom view (parallax left 30%), incoming = top view (full slide from right)
+            outgoingDx = -p * w * 0.3
+            incomingDx = (1.0 - p) * w
+        } else {
+            // Pop: outgoing = top view (slides right), incoming = bottom view (parallax from -30%)
+            outgoingDx = p * w
+            incomingDx = (p - 1.0) * w * 0.3
+        }
+
+        if let outgoing = outgoingFloatingTitle {
+            transition.updateFrame(view: outgoing, frame: outgoingTitleBaseFrame.offsetBy(dx: outgoingDx, dy: 0))
+        }
+        if let incoming = incomingFloatingTitle {
+            transition.updateFrame(view: incoming, frame: incomingTitleBaseFrame.offsetBy(dx: incomingDx, dy: 0))
+        }
+
+        // ── Content view (filter bar): track controller positions ──
+        if let cv = outgoingContentViewRef {
+            transition.updateFrame(view: cv, frame: outgoingContentBaseFrame.offsetBy(dx: outgoingDx, dy: 0))
+        }
+        if let cv = incomingContentViewRef {
+            transition.updateFrame(view: cv, frame: incomingContentBaseFrame.offsetBy(dx: incomingDx, dy: 0))
+        }
+
+        // Back button animation is handled by GlassControlGroup's item
+        // diff (fade in/out) — no custom animation needed here.
+    }
+
+    /// Finalize the transition and restore normal rendering.
+    func endTransitionCrossfade() {
+        // Titles
+        outgoingFloatingTitle?.removeFromSuperview()
+        outgoingFloatingTitle = nil
+        if incomingFloatingTitle !== titleContentView {
+            incomingFloatingTitle?.removeFromSuperview()
+        }
+        incomingFloatingTitle = nil
+
+        // Content views — remove the incoming temporary; restore outgoing frame.
+        if let cv = outgoingContentViewRef {
+            cv.frame = outgoingContentBaseFrame
+        }
+        outgoingContentViewRef = nil
+        // The incoming content view was added temporarily; remove it.
+        // syncBarToTopController will re-add it properly via setContentView.
+        incomingContentViewRef?.removeFromSuperview()
+        incomingContentViewRef = nil
+
+        transitionDirection = nil
+        isTransitionActive = false
+
+        // Title — restore real title visibility.
+        titleLabel.alpha = titleContentView != nil ? 0.0 : 1.0
+        titleLabel.transform = .identity
+        titleContentView?.alpha = 1.0
+        titleContentView?.transform = .identity
+
+        rightButtonsGroup?.alpha = 1.0
+        leftButtonsGroup?.alpha = 1.0
+    }
+}
+
+// MARK: - Back Button Content View (for GlassControlGroup)
+
+/// Lightweight icon + label view used as `.customView` content inside
+/// `GlassControlGroup`. The group provides the glass capsule background;
+/// this view just renders the chevron and title text.
+private final class BackButtonContentView: UIView {
+    private let iconView = UIImageView()
+    private let label = UILabel()
+
+    init(icon: UIImage?, text: String, tintColor: UIColor) {
+        super.init(frame: .zero)
+
+        iconView.image = icon?.withRenderingMode(.alwaysTemplate)
+        iconView.tintColor = tintColor
+        iconView.contentMode = .center
+        addSubview(iconView)
+
+        label.text = text
+        label.font = .systemFont(ofSize: 17.0)
+        label.textColor = tintColor
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        let iconWidth: CGFloat = iconView.image == nil ? 0.0 : 20.0
+        let spacing: CGFloat = (iconView.image == nil || label.text?.isEmpty == true) ? 0.0 : 3.0
+        let labelSize = label.sizeThatFits(size)
+        return CGSize(width: iconWidth + spacing + labelSize.width, height: max(labelSize.height, 20.0))
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let iconWidth: CGFloat = iconView.image == nil ? 0.0 : 20.0
+        let spacing: CGFloat = (iconView.image == nil || label.text?.isEmpty == true) ? 0.0 : 3.0
+        iconView.frame = CGRect(x: 0.0, y: 0.0, width: iconWidth, height: bounds.height)
+        label.frame = CGRect(x: iconWidth + spacing, y: 0.0, width: bounds.width - iconWidth - spacing, height: bounds.height)
     }
 }
 

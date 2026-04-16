@@ -99,6 +99,10 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     }
 
     private var _viewControllers: [ViewController] = []
+
+    // Bar crossfade state for animated push/pop transitions.
+    private var barTransitionFromItem: UINavigationItem?
+    private var barTransitionFromPreviousItem: NavigationPreviousAction?
     public var viewControllerStack: [ViewController] {
         _viewControllers
     }
@@ -240,7 +244,12 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
     public func pushViewController(_ controller: ViewController, animated: Bool = true) {
         _viewControllers.append(controller)
         wireControllers(_viewControllers)
-        syncBarToTopController(animated: animated)
+
+        if !animated {
+            syncBarToTopController(animated: false)
+        }
+        // For animated pushes, bar sync is deferred to onTransitionStarted
+        // so the crossfade can snapshot the outgoing state first.
 
         if let layout = currentLayoutForComputation() {
             updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
@@ -723,6 +732,32 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         }
     }
 
+    private func handleBarTransitionStarted(from: ViewController, to: ViewController, isPush: Bool) {
+        // Save current bar state for potential cancellation (interactive pop).
+        barTransitionFromItem = navigationBar.item
+        barTransitionFromPreviousItem = navigationBar.previousItem
+
+        // Phase 1: capture outgoing element clones before the bar updates.
+        navigationBar.beginTransitionCrossfade(direction: isPush ? .push : .pop)
+
+        // Update bar to the destination controller's state.
+        let toIndex = _viewControllers.firstIndex(where: { $0 === to })
+        let previousAction: NavigationPreviousAction?
+        if let idx = toIndex, idx > 0 {
+            previousAction = .item(_viewControllers[idx - 1].navigationItem)
+        } else {
+            previousAction = nil
+        }
+
+        navigationBar.item = to.navigationItem
+        navigationBar.previousItem = previousAction
+
+        // Phase 2: incoming elements are configured — set them invisible,
+        // re-layout, and set initial slide positions before animation starts.
+        navigationBar.commitTransitionCrossfade(incomingContentView: to.navigationBarContent)
+        navigationBar.updateTransitionCrossfade(progress: 0.0, transition: .immediate)
+    }
+
     private func ensureFlatRootContainer() -> NavigationContainer {
         if case let .flat(container)? = rootContainer {
             return container
@@ -735,6 +770,30 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         }
         container.requestLayout = { [weak self] transition in
             self?.requestLayout(transition: transition)
+        }
+        container.onTransitionStarted = { [weak self] from, to, isPush, _ in
+            self?.handleBarTransitionStarted(from: from, to: to, isPush: isPush)
+        }
+        container.onTransitionProgress = { [weak self] progress, transition in
+            self?.navigationBar.updateTransitionCrossfade(progress: progress, transition: transition)
+        }
+        container.onTransitionCompleted = { [weak self] in
+            guard let self else { return }
+            self.navigationBar.endTransitionCrossfade()
+            self.syncBarToTopController(animated: false)
+            self.barTransitionFromItem = nil
+            self.barTransitionFromPreviousItem = nil
+        }
+        container.onTransitionCancelled = { [weak self] in
+            guard let self else { return }
+            self.navigationBar.endTransitionCrossfade()
+            if let item = self.barTransitionFromItem {
+                self.navigationBar.item = item
+            }
+            self.navigationBar.previousItem = self.barTransitionFromPreviousItem
+            self.barTransitionFromItem = nil
+            self.barTransitionFromPreviousItem = nil
+            self.requestLayout(transition: .immediate)
         }
 
         installRootContainerView(container)
