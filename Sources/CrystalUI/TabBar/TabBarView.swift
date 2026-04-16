@@ -358,13 +358,17 @@ public final class TabBarView: UIView {
 
     private func updateSearchDimFrame() {
         guard let dim = searchDimView else { return }
-        dim.frame = bounds
+        // Extend 40pt below bounds to cover the gap above the keyboard corners
+        let overflow: CGFloat = 40.0
+        let extFrame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height + overflow)
+        dim.frame = extFrame
+        dim.clipsToBounds = false
         let fadeHeight: CGFloat = min(48.0, bounds.height * 0.4)
         dim.update(
             content: theme.edgeEffectTintColor ?? theme.tabBarBackgroundColor,
             blur: true,
             alpha: theme.edgeEffectAlpha,
-            rect: CGRect(origin: .zero, size: bounds.size),
+            rect: CGRect(origin: .zero, size: extFrame.size),
             edge: .bottom,
             edgeSize: fadeHeight,
             blurRadiusAtEdge: theme.edgeEffectBlurRadius,
