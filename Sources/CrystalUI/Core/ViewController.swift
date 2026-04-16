@@ -142,11 +142,11 @@ public enum TabBarItemContextActionType {
     /// Set to `nil` to remove the search pill from the nav bar.
     public var crystalSearchController: CrystalSearchController? {
         didSet {
-            oldValue?.viewController = nil
+            oldValue?.uninstall()
             if let sc = crystalSearchController {
-                sc.viewController = self
                 sc.searchBar.placeholder = sc.placeholder
                 sc.searchBar.isDark = traitCollection.userInterfaceStyle == .dark
+                sc.install(on: self)
                 rebuildNavigationBarContent()
             } else {
                 rebuildNavigationBarContent()
@@ -375,6 +375,15 @@ public enum TabBarItemContextActionType {
         if additionalSafeAreaInsets != updatedInsets {
             transition.animateView {
                 self.additionalSafeAreaInsets = updatedInsets
+            }
+        }
+
+        // Bottom search mode: update pill position on keyboard changes
+        if let sc = crystalSearchController, sc.placement == .bottom {
+            if sc.isActive {
+                sc.layoutBottomSearchActive(in: view, keyboardHeight: layout.inputHeight ?? 0)
+            } else {
+                sc.layoutBottomPill(in: view)
             }
         }
     }
