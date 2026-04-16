@@ -604,24 +604,13 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             // --- Build group items ---
             var groupItems: [GlassControlGroup.Item] = []
 
-            // Left group: prepend back button if applicable.
-            if alignment == .left, let prev = self.previousItem, enableAutomaticBackButton {
-                let backText: String
-                switch prev {
-                case let .item(navItem):
-                    backText = navItem.title ?? presentationData.strings.back
-                case .close:
-                    backText = presentationData.strings.close
-                }
-                let contentView = BackButtonContentView(
-                    icon: NavigationBarTheme.generateBackArrowImage(color: theme.buttonColor),
-                    text: backText,
-                    tintColor: theme.buttonColor
-                )
+            // Left group: prepend back button (icon-only circle) if applicable.
+            if alignment == .left, let _ = self.previousItem, enableAutomaticBackButton {
+                let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+                let backArrow = UIImage(systemName: "chevron.left", withConfiguration: config)!
                 groupItems.append(GlassControlGroup.Item(
                     id: "nav.back" as AnyHashable,
-                    content: .customView(contentView),
-                    contentInsets: UIEdgeInsets(top: 0.0, left: 2.0, bottom: 0.0, right: 6.0),
+                    content: .icon(backArrow),
                     action: { [weak self] in self?.backPressed() }
                 ))
             }

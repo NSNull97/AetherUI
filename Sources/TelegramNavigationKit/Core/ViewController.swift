@@ -324,19 +324,17 @@ public enum TabBarItemContextActionType {
         super.viewDidLoad()
 
         if let bar = navigationBarView {
-            bar.backPressed = { [weak self] in
-                self?.pop(animated: true)
+            // Only set defaults if not already configured by a
+            // NavigationController (wireControllers sets these before
+            // viewDidLoad and they must not be overwritten).
+            if bar.superview == nil {
+                view.addSubview(bar)
             }
-            // Route layout requests from the bar (content-view fade-in/out,
-            // item changes, etc.) back into our own layout pipeline —
-            // otherwise `navigationBarView.requestContainerLayout?` is nil
-            // and the bar never gets re-laid-out after those changes,
-            // which shows up as a half-loaded bar (missing buttons, wrong
-            // frames) for ~one layout pass after a tab switch.
-            bar.requestContainerLayout = { [weak self] transition in
-                self?.requestLayout(transition: transition)
+            if bar.requestContainerLayout == nil {
+                bar.requestContainerLayout = { [weak self] transition in
+                    self?.requestLayout(transition: transition)
+                }
             }
-            view.addSubview(bar)
         }
 
         updateScrollToTopView()
