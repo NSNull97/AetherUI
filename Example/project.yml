@@ -6,7 +6,7 @@ options:
   createIntermediateGroups: true
 
 packages:
-  TelegramNavigationKit:
+  CrystalUI:
     path: ../
 
 targets:
@@ -16,7 +16,7 @@ targets:
     sources:
       - path: Example
     dependencies:
-      - package: TelegramNavigationKit
+      - package: CrystalUI
     info:
       path: Example/Info.plist
       properties:
