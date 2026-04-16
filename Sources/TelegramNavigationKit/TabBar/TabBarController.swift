@@ -239,9 +239,11 @@ open class TelegramTabBarController: ViewController {
         updateCurrentContainerLayout(layout)
 
         // TabBarView is at most 103pt TOTAL (safe area included inside).
-        // On devices without safe area, it's still 103pt.
         let tabBarHeight: CGFloat = TabBarView.defaultHeight // 103, never more
-        let tabBarContentInset = tabBarHidden ? 0.0 : max(0.0, tabBarHeight - layout.safeInsets.bottom)
+        // Use RAW device safe area (not layout.safeInsets which includes
+        // our own additionalSafeAreaInsets — using that causes infinite recursion).
+        let rawSafeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
+        let tabBarContentInset = tabBarHidden ? 0.0 : max(0.0, tabBarHeight - rawSafeBottom)
 
         // Propagate the tab-bar height to embedded children via UIKit's
         // safe area machinery. Anything below us — embedded navigation
