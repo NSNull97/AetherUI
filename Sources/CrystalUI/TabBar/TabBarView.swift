@@ -158,7 +158,7 @@ public final class TabBarView: UIView {
             searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             // Show keyboard simultaneously with the morph animation
-            searchTextField?.becomeFirstResponder()
+            // Don't auto-activate keyboard for tab bar search
             UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
@@ -172,7 +172,7 @@ public final class TabBarView: UIView {
             positionSearchViewsExpanded()
             tabBarGlassContainer.alpha = 0.0
             searchDimView?.alpha = 1.0
-            searchTextField?.becomeFirstResponder()
+            // Don't auto-activate keyboard for tab bar search
         }
     }
 
