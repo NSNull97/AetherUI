@@ -39,8 +39,6 @@
 			</array>
 		</dict>
 	</dict>
-	<key>UIDesignRequiresCompatibility</key>
-	<false/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
