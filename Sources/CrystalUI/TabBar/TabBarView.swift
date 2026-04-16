@@ -158,7 +158,7 @@ public final class TabBarView: UIView {
             searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             // Show keyboard simultaneously with the morph animation
-            // Don't auto-activate keyboard for tab bar search
+            searchTextField?.becomeFirstResponder()
             UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
@@ -172,7 +172,7 @@ public final class TabBarView: UIView {
             positionSearchViewsExpanded()
             tabBarGlassContainer.alpha = 0.0
             searchDimView?.alpha = 1.0
-            // Don't auto-activate keyboard for tab bar search
+            searchTextField?.becomeFirstResponder()
         }
     }
 
@@ -330,8 +330,7 @@ public final class TabBarView: UIView {
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        let safeBottom = safeAreaInsets.bottom
-        let pillY = bounds.height - safeBottom - 25.0 - h
+        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2
         let spacing: CGFloat = 8.0
 
         searchDimView?.frame = bounds
