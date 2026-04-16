@@ -245,14 +245,16 @@ public final class TabBarView: UIView {
 
         separatorView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: UIScreenPixel)
 
-        // Scroll-edge frost anchored to the TOP of the tab bar. The fade
-        // starts at y=0 so scroll content dissolves exactly at the tab bar
-        // boundary — no content bleeds through below the fade zone.
+        // Scroll-edge frost: fade zone starts at the TOP of the tab bar
+        // view and ramps to solid below. The top of the tab bar is the
+        // exact boundary where scroll content should begin dissolving.
         if theme.style == .liquidGlass {
             edgeEffectView.isHidden = false
-            let edgeFrame = CGRect(x: 0.0, y: 0.0, width: bounds.width, height: bounds.height)
+            // Extend slightly above bounds so the fade begins before the
+            // pill area — content dissolves smoothly into the bar.
+            let edgeFrame = CGRect(x: 0.0, y: -8.0, width: bounds.width, height: bounds.height + 8.0)
             edgeEffectView.frame = edgeFrame
-            let fadeHeight: CGFloat = min(48, edgeFrame.height * 0.4)
+            let fadeHeight: CGFloat = min(56.0, edgeFrame.height * 0.45)
             edgeEffectView.update(
                 content: theme.tabBarBackgroundColor,
                 blur: true,
@@ -652,9 +654,9 @@ public final class TabBarView: UIView {
     }
 
     /// Height the controller should reserve for the tab bar above the bottom
-    /// safe area. 60pt pill + 25pt gap from the bottom of the screen.
+    /// safe area. Includes pill (62pt) + bottom gap + top edge-effect zone.
     public class var defaultHeight: CGFloat {
-        return 62 // 60 (pill) + 25 (bottom gap from screen bottom)
+        return 103.0
     }
 }
 
