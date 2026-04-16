@@ -16,7 +16,10 @@ dependencies: [
 ```swift
 import CrystalUI
 
-// 1. Create navigation controllers for each tab
+// 1. Create a CrystalWindow (keyboard-aware, status bar managed)
+let window = CrystalWindow(windowScene: windowScene)
+
+// 2. Create navigation controllers for each tab
 func makeTab(_ root: ViewController, item: UITabBarItem) -> CrystalNavigationController {
     let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
     nav.setViewControllers([root], animated: false)
@@ -30,7 +33,7 @@ let chats = makeTab(ChatListController(), item: UITabBarItem(
     tag: 0
 ))
 
-// 2. Create tab bar controller
+// 3. Create tab bar controller
 let tabs = CrystalTabBarController(
     tabBarTheme: TabBarView.Theme(
         tabBarSelectedIconColor: .systemBlue,
@@ -40,23 +43,26 @@ let tabs = CrystalTabBarController(
 )
 tabs.setControllers([chats, settings], selectedIndex: 0)
 
-// 3. Optional: search button in tab bar
+// 4. Tab bar search button (morph animation)
 tabs.searchShowcase = TabBarView.SearchShowcase(
     icon: UIImage(systemName: "magnifyingglass")!,
-    action: { print("Search") }
+    action: { [weak tabs] in tabs?.activateSearch() }
 )
 
-window.rootViewController = tabs
+// 5. Use CrystalWindow instead of plain UIWindow
+window.contentController = tabs
+window.makeKeyAndVisible()
 ```
 
 ## Architecture
 
 ```
-CrystalTabBarController              // Window root, floating glass tab bar
-  ├── CrystalNavigationController    // Per tab, manages push/pop stack
-  │     ├── RootViewController        // Each controller owns its nav bar
-  │     └── DetailViewController      // Pushed screen with back button
-  └── TabBarView                      // Floating glass pill + search circle
+CrystalWindow                          // UIWindow subclass: keyboard, status bar
+  └── CrystalTabBarController          // Window root, floating glass tab bar
+        ├── CrystalNavigationController // Per tab, manages push/pop stack
+        │     ├── RootViewController    // Each controller owns its nav bar
+        │     └── DetailViewController  // Pushed screen with back button
+        └── TabBarView                  // Floating glass pill + search circle
 ```
 
 Each `ViewController` owns its own `NavigationBarImpl`. Bars slide naturally with their controllers during push/pop — no shared bar, no floating titles.
@@ -284,6 +290,150 @@ override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: 
 .animated(duration: 0.3, curve: .customSpring(damping: 0.8, initialVelocity: 0.5))
 .animated(duration: 0.3, curve: .custom(0.33, 0.52, 0.25, 0.99))  // cubic bezier
 ```
+
+## CrystalWindow
+
+`CrystalWindow` replaces `UIWindow` with keyboard tracking, interactive keyboard dismissal, and layout propagation.
+
+```swift
+let window = CrystalWindow(windowScene: windowScene)
+window.contentController = tabs   // not rootViewController
+window.makeKeyAndVisible()
+```
+
+Features:
+- **Keyboard tracking** via `keyboardWillChangeFrameNotification` — `inputHeight` propagates through the entire controller hierarchy via `ContainerViewLayout`
+- **Interactive keyboard dismiss** — pan gesture drags keyboard down, snaps back or dismisses based on velocity
+- **Status bar management** via internal root controller
+- **Orientation / edge gestures / home indicator** management
+- **Covering view** for app snapshot protection: `window.coveringView = MyCoveringView()`
+- **Debug gesture** — 10 taps in 0.4s triggers `window.debugAction`
+
+## Search
+
+### Nav Bar Search (CrystalSearchController)
+
+Glass search pill in the nav bar with full activation flow:
+
+```swift
+let search = CrystalSearchController()
+search.placeholder = "Search"
+search.delegate = self
+crystalSearchController = search  // on your ViewController
+```
+
+**Activation flow:** pill tap -> title/buttons fade out -> pill slides up -> text field appears inside pill -> glass X button appears -> keyboard shows -> collection animates up
+
+**Deactivation:** X tap -> everything reverses simultaneously (keyboard + UI)
+
+#### Delegate
+
+```swift
+extension MyController: CrystalSearchControllerDelegate {
+    func searchControllerWillActivate(_ controller: CrystalSearchController) { }
+    func searchControllerDidActivate(_ controller: CrystalSearchController) { }
+    func searchController(_ controller: CrystalSearchController, didChangeText text: String) {
+        // filter your data
+    }
+    func searchController(_ controller: CrystalSearchController, didSubmitText text: String) {
+        // perform search
+    }
+    func searchControllerWillDeactivate(_ controller: CrystalSearchController) { }
+    func searchControllerDidDeactivate(_ controller: CrystalSearchController) { }
+}
+```
+
+#### Results Controller
+
+```swift
+search.searchResultsController = MySearchResultsController()
+// MySearchResultsController receives searchTextUpdated(text:) automatically
+```
+
+### Tab Bar Search (Morph Animation)
+
+The tab bar search button morphs into a search capsule:
+
+```swift
+tabs.searchShowcase = TabBarView.SearchShowcase(
+    icon: UIImage(systemName: "magnifyingglass")!,
+    action: { [weak tabs] in tabs?.activateSearch() }
+)
+```
+
+**Opening:** tab bar pill collapses to active-tab circle icon + search button expands into glass capsule with text field. Spring animation with glassmorphism scale effects.
+
+**Closing:** reverse morph with fade + scale-down.
+
+### Stacked Content
+
+Stack search pill + filter chips in the nav bar:
+
+```swift
+let stacked = CrystalStackedBarContent(views: [searchPill, filterBar])
+navigationBarContent = stacked
+```
+
+## CrystalListView
+
+Virtualized list ported from Telegram's `ListView`. Transaction-based API for all modifications.
+
+```swift
+let listView = CrystalListView()
+
+// Insert items
+listView.transaction(
+    insertIndicesAndItems: items.enumerated().map { i, item in
+        CrystalListInsertItem(index: i, item: item)
+    },
+    options: [.animateInsertions]
+)
+
+// Delete + insert in one transaction
+listView.transaction(
+    deleteIndices: [CrystalListDeleteItem(index: 2)],
+    insertIndicesAndItems: [CrystalListInsertItem(index: 5, item: newItem)],
+    options: [.animateInsertions],
+    scrollToItem: CrystalListScrollToItem(index: 5, position: .visible)
+)
+```
+
+### Item Protocol
+
+```swift
+class MyChatItem: CrystalListItem {
+    var approximateHeight: CGFloat { 72.0 }
+
+    func createNode(params: CrystalListItemLayoutParams, ...) -> (CrystalListItemNode, CrystalListItemNodeLayout) {
+        let node = MyChatNode()
+        node.configure(with: data)
+        return (node, CrystalListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72)))
+    }
+
+    func updateNode(_ node: CrystalListItemNode, ...) -> CrystalListItemNodeLayout {
+        (node as? MyChatNode)?.configure(with: newData)
+        return CrystalListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72))
+    }
+}
+```
+
+### Node Lifecycle
+
+```swift
+class MyChatNode: CrystalListItemNode {
+    override func animateInsertion(duration: Double) { /* custom insert animation */ }
+    override func animateRemoval(duration: Double, completion: @escaping () -> Void) { /* ... */ }
+    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) { /* ... */ }
+}
+```
+
+### Features
+
+- **Virtualization** — only visible + preload buffer items in memory
+- **Binary search** for visible range computation
+- **Transaction queue** — serialized batch updates
+- **Scroll-to-item** with `.top`, `.bottom`, `.center`, `.visible` positions
+- **Callbacks** — `displayedItemRangeChanged`, `visibleContentOffsetChanged`, `didEndScrolling`
 
 ## Requirements
 
