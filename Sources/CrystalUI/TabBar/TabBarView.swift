@@ -124,6 +124,163 @@ public final class TabBarView: UIView {
         didSet { rebuildSearchShowcase() }
     }
 
+    // MARK: - Search Mode
+
+    /// When `true`, the tab bar transforms into a search field.
+    public private(set) var isSearchActive: Bool = false
+
+    /// Text entered in the search field while search is active.
+    public var searchText: String { searchTextField?.text ?? "" }
+
+    /// Called when search text changes.
+    public var onSearchTextChanged: ((String) -> Void)?
+
+    /// Called when search is dismissed via the close button.
+    public var onSearchDismissed: (() -> Void)?
+
+    private var searchTextField: UITextField?
+    private var searchCloseButton: GlassBarButtonView?
+    private var searchGlassBackground: GlassBackgroundView?
+
+    /// Expand the search showcase button into a full search field.
+    public func activateSearchMode(animated: Bool) {
+        guard !isSearchActive else { return }
+        isSearchActive = true
+        buildSearchField()
+        layoutSearchMode(animated: animated)
+    }
+
+    /// Collapse the search field back to the normal tab bar.
+    public func deactivateSearchMode(animated: Bool) {
+        guard isSearchActive else { return }
+        isSearchActive = false
+        searchTextField?.resignFirstResponder()
+        teardownSearchField(animated: animated)
+    }
+
+    private func buildSearchField() {
+        let bg = GlassBackgroundView(style: .regular)
+        addSubview(bg)
+        searchGlassBackground = bg
+
+        let tf = UITextField()
+        tf.placeholder = "Search"
+        tf.font = .systemFont(ofSize: 17)
+        tf.textColor = .label
+        tf.tintColor = .systemBlue
+        tf.returnKeyType = .search
+        tf.autocorrectionType = .no
+        tf.autocapitalizationType = .none
+        tf.clearButtonMode = .whileEditing
+        tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
+
+        let iconView = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
+        iconView.tintColor = .secondaryLabel
+        iconView.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        iconView.contentMode = .center
+        tf.leftView = iconView
+        tf.leftViewMode = .always
+
+        addSubview(tf)
+        searchTextField = tf
+
+        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
+        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
+        close.contentTintColor = .label
+        close.action = { [weak self] _ in
+            self?.onSearchDismissed?()
+        }
+        addSubview(close)
+        searchCloseButton = close
+    }
+
+    private func layoutSearchMode(animated: Bool) {
+        let apply = {
+            // Hide tab bar items
+            self.tabBarGlassContainer.alpha = 0.0
+            self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+
+            // Position search field
+            self.layoutSearchFieldFrame()
+        }
+
+        if animated {
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                apply()
+            } completion: { _ in
+                self.searchTextField?.becomeFirstResponder()
+            }
+        } else {
+            apply()
+            searchTextField?.becomeFirstResponder()
+        }
+    }
+
+    private func layoutSearchFieldFrame() {
+        guard let bg = searchGlassBackground, let tf = searchTextField, let close = searchCloseButton else { return }
+
+        let contentHeight: CGFloat = Self.defaultHeight - safeAreaInsets.bottom
+        let hInset: CGFloat = 16.0
+        let closeSize: CGFloat = contentHeight - 16.0
+        let closeX = bounds.width - hInset - closeSize
+        let pillWidth = closeX - hInset - 8.0
+        let pillY: CGFloat = 8.0
+        let pillHeight = contentHeight - 16.0
+
+        let bgFrame = CGRect(x: hInset, y: pillY, width: pillWidth, height: pillHeight)
+        bg.frame = bgFrame
+        bg.update(
+            size: bgFrame.size,
+            cornerRadius: pillHeight / 2.0,
+            isDark: traitCollection.userInterfaceStyle == .dark,
+            tintColor: .init(kind: .panel),
+            isInteractive: false,
+            isVisible: true,
+            transition: .immediate
+        )
+
+        tf.frame = CGRect(x: hInset + 8, y: pillY, width: pillWidth - 16, height: pillHeight)
+
+        let closeFrame = CGRect(x: closeX, y: pillY + (pillHeight - closeSize) / 2, width: closeSize, height: closeSize)
+        close.frame = closeFrame
+    }
+
+    private func teardownSearchField(animated: Bool) {
+        let tf = searchTextField
+        let bg = searchGlassBackground
+        let close = searchCloseButton
+        searchTextField = nil
+        searchGlassBackground = nil
+        searchCloseButton = nil
+
+        let apply = {
+            self.tabBarGlassContainer.alpha = 1.0
+            self.tabBarGlassContainer.transform = .identity
+            tf?.alpha = 0.0
+            bg?.alpha = 0.0
+            close?.alpha = 0.0
+        }
+
+        let cleanup = {
+            tf?.removeFromSuperview()
+            bg?.removeFromSuperview()
+            close?.removeFromSuperview()
+        }
+
+        if animated {
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState], animations: apply) { _ in
+                cleanup()
+            }
+        } else {
+            apply()
+            cleanup()
+        }
+    }
+
+    @objc private func searchTextDidChange() {
+        onSearchTextChanged?(searchTextField?.text ?? "")
+    }
+
     public var items: [CrystalTabBarItem] = [] {
         didSet {
             rebuildItemViews()
@@ -301,6 +458,11 @@ public final class TabBarView: UIView {
 
         layoutGlassBackground()
         layoutItemViews()
+
+        // Reposition search field if active
+        if isSearchActive {
+            layoutSearchFieldFrame()
+        }
     }
 
     /// Effective dark flag — follows the system interface style in addition

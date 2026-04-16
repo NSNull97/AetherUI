@@ -294,14 +294,21 @@ open class CrystalTabBarController: ViewController {
         view.bringSubviewToFront(tabBarView)
     }
 
+    /// Activate search: expands the tab bar search button into a search field.
     public func activateSearch() {
+        tabBarView.activateSearchMode(animated: true)
+        tabBarView.onSearchDismissed = { [weak self] in
+            self?.deactivateSearch()
+        }
         (currentController as? ViewController)?.tabBarActivateSearch()
         if let nav = currentController as? CrystalNavigationController {
             (nav.topController)?.tabBarActivateSearch()
         }
     }
 
+    /// Deactivate search: collapses the search field back to the tab bar.
     public func deactivateSearch() {
+        tabBarView.deactivateSearchMode(animated: true)
         (currentController as? ViewController)?.tabBarDeactivateSearch()
         if let nav = currentController as? CrystalNavigationController {
             (nav.topController)?.tabBarDeactivateSearch()

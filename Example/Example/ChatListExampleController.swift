@@ -13,6 +13,8 @@ struct ChatPreview {
 final class ChatListExampleController: ViewController {
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let filterBar = ChatFilterBarContent()
+    private var navSearchBar: CrystalSearchBarContent?
+    private var stackedContent: CrystalStackedBarContent?
 
     private let chats: [ChatPreview] = [
         ChatPreview(title: "Sister", subtitle: "online", time: "", emoji: "🙋‍♀️", color: .systemRed, badge: nil),
@@ -114,22 +116,16 @@ final class ChatListExampleController: ViewController {
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // Filter chips below the nav bar title.
-        self.navigationBarContent = filterBar
+        // Search pill + filter chips stacked in the nav bar (between title and content)
+        let navSearchBar = CrystalSearchBarContent()
+        navSearchBar.placeholder = "Поиск"
+        navSearchBar.isDark = traitCollection.userInterfaceStyle == .dark
+        navSearchBar.onTap = { [weak self] in self?.activateSearch() }
+        self.navSearchBar = navSearchBar
 
-        // Glass search bar as table header — scrolls with content.
-        let searchBar = CrystalSearchBarContent()
-        searchBar.placeholder = "Поиск"
-        searchBar.isDark = traitCollection.userInterfaceStyle == .dark
-        searchBar.onTap = { [weak self] in self?.activateSearch() }
-        searchBar.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: searchBar.nominalHeight)
-        let _ = searchBar.updateLayout(
-            size: searchBar.frame.size,
-            leftInset: view.safeAreaInsets.left,
-            rightInset: view.safeAreaInsets.right,
-            transition: .immediate
-        )
-        tableView.tableHeaderView = searchBar
+        let stacked = CrystalStackedBarContent(views: [navSearchBar, filterBar])
+        self.stackedContent = stacked
+        self.navigationBarContent = stacked
 
         // Demo helper: auto-scroll so the top scroll-edge fade is visible
         // without manual gesture input.
@@ -184,7 +180,7 @@ final class ChatListExampleController: ViewController {
     private func deactivateSearch() {
         guard activeSearchBar != nil else { return }
         activeSearchBar = nil
-        navigationBarContent = filterBar
+        navigationBarContent = stackedContent
         requestLayout(transition: .animated(duration: 0.3, curve: .spring))
     }
 
