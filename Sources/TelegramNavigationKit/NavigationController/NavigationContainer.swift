@@ -191,8 +191,8 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                 direction: .pop,
                 topView: from.view,
                 bottomView: to.view,
-                topBar: from.navigationBarView,
-                bottomBar: to.navigationBarView,
+                topBar: nil,
+                bottomBar: nil,
                 isInteractive: false
             )
             self.transitionCoordinator = coordinator
@@ -237,8 +237,8 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                 direction: .pop,
                 topView: currentController.view,
                 bottomView: previousController.view,
-                topBar: currentController.navigationBarView,
-                bottomBar: previousController.navigationBarView,
+                topBar: nil,
+                bottomBar: nil,
                 isInteractive: true
             )
             self.transitionCoordinator = coordinator

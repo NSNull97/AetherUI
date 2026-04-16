@@ -251,7 +251,7 @@ public final class TabBarView: UIView {
         // above to the floating pill below.
         if theme.style == .liquidGlass {
             edgeEffectView.isHidden = false
-            let edgeFrame = CGRect(x: 0.0, y: 32.0, width: bounds.width, height: bounds.height - 32)
+            let edgeFrame = CGRect(x: 0.0, y: 56, width: bounds.width, height: bounds.height - 56)
             edgeEffectView.frame = edgeFrame
             let fadeHeight: CGFloat = min(48, edgeFrame.height * 0.4)
             edgeEffectView.update(
@@ -670,7 +670,7 @@ public final class TabBarView: UIView {
     /// Height the controller should reserve for the tab bar above the bottom
     /// safe area. 60pt pill + 25pt gap from the bottom of the screen.
     public class var defaultHeight: CGFloat {
-        return 87.0 // 60 (pill) + 25 (bottom gap from screen bottom)
+        return 62 // 60 (pill) + 25 (bottom gap from screen bottom)
     }
 }
 

@@ -12,6 +12,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
+        window.backgroundColor = .systemBackground
 
         // Native-iOS shape:
         //   TelegramTabBarController  (window root, owns tab bar, no nav bar)
