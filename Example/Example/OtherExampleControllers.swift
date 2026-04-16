@@ -1,5 +1,5 @@
 import UIKit
-import TelegramNavigationKit
+import CrystalUI
 
 final class ContactsExampleController: ViewController {
     init() {

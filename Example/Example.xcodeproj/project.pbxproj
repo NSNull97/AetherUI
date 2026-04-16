@@ -10,13 +10,13 @@
 		38D5EB265EDF1E51D52D192D /* OtherExampleControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4767295FBEA5AC5E7765A8A9 /* OtherExampleControllers.swift */; };
 		41C43241AE1620FC8A0606FF /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A263B39369367A3901B6B7C0 /* AppDelegate.swift */; };
 		67F868D818DE9331D00ED8D4 /* StickerPackModalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */; };
-		85832E9EB068A8B91FE8D8CF /* TelegramNavigationKit in Frameworks */ = {isa = PBXBuildFile; productRef = E03927BE919DF5468D8590F5 /* TelegramNavigationKit */; };
+		85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */ = {isa = PBXBuildFile; productRef = E03927BE919DF5468D8590F5 /* CrystalUI */; };
 		AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67979B086750BD69A85512EA /* SceneDelegate.swift */; };
 		DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		22380EBEFC121A771EF76CA1 /* TelegramNavigationKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TelegramNavigationKit; path = ..; sourceTree = SOURCE_ROOT; };
+		22380EBEFC121A771EF76CA1 /* CrystalUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CrystalUI; path = ..; sourceTree = SOURCE_ROOT; };
 		4767295FBEA5AC5E7765A8A9 /* OtherExampleControllers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherExampleControllers.swift; sourceTree = "<group>"; };
 		67979B086750BD69A85512EA /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A263B39369367A3901B6B7C0 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -31,7 +31,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				85832E9EB068A8B91FE8D8CF /* TelegramNavigationKit in Frameworks */,
+				85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -41,7 +41,7 @@
 		12B9A666C278AB8CB5B6FA33 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				22380EBEFC121A771EF76CA1 /* TelegramNavigationKit */,
+				22380EBEFC121A771EF76CA1 /* CrystalUI */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -92,7 +92,7 @@
 			);
 			name = Example;
 			packageProductDependencies = (
-				E03927BE919DF5468D8590F5 /* TelegramNavigationKit */,
+				E03927BE919DF5468D8590F5 /* CrystalUI */,
 			);
 			productName = Example;
 			productReference = F6FE7BF0248FC2FF22A10D63 /* Example.app */;
@@ -343,9 +343,9 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		E03927BE919DF5468D8590F5 /* TelegramNavigationKit */ = {
+		E03927BE919DF5468D8590F5 /* CrystalUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = TelegramNavigationKit;
+			productName = CrystalUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

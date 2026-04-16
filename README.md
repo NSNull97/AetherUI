@@ -1,24 +1,24 @@
-# TelegramNavigationKit
+# CrystalUI
 
-Pure UIKit navigation framework with Telegram-style glass morphism, liquid transitions, and floating tab bar. iOS 13+.
+Pure UIKit navigation framework with glass morphism, liquid transitions, and floating tab bar. iOS 13+.
 
 ## Install
 
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/nicko170/TelegramNavigationKit.git", from: "1.0.0")
+    .package(url: "https://github.com/nicko170/CrystalUI.git", from: "1.0.0")
 ]
 ```
 
 ## Quick Start
 
 ```swift
-import TelegramNavigationKit
+import CrystalUI
 
 // 1. Create navigation controllers for each tab
-func makeTab(_ root: ViewController, item: UITabBarItem) -> TelegramNavigationController {
-    let nav = TelegramNavigationController(mode: .single, theme: .liquidGlass())
+func makeTab(_ root: ViewController, item: UITabBarItem) -> CrystalNavigationController {
+    let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
     nav.setViewControllers([root], animated: false)
     nav.tabBarItem = item
     return nav
@@ -31,7 +31,7 @@ let chats = makeTab(ChatListController(), item: UITabBarItem(
 ))
 
 // 2. Create tab bar controller
-let tabs = TelegramTabBarController(
+let tabs = CrystalTabBarController(
     tabBarTheme: TabBarView.Theme(
         tabBarSelectedIconColor: .systemBlue,
         tabBarSelectedTextColor: .systemBlue,
@@ -52,8 +52,8 @@ window.rootViewController = tabs
 ## Architecture
 
 ```
-TelegramTabBarController              // Window root, floating glass tab bar
-  ├── TelegramNavigationController    // Per tab, manages push/pop stack
+CrystalTabBarController              // Window root, floating glass tab bar
+  ├── CrystalNavigationController    // Per tab, manages push/pop stack
   │     ├── RootViewController        // Each controller owns its nav bar
   │     └── DetailViewController      // Pushed screen with back button
   └── TabBarView                      // Floating glass pill + search circle

@@ -1,5 +1,5 @@
 import UIKit
-import TelegramNavigationKit
+import CrystalUI
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -15,17 +15,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.backgroundColor = .systemBackground
 
         // Native-iOS shape:
-        //   TelegramTabBarController  (window root, owns tab bar, no nav bar)
-        //     └─ TelegramNavigationController per tab
+        //   CrystalTabBarController  (window root, owns tab bar, no nav bar)
+        //     └─ CrystalNavigationController per tab
         //         └─ root screen (plus any pushed details)
         //
         // Each tab's navigation controller manages its own stack and its
         // own nav bar. Push/pop inside a tab slides the screen + its bar
         // together; the tab bar stays visible.
 
-        func makeTab(_ root: ViewController, tabBarItem: UITabBarItem) -> TelegramNavigationController {
+        func makeTab(_ root: ViewController, tabBarItem: UITabBarItem) -> CrystalNavigationController {
             root.tabBarItem = tabBarItem
-            let nav = TelegramNavigationController(mode: .single, theme: .liquidGlass())
+            let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
             nav.setViewControllers([root], animated: false)
             // Propagate the tab bar item onto the nav controller itself —
             // that's the controller the tab bar sees and renders for.
@@ -68,7 +68,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             )
         )
 
-        let tabs = TelegramTabBarController(
+        let tabs = CrystalTabBarController(
             tabBarTheme: TabBarView.Theme(
                 tabBarSelectedIconColor: .systemBlue,
                 tabBarSelectedTextColor: .systemBlue,

@@ -2,20 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "TelegramNavigationKit",
+    name: "CrystalUI",
     platforms: [
         .iOS(.v13)
     ],
     products: [
         .library(
-            name: "TelegramNavigationKit",
-            targets: ["TelegramNavigationKit"]
+            name: "CrystalUI",
+            targets: ["CrystalUI"]
         ),
     ],
     targets: [
         .target(
-            name: "TelegramNavigationKit",
-            path: "Sources/TelegramNavigationKit"
+            name: "CrystalUI",
+            path: "Sources/CrystalUI"
         ),
     ]
 )
