@@ -330,7 +330,8 @@ public final class TabBarView: UIView {
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2
+        let safeBottom = safeAreaInsets.bottom
+        let pillY = bounds.height - safeBottom - 25.0 - h
         let spacing: CGFloat = 8.0
 
         searchDimView?.frame = bounds
