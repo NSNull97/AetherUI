@@ -25,6 +25,19 @@ public final class TabBarView: UIView {
         public let style: Style
         public let outerInsets: UIEdgeInsets
 
+        // Liquid Glass layout
+        public let pillHeight: CGFloat
+        public let totalHeight: CGFloat
+        public let bottomInset: CGFloat
+        public let sideInset: CGFloat
+        public let innerPadding: CGFloat
+        public let showcaseSpacing: CGFloat
+
+        // Edge effect (scroll-content frost)
+        public let edgeEffectAlpha: CGFloat
+        public let edgeEffectBlurRadius: CGFloat
+        public let edgeEffectTintColor: UIColor?
+
         public init(
             tabBarBackgroundColor: UIColor = .systemBackground,
             tabBarSeparatorColor: UIColor = .separator,
@@ -38,7 +51,16 @@ public final class TabBarView: UIView {
             enableBlur: Bool = true,
             isDark: Bool = false,
             style: Style = .liquidGlass,
-            outerInsets: UIEdgeInsets = UIEdgeInsets(top: 4.0, left: 25.0, bottom: 4.0, right: 25.0)
+            outerInsets: UIEdgeInsets = UIEdgeInsets(top: 4.0, left: 25.0, bottom: 4.0, right: 25.0),
+            pillHeight: CGFloat = 62.0,
+            totalHeight: CGFloat = 103.0,
+            bottomInset: CGFloat = 25.0,
+            sideInset: CGFloat = 16.0,
+            innerPadding: CGFloat = 2.0,
+            showcaseSpacing: CGFloat = 7.0,
+            edgeEffectAlpha: CGFloat = 0.65,
+            edgeEffectBlurRadius: CGFloat = 3.0,
+            edgeEffectTintColor: UIColor? = nil
         ) {
             self.tabBarBackgroundColor = tabBarBackgroundColor
             self.tabBarSeparatorColor = tabBarSeparatorColor
@@ -53,6 +75,15 @@ public final class TabBarView: UIView {
             self.isDark = isDark
             self.style = style
             self.outerInsets = outerInsets
+            self.pillHeight = pillHeight
+            self.totalHeight = totalHeight
+            self.bottomInset = bottomInset
+            self.sideInset = sideInset
+            self.innerPadding = innerPadding
+            self.showcaseSpacing = showcaseSpacing
+            self.edgeEffectAlpha = edgeEffectAlpha
+            self.edgeEffectBlurRadius = edgeEffectBlurRadius
+            self.edgeEffectTintColor = edgeEffectTintColor
         }
     }
 
@@ -250,19 +281,18 @@ public final class TabBarView: UIView {
         // exact boundary where scroll content should begin dissolving.
         if theme.style == .liquidGlass {
             edgeEffectView.isHidden = false
-            // Covers entire 103pt view. Fade at top, solid at bottom.
             let edgeFrame = CGRect(x: 0.0, y: 0.0, width: bounds.width, height: bounds.height)
             edgeEffectView.frame = edgeFrame
             let fadeHeight: CGFloat = min(48.0, bounds.height * 0.4)
             edgeEffectView.update(
-                content: theme.tabBarBackgroundColor,
+                content: theme.edgeEffectTintColor ?? theme.tabBarBackgroundColor,
                 blur: true,
-                alpha: 0.65,
+                alpha: theme.edgeEffectAlpha,
                 rect: CGRect(origin: .zero, size: edgeFrame.size),
-                edge: .bottom, // solid at BOTTOM (screen bottom), fade at TOP (content boundary)
+                edge: .bottom,
                 edgeSize: fadeHeight,
-                blurRadiusAtEdge: 3.0, // strong blur near the screen bottom
-                blurRadiusAtFade: 3.0, // tapers to almost nothing as it meets the scroll content
+                blurRadiusAtEdge: theme.edgeEffectBlurRadius,
+                blurRadiusAtFade: theme.edgeEffectBlurRadius,
                 transition: .immediate
             )
         } else {
@@ -344,13 +374,11 @@ public final class TabBarView: UIView {
     private func layoutLiquidGlassItems(count: Int) {
         liquidLensView.isHidden = false
 
-        let contentHeight: CGFloat = 62.0
-        let sideInset: CGFloat = 16.0
-        let innerPadding: CGFloat = 2.0
-        let showcaseSpacing: CGFloat = 7.0
-
-        // 25pt from the bottom of the 103pt TabBarView (safe area is inside).
-        let bottomInset: CGFloat = 25.0
+        let contentHeight = theme.pillHeight
+        let sideInset = theme.sideInset
+        let innerPadding = theme.innerPadding
+        let showcaseSpacing = theme.showcaseSpacing
+        let bottomInset = theme.bottomInset
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 

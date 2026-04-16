@@ -1,159 +1,291 @@
 # TelegramNavigationKit
 
-UIKit-only navigation, modal, tab bar, and Liquid Glass primitives ported from Telegram iOS patterns.
+Pure UIKit navigation framework with Telegram-style glass morphism, liquid transitions, and floating tab bar. iOS 13+.
 
 ## Install
 
-Add the package to an iOS target:
-
 ```swift
-.package(path: "/Users/nsnull/Documents/TelegramNavigationKit")
+// Package.swift
+dependencies: [
+    .package(url: "https://github.com/nicko170/TelegramNavigationKit.git", from: "1.0.0")
+]
 ```
 
-Then import it:
+## Quick Start
 
 ```swift
 import TelegramNavigationKit
-```
 
-## Navigation
-
-Create screens by subclassing `ViewController`. Pass `NavigationBarPresentationData` when the screen needs the built-in Telegram-style navigation bar.
-
-```swift
-final class ChatListController: ViewController {
-    init() {
-        let barTheme = NavigationBarTheme.liquidGlass()
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: barTheme))
-        navigationItem.title = "Chats"
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
+// 1. Create navigation controllers for each tab
+func makeTab(_ root: ViewController, item: UITabBarItem) -> TelegramNavigationController {
+    let nav = TelegramNavigationController(mode: .single, theme: .liquidGlass())
+    nav.setViewControllers([root], animated: false)
+    nav.tabBarItem = item
+    return nav
 }
 
-let root = ChatListController()
-let navigation = TelegramNavigationController(
-    mode: .single,
-    theme: .liquidGlass()
-)
-navigation.setViewControllers([root], animated: false)
-window.rootViewController = navigation
-```
+let chats = makeTab(ChatListController(), item: UITabBarItem(
+    title: "Chats",
+    image: UIImage(systemName: "message.fill"),
+    tag: 0
+))
 
-Use stack APIs directly or from inside a `ViewController`:
-
-```swift
-navigation.pushViewController(details, animated: true)
-navigation.popViewController(animated: true)
-
-// Inside ViewController:
-push(details)
-pop()
-```
-
-Use `.automaticMasterDetail` and mark controllers with `navigationPresentation = .master` for regular-width split navigation.
-
-## Tabs
-
-Use `TelegramTabBarController` as a regular `ViewController`. The default tab bar theme is `liquidGlass`, with a floating `LiquidLensView` selection. Use `.legacy` only if you need the old full-width bar.
-
-```swift
+// 2. Create tab bar controller
 let tabs = TelegramTabBarController(
-    navigationBarPresentationData: nil,
     tabBarTheme: TabBarView.Theme(
         tabBarSelectedIconColor: .systemBlue,
         tabBarSelectedTextColor: .systemBlue,
         style: .liquidGlass
     )
 )
-
-chats.tabBarItem = UITabBarItem(title: "Chats", image: chatsIcon, selectedImage: chatsSelectedIcon)
-settings.tabBarItem = UITabBarItem(title: "Settings", image: settingsIcon, selectedImage: settingsSelectedIcon)
-
 tabs.setControllers([chats, settings], selectedIndex: 0)
-navigation.setViewControllers([tabs], animated: false)
+
+// 3. Optional: search button in tab bar
+tabs.searchShowcase = TabBarView.SearchShowcase(
+    icon: UIImage(systemName: "magnifyingglass")!,
+    action: { print("Search") }
+)
+
+window.rootViewController = tabs
 ```
 
-Supported tab interactions:
+## Architecture
 
-```swift
-override func tabBarItemHasDoubleTapAction() -> Bool { true }
-override func tabBarItemPerformDoubleTapAction() {}
-override func tabBarItemContextAction(sourceView: UIView, gesture: UIGestureRecognizer) {}
-override func tabBarItemSwipeAction(direction: TabBarItemSwipeDirection) {}
+```
+TelegramTabBarController              // Window root, floating glass tab bar
+  ├── TelegramNavigationController    // Per tab, manages push/pop stack
+  │     ├── RootViewController        // Each controller owns its nav bar
+  │     └── DetailViewController      // Pushed screen with back button
+  └── TabBarView                      // Floating glass pill + search circle
 ```
 
-## Modals And Overlays
+Each `ViewController` owns its own `NavigationBarImpl`. Bars slide naturally with their controllers during push/pop — no shared bar, no floating titles.
 
-Modal controllers are still part of the navigation stack. Set a presentation mode and push or call `presentModal`.
+## View Controllers
+
+Subclass `ViewController` (not `UIViewController`):
 
 ```swift
-let compose = ComposeController(navigationBarPresentationData: data)
-compose.navigationPresentation = .modal
-navigation.presentModal(compose, animated: true)
-
-navigation.dismissModal(animated: true)
+class MyController: ViewController {
+    init() {
+        super.init(navigationBarPresentationData: nil) // nav bar created automatically
+        navigationItem.title = "My Screen"
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "gear"),
+            style: .plain, target: self, action: #selector(settingsTapped)
+        )
+    }
+}
 ```
 
-Flat full-screen modals:
+### Content View (Filter Bar)
+
+Expandable content below the nav bar title:
 
 ```swift
-controller.navigationPresentation = .flatModal
+let filterBar = ChatFilterBarContent() // subclass NavigationBarContentView
+navigationBarContent = filterBar       // positioned below title automatically
 ```
 
-Non-stack overlays live above root and modal containers:
+Modes: `.expansion` (below title, bar grows) or `.replacement` (replaces title row).
+
+## Navigation
 
 ```swift
-navigation.presentOverlay(toastController, blocksInteractionUntilReady: false, animated: true)
-navigation.dismissOverlay(toastController, animated: true)
+// Push / Pop
+navigationController?.pushViewController(detail, animated: true)
+navigationController?.popViewController(animated: true)
+
+// From ViewController:
+push(detail)
+pop()
+
+// Stack management
+navigationController?.popToRoot(animated: true)
+navigationController?.replaceTopController(newController, animated: true)
 ```
 
-## Minimized Controllers
+### Back Button
 
-Provide your own `MinimizedContainerProtocol` implementation and pass it through `setupContainer`.
+Glass mode: chevron icon inside the left `GlassControlGroup`. Appears automatically when there's a controller below in the stack.
+
+### Interactive Pop
+
+Built-in left-edge swipe (20pt edge). Parallax: bottom view at 30%.
 
 ```swift
-navigation.minimizeViewController(
-    callController,
-    topEdgeOffset: nil,
-    beforeMaximize: { navigation, complete in
-        complete()
-    },
-    setupContainer: { current in
-        current ?? CallMinimizedContainer()
-    },
-    animated: true
+// Customize edge width per controller
+override var interactiveNavivationGestureEdgeWidth: InteractiveTransitionGestureRecognizerEdgeWidth? {
+    return .constant(40.0)  // or .constant(0) to disable
+}
+```
+
+## Modals
+
+```swift
+let modal = MyModalController(
+    navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass())
+)
+presentModal(modal, animated: true)
+dismissModal(animated: true)
+```
+
+Presentation modes: `.modal`, `.flatModal`, `.standaloneModal`.
+
+## Overlays
+
+```swift
+navigation.presentOverlay(toast, animated: true)
+navigation.dismissOverlay(toast, animated: true)
+```
+
+## Customization
+
+### Navigation Bar
+
+```swift
+let barTheme = NavigationBarTheme(
+    buttonColor: .label,
+    primaryTextColor: .label,
+    backgroundColor: .clear,
+    enableBackgroundBlur: true,
+    style: .glass,                    // .legacy | .glass
+    glassStyle: .default,             // .default | .clear
+
+    // Edge effect (scroll-content frost at nav bar boundary)
+    edgeEffectAlpha: 0.65,            // 0 = invisible, 1 = opaque
+    edgeEffectBlurRadius: 3.0,        // blur strength
+    defaultContentHeight: 60.0        // nav bar content area height
+)
+
+// Factory with sensible defaults:
+let barTheme = NavigationBarTheme.liquidGlass()
+
+// Navigation controller theme:
+let navTheme = NavigationControllerTheme(
+    statusBar: .black,                // .black | .white
+    navigationBar: barTheme,
+    emptyAreaColor: .systemBackground
+)
+// or:
+let navTheme = NavigationControllerTheme.liquidGlass()
+```
+
+#### Full NavigationBarTheme Properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `overallDarkAppearance` | `Bool` | `false` | Dark mode flag for glass tint |
+| `buttonColor` | `UIColor` | `.systemBlue` | Bar button tint |
+| `primaryTextColor` | `UIColor` | `.black` | Title text color |
+| `backgroundColor` | `UIColor` | `.white` | Bar background |
+| `enableBackgroundBlur` | `Bool` | `true` | Blur behind bar |
+| `separatorColor` | `UIColor` | `(0,0,0,0.3)` | Bottom separator |
+| `badgeBackgroundColor` | `UIColor` | `.systemRed` | Badge circle color |
+| `edgeEffectColor` | `UIColor?` | `nil` | Edge frost tint |
+| `style` | `NavigationBarStyle` | `.legacy` | `.legacy` or `.glass` |
+| `glassStyle` | `NavigationBarGlassStyle` | `.default` | `.default` or `.clear` |
+| `edgeEffectAlpha` | `CGFloat` | `0.65` | Frost opacity |
+| `edgeEffectBlurRadius` | `CGFloat` | `3.0` | Frost blur strength |
+| `defaultContentHeight` | `CGFloat` | `60.0` | Content area height |
+
+### Tab Bar
+
+```swift
+let tabTheme = TabBarView.Theme(
+    tabBarSelectedIconColor: .systemBlue,
+    tabBarSelectedTextColor: .systemBlue,
+    style: .liquidGlass,
+
+    // Layout
+    pillHeight: 62.0,              // glass pill height
+    totalHeight: 103.0,            // total view height (max, safe area inside)
+    bottomInset: 25.0,             // pill distance from bottom
+    sideInset: 16.0,               // horizontal margin
+    innerPadding: 2.0,             // padding inside pill edges
+    showcaseSpacing: 7.0,          // gap between pill and search circle
+
+    // Edge effect
+    edgeEffectAlpha: 0.65,         // frost opacity
+    edgeEffectBlurRadius: 3.0,     // frost blur strength
+    edgeEffectTintColor: nil       // tint (nil = use tabBarBackgroundColor)
 )
 ```
 
-Use:
+#### Full TabBarView.Theme Properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `tabBarBackgroundColor` | `UIColor` | `.systemBackground` | Background fill |
+| `tabBarIconColor` | `UIColor` | `.label` | Unselected icon |
+| `tabBarSelectedIconColor` | `UIColor` | `.systemBlue` | Selected icon |
+| `tabBarTextColor` | `UIColor` | `.label` | Unselected label |
+| `tabBarSelectedTextColor` | `UIColor` | `.systemBlue` | Selected label |
+| `tabBarBadgeBackgroundColor` | `UIColor` | `.systemRed` | Badge circle |
+| `enableBlur` | `Bool` | `true` | Blur behind tab bar |
+| `style` | `Style` | `.liquidGlass` | `.legacy` or `.liquidGlass` |
+| `pillHeight` | `CGFloat` | `62.0` | Glass pill height |
+| `totalHeight` | `CGFloat` | `103.0` | Total tab bar view height |
+| `bottomInset` | `CGFloat` | `25.0` | Pill bottom margin |
+| `sideInset` | `CGFloat` | `16.0` | Pill horizontal margin |
+| `innerPadding` | `CGFloat` | `2.0` | Content padding inside pill |
+| `showcaseSpacing` | `CGFloat` | `7.0` | Gap: pill ↔ search circle |
+| `edgeEffectAlpha` | `CGFloat` | `0.65` | Scroll-frost opacity |
+| `edgeEffectBlurRadius` | `CGFloat` | `3.0` | Scroll-frost blur |
+| `edgeEffectTintColor` | `UIColor?` | `nil` | Scroll-frost tint |
+
+### Edge Effect
+
+The edge effect creates a scroll-content frost zone where content dissolves as it approaches the nav bar or tab bar:
 
 ```swift
-navigation.maximizeViewController(callController, animated: true) { dismissed in }
-navigation.dismissMinimizedControllers()
+// Stronger frost (more opaque, heavier blur)
+edgeEffectAlpha: 0.85,
+edgeEffectBlurRadius: 6.0
+
+// Subtle frost
+edgeEffectAlpha: 0.3,
+edgeEffectBlurRadius: 1.5
+
+// Disable frost entirely
+edgeEffectAlpha: 0.0
 ```
 
-## Glass Primitives
+### Glass Primitives
 
-Reusable UIKit glass components:
+Reusable glass components:
 
 ```swift
-let glass = GlassBackgroundView(style: .regular)
+let glass = GlassBackgroundView(style: .regular)  // .regular | .clear | .prominent
 let button = GlassBarButtonView(icon: icon, title: nil, state: .glass)
 let controls = GlassControlGroup()
-controls.update(items: [])
 let lens = LiquidLensView(kind: .externalContainer)
 ```
 
-`LiquidLensView` uses the private native `_UILiquidLensView` when present on the OS and falls back to the bundled UIKit blur/mask implementation.
+`GlassControlGroup` supports icon, text, and custom view items. Items morph automatically (0.2s fade) when the set changes.
 
-## Legacy Mode
+## Layout System
 
-Use legacy visual style explicitly:
+### ContainerViewLayout
 
 ```swift
-let legacyBarTheme = NavigationBarTheme(style: .legacy)
-let legacyTabs = TabBarView.Theme(style: .legacy)
+override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+    super.containerLayoutUpdated(layout, transition: transition)
+    // layout.size, layout.safeInsets, layout.additionalInsets, layout.statusBarHeight
+}
 ```
+
+### Transitions
+
+```swift
+.immediate                                              // no animation
+.animated(duration: 0.3, curve: .easeInOut)             // standard
+.animated(duration: 0.5, curve: .spring)                // spring
+.animated(duration: 0.3, curve: .customSpring(damping: 0.8, initialVelocity: 0.5))
+.animated(duration: 0.3, curve: .custom(0.33, 0.52, 0.25, 0.99))  // cubic bezier
+```
+
+## Requirements
+
+- iOS 13.0+
+- Swift 5.9+
