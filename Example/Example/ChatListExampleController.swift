@@ -391,9 +391,11 @@ final class ChatListExampleController: ViewController {
         }
     }
 
-    // MARK: - Search
+    // MARK: - Nav Bar Search
 
-    private var activeSearchBar: CrystalActiveSearchBar?
+    private var isNavSearchActive = false
+    private var navSearchTextField: UITextField?
+    private var navSearchCloseButton: GlassBarButtonView?
 
     override func tabBarActivateSearch() {
         activateNavBarSearch()
@@ -403,29 +405,87 @@ final class ChatListExampleController: ViewController {
         deactivateNavBarSearch()
     }
 
-    /// Nav bar search: only when tab controller is present
     private func activateNavBarSearch() {
-        guard hasTabBar, activeSearchBar == nil else { return }
+        guard hasTabBar, !isNavSearchActive, let searchPill = navSearchBar else { return }
+        isNavSearchActive = true
 
-        let searchBar = CrystalActiveSearchBar()
-        searchBar.placeholder = "Поиск"
-        searchBar.cancelTitle = "Отмена"
-        searchBar.onTextChanged = { text in
-            // TODO: filter chat list
+        // Hide placeholder content, add real text field inside the pill
+        searchPill.subviews.forEach { $0.isHidden = true }
+
+        let tf = UITextField()
+        tf.placeholder = "Поиск"
+        tf.font = .systemFont(ofSize: 17)
+        tf.textColor = .label
+        tf.tintColor = .systemBlue
+        tf.returnKeyType = .search
+        tf.autocorrectionType = .no
+        tf.autocapitalizationType = .none
+        tf.clearButtonMode = .whileEditing
+        let leftIcon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
+        leftIcon.tintColor = .secondaryLabel
+        leftIcon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        leftIcon.contentMode = .center
+        tf.leftView = leftIcon
+        tf.leftViewMode = .always
+        searchPill.addSubview(tf)
+        tf.frame = CGRect(x: 8, y: 0, width: searchPill.bounds.width - 16, height: searchPill.bounds.height)
+        tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        navSearchTextField = tf
+
+        // Swap to search-only content (pill moves up to title area, filters hidden)
+        let searchOnlyContent = CrystalStackedBarContent(views: [searchPill])
+        navigationBarContent = searchOnlyContent
+
+        // Create close button in the nav bar's right area
+        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
+        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
+        close.contentTintColor = .label
+        close.frame = CGRect(x: 0, y: 0, width: 36, height: 36)
+        close.alpha = 0
+        close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        let closeBarItem = UIBarButtonItem(customView: close)
+        close.action = { [weak self] _ in self?.deactivateNavBarSearch() }
+        navSearchCloseButton = close
+        navigationItem.rightBarButtonItem = closeBarItem
+
+        tf.becomeFirstResponder()
+
+        requestLayout(transition: .animated(duration: 0.35, curve: .spring))
+
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
+            close.alpha = 1
+            close.transform = .identity
         }
-        searchBar.onCancel = { [weak self] in
-            self?.deactivateNavBarSearch()
-        }
-        activeSearchBar = searchBar
-        navigationBarContent = searchBar
-        requestLayout(transition: .animated(duration: 0.3, curve: .spring))
     }
 
     private func deactivateNavBarSearch() {
-        guard activeSearchBar != nil else { return }
-        activeSearchBar = nil
-        navigationBarContent = stackedContent
-        requestLayout(transition: .animated(duration: 0.3, curve: .spring))
+        guard isNavSearchActive, let searchPill = navSearchBar else { return }
+        isNavSearchActive = false
+        navSearchTextField?.resignFirstResponder()
+
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.navSearchCloseButton?.alpha = 0
+            self.navSearchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        } completion: { _ in
+            // Remove text field, restore pill subviews
+            self.navSearchTextField?.removeFromSuperview()
+            self.navSearchTextField = nil
+            self.navSearchCloseButton = nil
+            searchPill.subviews.forEach { $0.isHidden = false }
+
+            // Restore original right bar button
+            let addButton = UIBarButtonItem(
+                image: UIImage(systemName: "plus.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                style: .plain,
+                target: self,
+                action: #selector(self.addTapped)
+            )
+            self.navigationItem.rightBarButtonItem = addButton
+
+            // Restore stacked content (search + filters)
+            self.navigationBarContent = self.stackedContent
+            self.requestLayout(transition: .animated(duration: 0.35, curve: .spring))
+        }
     }
 
     @objc private func editTapped() {}
