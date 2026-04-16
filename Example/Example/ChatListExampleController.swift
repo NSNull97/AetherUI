@@ -15,6 +15,9 @@ final class ChatListExampleController: ViewController {
     private let filterBar = ChatFilterBarContent()
     private var navSearchBar: CrystalSearchBarContent?
     private var stackedContent: CrystalStackedBarContent?
+    private var bottomSearchBar: GlassBackgroundView?
+    private var bottomSearchIcon: UIImageView?
+    private var bottomSearchLabel: UILabel?
 
     private let chats: [ChatPreview] = [
         ChatPreview(title: "Sister", subtitle: "online", time: "", emoji: "🙋‍♀️", color: .systemRed, badge: nil),
@@ -127,6 +130,9 @@ final class ChatListExampleController: ViewController {
         self.stackedContent = stacked
         self.navigationBarContent = stacked
 
+        // Floating bottom search bar when there's no tab bar
+        setupBottomSearchBarIfNeeded()
+
         // Demo helper: auto-scroll so the top scroll-edge fade is visible
         // without manual gesture input.
         if ProcessInfo.processInfo.environment["TG_NAV_DEMO_SCROLL"] == "1" {
@@ -146,6 +152,78 @@ final class ChatListExampleController: ViewController {
                 }
             }
         }
+    }
+
+    // MARK: - Bottom Search Bar (no tab bar)
+
+    private var hasTabBar: Bool {
+        return parent is CrystalTabBarController || navigationController?.parent is CrystalTabBarController
+    }
+
+    private func setupBottomSearchBarIfNeeded() {
+        // Defer check until view is in hierarchy
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasTabBar else { return }
+            self.buildBottomSearchBar()
+        }
+    }
+
+    private func buildBottomSearchBar() {
+        let height: CGFloat = 42.0
+        let sideInset: CGFloat = 16.0
+        let bottomInset: CGFloat = 25.0
+
+        let bg = GlassBackgroundView(style: .regular)
+        view.addSubview(bg)
+        bottomSearchBar = bg
+
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: config)?.withRenderingMode(.alwaysTemplate))
+        icon.tintColor = .secondaryLabel
+        icon.contentMode = .center
+        view.addSubview(icon)
+        bottomSearchIcon = icon
+
+        let label = UILabel()
+        label.text = "Поиск"
+        label.font = .systemFont(ofSize: 17)
+        label.textColor = .secondaryLabel
+        view.addSubview(label)
+        bottomSearchLabel = label
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(bottomSearchTapped))
+        bg.isUserInteractionEnabled = true
+        bg.addGestureRecognizer(tap)
+
+        layoutBottomSearchBar()
+    }
+
+    private func layoutBottomSearchBar() {
+        guard let bg = bottomSearchBar else { return }
+        let height: CGFloat = 42.0
+        let sideInset: CGFloat = 16.0
+        let safeBottom = view.safeAreaInsets.bottom
+        let bottomInset: CGFloat = max(25.0, safeBottom + 8.0)
+        let y = view.bounds.height - bottomInset - height
+        let width = view.bounds.width - sideInset * 2
+
+        let frame = CGRect(x: sideInset, y: y, width: width, height: height)
+        bg.frame = frame
+        bg.update(size: frame.size, cornerRadius: height / 2, isDark: traitCollection.userInterfaceStyle == .dark,
+                  tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+
+        let iconSize: CGFloat = 18
+        bottomSearchIcon?.frame = CGRect(x: frame.minX + 14, y: frame.minY + (height - iconSize) / 2, width: iconSize, height: iconSize)
+        bottomSearchLabel?.frame = CGRect(x: frame.minX + 14 + iconSize + 6, y: frame.minY, width: width - 48, height: height)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutBottomSearchBar()
+    }
+
+    @objc private func bottomSearchTapped() {
+        activateSearch()
     }
 
     // MARK: - Search

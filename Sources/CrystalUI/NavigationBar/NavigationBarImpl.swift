@@ -442,22 +442,27 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // Content area
         let statusBarHeight = size.height - contentHeight
         let buttonsAreaY = statusBarHeight + additionalTopHeight
-        let buttonsAreaHeight = contentHeight - additionalTopHeight
-        let buttonsFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsAreaHeight)
-        transition.updateFrame(view: buttonsContainerView, frame: buttonsFrame)
-
-        // Layout buttons
-        layoutButtons(width: size.width, height: buttonsAreaHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
         // Content view
         if let contentView = _contentView {
             switch contentView.mode {
             case .replacement:
+                // Buttons hidden, content replaces title row
+                let buttonsHeight = contentHeight - additionalTopHeight
+                transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+                layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
+
                 let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
                 transition.updateFrame(view: contentView, frame: contentFrame)
                 let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
                 buttonsContainerView.alpha = 0.0
             case .expansion:
+                // Buttons only cover the title row (defaultHeight), NOT the expansion content below.
+                // This ensures taps on the expansion content (search bar, filters) are not blocked.
+                let buttonsHeight = defaultHeight
+                transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+                layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
+
                 let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
                 transition.updateFrame(view: contentView, frame: contentFrame)
                 let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
