@@ -250,13 +250,10 @@ public final class TabBarView: UIView {
         // exact boundary where scroll content should begin dissolving.
         if theme.style == .liquidGlass {
             edgeEffectView.isHidden = false
-            // Extend slightly above bounds so the fade begins before the
-            // pill area — content dissolves smoothly into the bar.
-            // Edge effect covers the 103pt logical area only (not safe area below).
-            let logicalH = TabBarView.defaultHeight
-            let edgeFrame = CGRect(x: 0.0, y: 0.0, width: bounds.width, height: logicalH)
+            // Covers entire 103pt view. Fade at top, solid at bottom.
+            let edgeFrame = CGRect(x: 0.0, y: 0.0, width: bounds.width, height: bounds.height)
             edgeEffectView.frame = edgeFrame
-            let fadeHeight: CGFloat = min(48.0, logicalH * 0.4)
+            let fadeHeight: CGFloat = min(48.0, bounds.height * 0.4)
             edgeEffectView.update(
                 content: theme.tabBarBackgroundColor,
                 blur: true,
@@ -352,9 +349,7 @@ public final class TabBarView: UIView {
         let innerPadding: CGFloat = 2.0
         let showcaseSpacing: CGFloat = 7.0
 
-        // Pill is 25pt from the bottom of the 103pt TabBarView area
-        // (NOT from the screen bottom — safe area is below TabBarView's
-        // logical 103pt region, handled by the extra frame height).
+        // 25pt from the bottom of the 103pt TabBarView (safe area is inside).
         let bottomInset: CGFloat = 25.0
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
@@ -370,10 +365,7 @@ public final class TabBarView: UIView {
 
         let pillX = sideInset
         let showcaseX = bounds.width - sideInset - showcaseSize
-        // Position relative to the 103pt logical area (top of TabBarView),
-        // not the full frame which includes safe area below.
-        let logicalHeight = TabBarView.defaultHeight // 103
-        let pillY = logicalHeight - bottomInset - contentHeight
+        let pillY = bounds.height - bottomInset - contentHeight
 
         // Glass container spans from pill left edge to search right edge.
         let containerWidth = showcaseSize > 0.0 ? (showcaseX + showcaseSize) - pillX : pillWidth
