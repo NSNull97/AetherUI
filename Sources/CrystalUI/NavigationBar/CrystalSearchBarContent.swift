@@ -101,6 +101,17 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
         return size
     }
 
+    // MARK: - Active/Inactive State
+
+    /// Hides icon and label (keeps glass background) when search is active.
+    /// Called by `CrystalSearchController` — not for direct use.
+    public func setSearchActive(_ active: Bool) {
+        iconView.alpha = active ? 0 : 1
+        placeholderLabel.alpha = active ? 0 : 1
+        // Disable tap gesture when text field is active inside
+        gestureRecognizers?.forEach { $0.isEnabled = !active }
+    }
+
     // MARK: - Private
 
     @objc private func tapped() {

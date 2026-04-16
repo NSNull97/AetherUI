@@ -143,7 +143,7 @@ public enum TabBarItemContextActionType {
 
     /// Rebuilds `navigationBarContent` to include the search pill (if search
     /// controller is set) stacked above any existing content.
-    private func rebuildNavigationBarContent() {
+    internal func rebuildNavigationBarContent() {
         guard let sc = crystalSearchController else {
             // No search controller — use raw content
             if navigationBarView != nil, displayNavigationBar {
@@ -163,7 +163,7 @@ public enum TabBarItemContextActionType {
     }
 
     /// The raw content set by the consumer (filters, etc.) — separate from search.
-    private var _rawNavigationBarContent: NavigationBarContentView?
+    internal var _rawNavigationBarContent: NavigationBarContentView?
 
     // MARK: - Navigation Bar
 
