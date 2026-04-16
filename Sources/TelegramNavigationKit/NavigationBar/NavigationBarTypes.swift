@@ -32,6 +32,13 @@ public final class NavigationBarTheme {
     public let style: NavigationBarStyle
     public let glassStyle: NavigationBarGlassStyle
 
+    // Edge effect (scroll-content frost at nav bar boundary)
+    public let edgeEffectAlpha: CGFloat
+    public let edgeEffectBlurRadius: CGFloat
+
+    // Layout
+    public let defaultContentHeight: CGFloat
+
     public init(
         overallDarkAppearance: Bool = false,
         buttonColor: UIColor = .systemBlue,
@@ -48,7 +55,10 @@ public final class NavigationBarTheme {
         accentButtonColor: UIColor = .systemBlue,
         accentForegroundColor: UIColor = .white,
         style: NavigationBarStyle = .legacy,
-        glassStyle: NavigationBarGlassStyle = .default
+        glassStyle: NavigationBarGlassStyle = .default,
+        edgeEffectAlpha: CGFloat = 0.65,
+        edgeEffectBlurRadius: CGFloat = 3.0,
+        defaultContentHeight: CGFloat = 60.0
     ) {
         self.overallDarkAppearance = overallDarkAppearance
         self.buttonColor = buttonColor
@@ -66,6 +76,9 @@ public final class NavigationBarTheme {
         self.accentForegroundColor = accentForegroundColor
         self.style = style
         self.glassStyle = glassStyle
+        self.edgeEffectAlpha = edgeEffectAlpha
+        self.edgeEffectBlurRadius = edgeEffectBlurRadius
+        self.defaultContentHeight = defaultContentHeight
     }
 
     public func withUpdatedBackgroundColor(_ color: UIColor) -> NavigationBarTheme {
