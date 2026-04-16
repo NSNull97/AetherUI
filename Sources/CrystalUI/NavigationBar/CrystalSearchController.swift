@@ -96,11 +96,24 @@ public extension CrystalSearchControllerDelegate {
 /// `CrystalSearchContentController.searchTextUpdated(text:)`.
 public final class CrystalSearchController: NSObject, UITextFieldDelegate {
 
+    /// Search bar placement mode, determined automatically.
+    public enum Placement {
+        /// Search pill in the nav bar (between title and content). Used when
+        /// the view controller is inside a `CrystalTabBarController`.
+        case navBar
+        /// Floating search pill at the bottom of the screen with edge effect.
+        /// Used when there is no tab bar controller in the hierarchy.
+        case bottom
+    }
+
     // MARK: - Public Properties
 
     /// Placeholder text for the search field.
     public var placeholder: String = "Search" {
-        didSet { searchBar.placeholder = placeholder }
+        didSet {
+            searchBar.placeholder = placeholder
+            bottomPillLabel?.text = placeholder
+        }
     }
 
     /// Delegate for search lifecycle and text events.
@@ -121,9 +134,12 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
     /// Size of the glass close button (default 36pt).
     public var closeButtonSize: CGFloat = 36.0
 
+    /// Current placement (determined automatically when installed on a ViewController).
+    public private(set) var placement: Placement = .navBar
+
     // MARK: - Internal Views
 
-    /// The glass search pill shown in the nav bar.
+    /// The glass search pill shown in the nav bar (navBar mode only).
     let searchBar = CrystalSearchBarContent()
 
     // MARK: - Private State
@@ -132,6 +148,13 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
     private var closeButton: GlassBarButtonView?
     weak var viewController: ViewController?
     var savedNavigationBarContent: NavigationBarContentView?
+
+    // Bottom mode views
+    private static let bottomBarHeight: CGFloat = 42.0
+    private var bottomPill: GlassBackgroundView?
+    private var bottomPillIcon: UIImageView?
+    private var bottomPillLabel: UILabel?
+    private var bottomEdgeEffect: EdgeEffectView?
 
     // MARK: - Init
 
@@ -142,29 +165,91 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         }
     }
 
+    // MARK: - Installation
+
+    /// Determines placement and installs bottom pill if needed.
+    /// Called by `ViewController` when this controller is assigned.
+    func install(on vc: ViewController) {
+        viewController = vc
+
+        // Determine placement by walking the responder chain
+        var responder: UIResponder? = vc
+        var hasTabBar = false
+        while let next = responder?.next {
+            if next is CrystalTabBarController { hasTabBar = true; break }
+            responder = next
+        }
+
+        // Defer: view might not be in hierarchy yet
+        DispatchQueue.main.async { [weak self, weak vc] in
+            guard let self, let vc else { return }
+            if !hasTabBar {
+                // Re-check after hierarchy is set up
+                var r: UIResponder? = vc
+                while let next = r?.next {
+                    if next is CrystalTabBarController { hasTabBar = true; break }
+                    r = next
+                }
+            }
+            self.placement = hasTabBar ? .navBar : .bottom
+            if self.placement == .bottom {
+                self.installBottomPill(on: vc)
+            }
+        }
+    }
+
+    /// Remove bottom pill if present.
+    func uninstall() {
+        removeBottomPill()
+        viewController = nil
+    }
+
     // MARK: - Activation
 
-    /// Activate search mode. Can be called programmatically or triggered by
-    /// tapping the search pill.
-    ///
-    /// Does nothing if already active or if the view controller is not set.
+    /// Activate search mode. Behavior depends on `placement`:
+    /// - `.navBar`: pill becomes text field in nav bar, title fades
+    /// - `.bottom`: pill shrinks, close button appears, keyboard lifts pill
     public func activate() {
-        guard !isActive, let vc = viewController, let navBar = vc.navigationBarView else { return }
+        guard !isActive, let vc = viewController else { return }
         isActive = true
         delegate?.searchControllerWillActivate(self)
 
-        // Transition pill: hide icon/label, keep glass, shrink for close button
+        switch placement {
+        case .navBar:
+            activateNavBar(vc: vc)
+        case .bottom:
+            activateBottom(vc: vc)
+        }
+    }
+
+    /// Deactivate search. Keyboard and UI restore simultaneously.
+    public func deactivate() {
+        guard isActive, let vc = viewController else { return }
+        isActive = false
+        delegate?.searchControllerWillDeactivate(self)
+
+        switch placement {
+        case .navBar:
+            deactivateNavBar(vc: vc)
+        case .bottom:
+            deactivateBottom(vc: vc)
+        }
+    }
+
+    // MARK: - Nav Bar Mode
+
+    private func activateNavBar(vc: ViewController) {
+        guard let navBar = vc.navigationBarView else { return }
+
         searchBar.setSearchActive(true)
         searchBar.rightExtraInset = closeButtonSize + 8.0
 
-        // Text field inside the glass pill
         let tf = makeTextField()
         searchBar.pillView.contentView.addSubview(tf)
         tf.frame = searchBar.pillView.bounds.insetBy(dx: 12, dy: 0)
         tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textField = tf
 
-        // Glass close button next to the pill
         let close = makeCloseButton()
         if let parent = searchBar.superview {
             parent.addSubview(close)
@@ -173,35 +258,22 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         }
         closeButton = close
 
-        // Nav bar: title/buttons fade, pill moves up, filters hide
         navBar.setSearchMode(true, animated: true)
-
         tf.becomeFirstResponder()
 
-        // Position close button after layout settles
         DispatchQueue.main.async { [weak self] in
-            self?.layoutCloseButton()
+            self?.layoutNavBarCloseButton()
         }
 
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
             close.alpha = 1
             close.transform = .identity
         } completion: { [weak self] _ in
-            guard let self else { return }
-            self.delegate?.searchControllerDidActivate(self)
+            self?.delegate?.searchControllerDidActivate(self!)
         }
     }
 
-    /// Deactivate search mode. Keyboard dismisses and nav bar restores
-    /// simultaneously (easeInOut 0.3s).
-    ///
-    /// Does nothing if already inactive.
-    public func deactivate() {
-        guard isActive, let vc = viewController else { return }
-        isActive = false
-        delegate?.searchControllerWillDeactivate(self)
-
-        // Everything fires at once: keyboard + UI restoration
+    private func deactivateNavBar(vc: ViewController) {
         textField?.resignFirstResponder()
         textField?.removeFromSuperview()
         textField = nil
@@ -214,18 +286,13 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             self.closeButton?.alpha = 0
             self.closeButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         } completion: { [weak self] _ in
-            guard let self else { return }
-            self.closeButton?.removeFromSuperview()
-            self.closeButton = nil
-            self.delegate?.searchControllerDidDeactivate(self)
+            self?.closeButton?.removeFromSuperview()
+            self?.closeButton = nil
+            self?.delegate?.searchControllerDidDeactivate(self!)
         }
     }
 
-    // MARK: - Layout
-
-    /// Reposition the close button relative to the search pill.
-    /// Called automatically after layout changes.
-    func layoutCloseButton() {
+    private func layoutNavBarCloseButton() {
         guard let close = closeButton else { return }
         let s = closeButtonSize
         let pillFrame = searchBar.frame
@@ -233,6 +300,154 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         let x = parentBounds.width - s - searchBar.horizontalInset
         let y = pillFrame.midY - s / 2
         close.frame = CGRect(x: x, y: y, width: s, height: s)
+    }
+
+    // MARK: - Bottom Mode
+
+    private func installBottomPill(on vc: ViewController) {
+        let h = Self.bottomBarHeight
+
+        let edge = EdgeEffectView()
+        edge.isUserInteractionEnabled = false
+        vc.view.addSubview(edge)
+        bottomEdgeEffect = edge
+
+        let pill = GlassBackgroundView(style: .regular)
+        pill.isUserInteractionEnabled = true
+        pill.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(bottomPillTapped)))
+        vc.view.addSubview(pill)
+        bottomPill = pill
+
+        let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium))?.withRenderingMode(.alwaysTemplate))
+        icon.tintColor = .secondaryLabel
+        icon.contentMode = .center
+        pill.contentView.addSubview(icon)
+        bottomPillIcon = icon
+
+        let label = UILabel()
+        label.text = placeholder
+        label.font = .systemFont(ofSize: 17)
+        label.textColor = .secondaryLabel
+        pill.contentView.addSubview(label)
+        bottomPillLabel = label
+
+        layoutBottomPill(in: vc.view)
+    }
+
+    private func removeBottomPill() {
+        bottomPill?.removeFromSuperview()
+        bottomEdgeEffect?.removeFromSuperview()
+        bottomPill = nil
+        bottomPillIcon = nil
+        bottomPillLabel = nil
+        bottomEdgeEffect = nil
+    }
+
+    private func bottomPillY(in view: UIView) -> CGFloat {
+        let safeBottom = view.safeAreaInsets.bottom
+        return view.bounds.height - max(25.0, safeBottom + 8.0) - Self.bottomBarHeight
+    }
+
+    func layoutBottomPill(in view: UIView) {
+        guard let pill = bottomPill, !isActive else { return }
+        let h = Self.bottomBarHeight
+        let side: CGFloat = 16.0
+        let y = bottomPillY(in: view)
+        let isDark = view.traitCollection.userInterfaceStyle == .dark
+
+        if let edge = bottomEdgeEffect {
+            let edgeH: CGFloat = 48.0
+            let edgeFrame = CGRect(x: 0, y: y - edgeH, width: view.bounds.width, height: edgeH + h + (view.bounds.height - y - h))
+            edge.frame = edgeFrame
+            edge.update(content: .systemBackground, blur: true, alpha: 0.65,
+                        rect: CGRect(origin: .zero, size: edgeFrame.size),
+                        edge: .bottom, edgeSize: edgeH, blurRadiusAtEdge: 3.0, blurRadiusAtFade: 3.0, transition: .immediate)
+        }
+
+        let frame = CGRect(x: side, y: y, width: view.bounds.width - side * 2, height: h)
+        pill.frame = frame
+        pill.update(size: frame.size, cornerRadius: h / 2, isDark: isDark,
+                    tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+        bottomPillIcon?.frame = CGRect(x: 14, y: (h - 18) / 2, width: 18, height: 18)
+        bottomPillLabel?.frame = CGRect(x: 38, y: 0, width: frame.width - 48, height: h)
+    }
+
+    @objc private func bottomPillTapped() {
+        activate()
+    }
+
+    private func activateBottom(vc: ViewController) {
+        guard let pill = bottomPill else { return }
+        let h = Self.bottomBarHeight
+
+        bottomPillIcon?.isHidden = true
+        bottomPillLabel?.isHidden = true
+
+        let tf = makeTextField()
+        pill.contentView.addSubview(tf)
+        tf.frame = CGRect(x: 8, y: 0, width: pill.bounds.width - 16, height: h)
+        textField = tf
+
+        let close = makeCloseButton()
+        vc.view.addSubview(close)
+        let pillFrame = pill.frame
+        close.frame = CGRect(x: pillFrame.maxX, y: pillFrame.minY, width: h, height: h)
+        closeButton = close
+
+        tf.becomeFirstResponder()
+
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
+            self.layoutBottomSearchActive(in: vc.view)
+            close.alpha = 1
+            close.transform = .identity
+        } completion: { [weak self] _ in
+            self?.delegate?.searchControllerDidActivate(self!)
+        }
+    }
+
+    private func deactivateBottom(vc: ViewController) {
+        textField?.resignFirstResponder()
+
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+            self.closeButton?.alpha = 0
+            self.closeButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            self.layoutBottomPill(in: vc.view)
+        } completion: { [weak self] _ in
+            self?.textField?.removeFromSuperview()
+            self?.textField = nil
+            self?.closeButton?.removeFromSuperview()
+            self?.closeButton = nil
+            self?.bottomPillIcon?.isHidden = false
+            self?.bottomPillLabel?.isHidden = false
+            self?.delegate?.searchControllerDidDeactivate(self!)
+        }
+    }
+
+    func layoutBottomSearchActive(in view: UIView, keyboardHeight: CGFloat? = nil) {
+        guard let pill = bottomPill else { return }
+        let h = Self.bottomBarHeight
+        let side: CGFloat = 16.0
+        let isDark = view.traitCollection.userInterfaceStyle == .dark
+        let kbH = keyboardHeight ?? 0
+        let baseY = kbH > 0 ? view.bounds.height - kbH - h - 8 : bottomPillY(in: view)
+        let closeX = view.bounds.width - side - h
+        let pillWidth = closeX - side - 8
+
+        closeButton?.frame = CGRect(x: closeX, y: baseY, width: h, height: h)
+        let pillFrame = CGRect(x: side, y: baseY, width: pillWidth, height: h)
+        pill.frame = pillFrame
+        pill.update(size: pillFrame.size, cornerRadius: h / 2, isDark: isDark,
+                    tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+        textField?.frame = CGRect(x: 8, y: 0, width: pillWidth - 16, height: h)
+
+        if let edge = bottomEdgeEffect {
+            let edgeH: CGFloat = 48.0
+            let edgeFrame = CGRect(x: 0, y: baseY - edgeH, width: view.bounds.width, height: view.bounds.height - baseY + edgeH)
+            edge.frame = edgeFrame
+            edge.update(content: .systemBackground, blur: true, alpha: 0.65,
+                        rect: CGRect(origin: .zero, size: edgeFrame.size),
+                        edge: .bottom, edgeSize: edgeH, blurRadiusAtEdge: 3.0, blurRadiusAtFade: 3.0, transition: .immediate)
+        }
     }
 
     // MARK: - UITextFieldDelegate
