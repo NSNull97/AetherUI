@@ -34,7 +34,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     // MARK: - State
 
-    private var presentationData: NavigationBarPresentationData
+    private(set) var presentationData: NavigationBarPresentationData
     private var validLayout: (size: CGSize, defaultHeight: CGFloat, leftInset: CGFloat, rightInset: CGFloat)?
 
     public var backPressed: () -> Void = {}
@@ -468,6 +468,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     buttonsContainerView.alpha = 1.0
                 }
             }
+            // Buttons always above content view (glass capsules over filter bar).
+            clippingView.bringSubviewToFront(buttonsContainerView)
         } else {
             if !isTransitionActive {
                 buttonsContainerView.alpha = 1.0
@@ -828,54 +830,35 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     // MARK: - Transition
 
-    private var transitionDirection: NavigationTransitionDirection?
     /// `true` while a push/pop transition is in flight.
     private(set) var isTransitionActive: Bool = false
 
-    // Floating titles that track controller slide positions (like stock iOS).
-    private var outgoingFloatingTitle: UIView?
-    private var incomingFloatingTitle: UIView?
-    private var outgoingTitleBaseFrame: CGRect = .zero
-    private var incomingTitleBaseFrame: CGRect = .zero
-    private var savedOutgoingTitleText: String?
-    private var savedOutgoingTitleViewSnapshot: UIView?
-
-    // Content view (filter bar) tracking — slides with controller positions.
-    private var outgoingContentViewRef: NavigationBarContentView?
-    private var outgoingContentBaseFrame: CGRect = .zero
-    private var incomingContentViewRef: NavigationBarContentView?
-    private var incomingContentBaseFrame: CGRect = .zero
-
-    /// Phase 1: save outgoing title text and back-button visibility.
-    /// Call BEFORE updating `item`/`previousItem`.
-    func beginTransitionCrossfade(direction: NavigationTransitionDirection) {
-        endTransitionCrossfade()
-        self.transitionDirection = direction
-        self.isTransitionActive = true
-
-        // Capture outgoing title state before item update changes it.
-        if let tv = titleContentView, !tv.isHidden, tv.alpha > 0.01 {
-            savedOutgoingTitleViewSnapshot = tv.snapshotView(afterScreenUpdates: false)
-        }
-        savedOutgoingTitleText = titleLabel.text
-        outgoingTitleBaseFrame = (titleContentView ?? titleLabel).frame
-
-        // Capture outgoing content view (filter bar) — it stays on the bar
-        // during the transition and slides with the outgoing controller.
-        if let cv = _contentView {
-            outgoingContentViewRef = cv
-            outgoingContentBaseFrame = cv.frame
-        }
+    /// The frame of the title label in the bar's superview coordinate space.
+    /// Used by NavigationController to position floating titles on controller views.
+    var titleFrameInParent: CGRect {
+        let titleView: UIView = titleContentView ?? titleLabel
+        guard let sv = superview else { return titleView.frame }
+        return buttonsContainerView.convert(titleView.frame, to: sv)
     }
 
-    /// Phase 2: item/previousItem are updated. Detect appear/disappear,
-    /// create floating titles, re-layout, set initial animation state.
-    /// - Parameter incomingContentView: the destination controller's content view
-    ///   (e.g. filter bar); added temporarily to slide in with the incoming controller.
-    func commitTransitionCrossfade(incomingContentView: NavigationBarContentView? = nil) {
-        // Re-layout with animated transition so GlassControlGroup morphs
-        // its items (back button ↔ edit button) with a smooth fade.
-        let morphTransition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)
+    /// The frame of the content view in the bar's superview coordinate space.
+    var contentViewFrameInParent: CGRect {
+        guard let cv = _contentView, let sv = superview else { return .zero }
+        return cv.convert(cv.bounds, to: sv)
+    }
+
+    /// Hide title + content view during transition (floating copies on controller
+    /// views take over). Buttons stay visible — GlassControlGroup morphs them.
+    func beginTransition() {
+        isTransitionActive = true
+        titleLabel.alpha = 0.0
+        titleContentView?.alpha = 0.0
+        _contentView?.alpha = 0.0
+    }
+
+    /// Update buttons to the new state with an animated morph
+    /// (GlassControlGroup's item diff handles the fade).
+    func commitTransitionButtons() {
         if let layout = validLayout {
             let h = buttonsContainerView.bounds.height
             layoutButtons(
@@ -884,149 +867,17 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 leftInset: layout.leftInset,
                 rightInset: layout.rightInset,
                 defaultHeight: layout.defaultHeight,
-                transition: morphTransition
+                transition: .animated(duration: 0.3, curve: .easeInOut)
             )
         }
-        incomingTitleBaseFrame = (titleContentView ?? titleLabel).frame
-
-        // --- Create floating titles that track controller positions ---
-
-        // Outgoing floating title (old title text, moves with outgoing controller)
-        if let snap = savedOutgoingTitleViewSnapshot {
-            snap.frame = outgoingTitleBaseFrame
-            buttonsContainerView.addSubview(snap)
-            outgoingFloatingTitle = snap
-        } else if let text = savedOutgoingTitleText, !text.isEmpty {
-            let label = UILabel()
-            label.font = titleLabel.font
-            label.textColor = titleLabel.textColor
-            label.textAlignment = .center
-            label.text = text
-            label.frame = outgoingTitleBaseFrame
-            buttonsContainerView.addSubview(label)
-            outgoingFloatingTitle = label
-        }
-
-        // Incoming floating title (new title text, moves with incoming controller)
-        let newText = titleLabel.text ?? ""
-        if !newText.isEmpty && titleContentView == nil {
-            let label = UILabel()
-            label.font = titleLabel.font
-            label.textColor = titleLabel.textColor
-            label.textAlignment = .center
-            label.text = newText
-            label.frame = incomingTitleBaseFrame
-            buttonsContainerView.addSubview(label)
-            incomingFloatingTitle = label
-        } else if let tv = titleContentView {
-            // Custom title view — use the real view, we'll position it.
-            incomingFloatingTitle = tv
-        }
-
-        // Hide the real title — floating titles take over.
-        titleLabel.alpha = 0.0
-        titleContentView?.alpha = 0.0
-
-        // --- Incoming content view (filter bar) — add temporarily, slides in ---
-        if let incoming = incomingContentView, incoming !== outgoingContentViewRef {
-            incoming.alpha = 1.0
-            incoming.requestContainerLayout = { [weak self] transition in
-                self?.requestContainerLayout?(transition)
-            }
-            // Compute frame using same logic as updateLayout's expansion mode.
-            let statusBarHeight = (validLayout?.size.height ?? 0) - contentHeight(defaultHeight: validLayout?.defaultHeight ?? 60)
-            let buttonsAreaY = statusBarHeight
-            let defaultH = validLayout?.defaultHeight ?? 60
-            let cvFrame = CGRect(
-                x: 0,
-                y: buttonsAreaY + defaultH,
-                width: validLayout?.size.width ?? bounds.width,
-                height: incoming.height
-            )
-            incoming.frame = cvFrame
-            if let leftInset = validLayout?.leftInset, let rightInset = validLayout?.rightInset {
-                let _ = incoming.updateLayout(size: cvFrame.size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
-            }
-            clippingView.addSubview(incoming)
-            incomingContentViewRef = incoming
-            incomingContentBaseFrame = cvFrame
-        }
-
-        savedOutgoingTitleText = nil
-        savedOutgoingTitleViewSnapshot = nil
     }
 
-    /// Drive the transition based on progress (0 = outgoing, 1 = incoming).
-    /// Floating titles track controller X positions; buttons animate glassmorphically.
-    func updateTransitionCrossfade(progress: CGFloat, transition: ContainedViewLayoutTransition) {
-        guard isTransitionActive else { return }
-
-        let p = max(0.0, min(1.0, progress))
-        let w = bounds.width
-        let isPush = transitionDirection == .push
-
-        // ── Floating titles: track controller slide positions ──
-        // Mirror NavigationTransitionCoordinator parallax geometry.
-        let outgoingDx: CGFloat
-        let incomingDx: CGFloat
-        if isPush {
-            // Push: outgoing = bottom view (parallax left 30%), incoming = top view (full slide from right)
-            outgoingDx = -p * w * 0.3
-            incomingDx = (1.0 - p) * w
-        } else {
-            // Pop: outgoing = top view (slides right), incoming = bottom view (parallax from -30%)
-            outgoingDx = p * w
-            incomingDx = (p - 1.0) * w * 0.3
-        }
-
-        if let outgoing = outgoingFloatingTitle {
-            transition.updateFrame(view: outgoing, frame: outgoingTitleBaseFrame.offsetBy(dx: outgoingDx, dy: 0))
-        }
-        if let incoming = incomingFloatingTitle {
-            transition.updateFrame(view: incoming, frame: incomingTitleBaseFrame.offsetBy(dx: incomingDx, dy: 0))
-        }
-
-        // ── Content view (filter bar): track controller positions ──
-        if let cv = outgoingContentViewRef {
-            transition.updateFrame(view: cv, frame: outgoingContentBaseFrame.offsetBy(dx: outgoingDx, dy: 0))
-        }
-        if let cv = incomingContentViewRef {
-            transition.updateFrame(view: cv, frame: incomingContentBaseFrame.offsetBy(dx: incomingDx, dy: 0))
-        }
-
-        // Back button animation is handled by GlassControlGroup's item
-        // diff (fade in/out) — no custom animation needed here.
-    }
-
-    /// Finalize the transition and restore normal rendering.
-    func endTransitionCrossfade() {
-        // Titles
-        outgoingFloatingTitle?.removeFromSuperview()
-        outgoingFloatingTitle = nil
-        if incomingFloatingTitle !== titleContentView {
-            incomingFloatingTitle?.removeFromSuperview()
-        }
-        incomingFloatingTitle = nil
-
-        // Content views — remove the incoming temporary; restore outgoing frame.
-        if let cv = outgoingContentViewRef {
-            cv.frame = outgoingContentBaseFrame
-        }
-        outgoingContentViewRef = nil
-        // The incoming content view was added temporarily; remove it.
-        // syncBarToTopController will re-add it properly via setContentView.
-        incomingContentViewRef?.removeFromSuperview()
-        incomingContentViewRef = nil
-
-        transitionDirection = nil
+    /// Restore title + content view visibility after transition.
+    func endTransition() {
         isTransitionActive = false
-
-        // Title — restore real title visibility.
         titleLabel.alpha = titleContentView != nil ? 0.0 : 1.0
-        titleLabel.transform = .identity
         titleContentView?.alpha = 1.0
-        titleContentView?.transform = .identity
-
+        _contentView?.alpha = 1.0
         rightButtonsGroup?.alpha = 1.0
         leftButtonsGroup?.alpha = 1.0
     }
