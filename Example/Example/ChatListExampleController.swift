@@ -419,9 +419,35 @@ private final class ChatListTitleView: UIView {
 }
 
 final class ChatDetailExampleController: ViewController {
+
+    private let tableView = UITableView(frame: .zero, style: .plain)
+    private let inputBar = ChatInputBar()
+    private var inputBarBottomConstraint: NSLayoutConstraint!
+
+    private struct Message {
+        let text: String
+        let isOutgoing: Bool
+    }
+
+    private let messages: [Message] = [
+        Message(text: "Hey! How's it going?", isOutgoing: false),
+        Message(text: "All good! Just testing CrystalWindow", isOutgoing: true),
+        Message(text: "Nice! Does the keyboard track properly?", isOutgoing: false),
+        Message(text: "Let me check the interactive dismissal...", isOutgoing: true),
+        Message(text: "Try swiping down from above the keyboard!", isOutgoing: false),
+        Message(text: "That's the pan gesture we ported from Telegram", isOutgoing: true),
+        Message(text: "Cool, it should follow your finger and dismiss if you swipe fast enough", isOutgoing: false),
+        Message(text: "Or snap back if you don't drag far enough", isOutgoing: true),
+        Message(text: "Also check that the layout updates smoothly when the keyboard appears and disappears", isOutgoing: false),
+        Message(text: "The inputHeight from ContainerViewLayout should propagate all the way here", isOutgoing: true),
+        Message(text: "From CrystalWindow -> TabBarController -> NavigationController -> this ViewController", isOutgoing: false),
+        Message(text: "Exactly! The whole chain is keyboard-aware now", isOutgoing: true),
+    ]
+
     init(title: String) {
         super.init(navigationBarPresentationData: nil)
         navigationItem.title = title
+        // TODO: CrystalTabBarController doesn't honor hidesBottomBarWhenPushed yet
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -430,14 +456,205 @@ final class ChatDetailExampleController: ViewController {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
 
-        let label = UILabel()
-        label.text = "Chat detail: \(navigationItem.title ?? "")"
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.textColor = .label
-        view.addSubview(label)
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        tableView.separatorStyle = .none
+        // Keyboard dismiss is handled by CrystalWindow's pan gesture;
+        // don't use UIKit's .interactive mode as it conflicts.
+        tableView.keyboardDismissMode = .none
+        tableView.dataSource = self
+        tableView.register(MessageCell.self, forCellReuseIdentifier: "Message")
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 60
+        tableView.contentInsetAdjustmentBehavior = .automatic
+        if #available(iOS 15.0, *) {
+            tableView.sectionHeaderTopPadding = 0
+        }
+        view.addSubview(tableView)
+
+        inputBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(inputBar)
+
+        inputBarBottomConstraint = inputBar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            tableView.topAnchor.constraint(equalTo: view.topAnchor),
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
+
+            inputBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            inputBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            inputBarBottomConstraint,
         ])
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        scrollToBottom(animated: false)
+    }
+
+    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        let keyboardHeight = layout.inputHeight ?? 0
+        let bottomInset: CGFloat
+        if keyboardHeight > 0 {
+            // Keyboard visible: position input bar above the keyboard
+            bottomInset = -keyboardHeight
+        } else {
+            // No keyboard: input bar sits at the bottom (safe area handled by the bar itself)
+            bottomInset = 0
+        }
+
+        inputBarBottomConstraint.constant = bottomInset
+        inputBar.updateBottomPadding(keyboardHeight > 0 ? 0 : view.safeAreaInsets.bottom)
+        transition.animateView { self.view.layoutIfNeeded() }
+    }
+
+    private func scrollToBottom(animated: Bool) {
+        guard !messages.isEmpty else { return }
+        let indexPath = IndexPath(row: messages.count - 1, section: 0)
+        tableView.scrollToRow(at: indexPath, at: .bottom, animated: animated)
+    }
+}
+
+extension ChatDetailExampleController: UITableViewDataSource {
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        messages.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "Message", for: indexPath) as! MessageCell
+        cell.configure(with: messages[indexPath.row].text, isOutgoing: messages[indexPath.row].isOutgoing)
+        return cell
+    }
+}
+
+// MARK: - Chat Input Bar
+
+private final class ChatInputBar: UIView {
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+    private let textField = UITextField()
+    private let sendButton = UIButton(type: .system)
+    private let separator = UIView()
+    private var bottomPadding: CGFloat = 0
+    private var bottomPaddingConstraint: NSLayoutConstraint!
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(blurView)
+
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.backgroundColor = .separator
+        addSubview(separator)
+
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.placeholder = "Сообщение"
+        textField.borderStyle = .none
+        textField.backgroundColor = .secondarySystemBackground
+        textField.layer.cornerRadius = 18
+        textField.layer.cornerCurve = .continuous
+        textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 0))
+        textField.leftViewMode = .always
+        textField.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 0))
+        textField.rightViewMode = .always
+        textField.font = .systemFont(ofSize: 16)
+        addSubview(textField)
+
+        sendButton.translatesAutoresizingMaskIntoConstraints = false
+        sendButton.setImage(UIImage(systemName: "arrow.up.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 28, weight: .semibold)), for: .normal)
+        sendButton.tintColor = .systemBlue
+        addSubview(sendButton)
+
+        bottomPaddingConstraint = textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+
+        NSLayoutConstraint.activate([
+            blurView.topAnchor.constraint(equalTo: topAnchor),
+            blurView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            blurView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            blurView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            separator.topAnchor.constraint(equalTo: topAnchor),
+            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale),
+
+            textField.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            textField.heightAnchor.constraint(equalToConstant: 36),
+            bottomPaddingConstraint,
+
+            sendButton.centerYAnchor.constraint(equalTo: textField.centerYAnchor),
+            sendButton.leadingAnchor.constraint(equalTo: textField.trailingAnchor, constant: 8),
+            sendButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            sendButton.widthAnchor.constraint(equalToConstant: 32),
+            sendButton.heightAnchor.constraint(equalToConstant: 32),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func updateBottomPadding(_ padding: CGFloat) {
+        let constant = -(8 + padding)
+        if bottomPaddingConstraint.constant != constant {
+            bottomPaddingConstraint.constant = constant
+        }
+    }
+}
+
+// MARK: - Message Cell
+
+private final class MessageCell: UITableViewCell {
+    private let bubbleView = UIView()
+    private let messageLabel = UILabel()
+    private var leadingConstraint: NSLayoutConstraint!
+    private var trailingConstraint: NSLayoutConstraint!
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        selectionStyle = .none
+        backgroundColor = .clear
+
+        bubbleView.translatesAutoresizingMaskIntoConstraints = false
+        bubbleView.layer.cornerRadius = 16
+        bubbleView.layer.cornerCurve = .continuous
+        contentView.addSubview(bubbleView)
+
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.numberOfLines = 0
+        messageLabel.font = .systemFont(ofSize: 16)
+        bubbleView.addSubview(messageLabel)
+
+        leadingConstraint = bubbleView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12)
+        trailingConstraint = bubbleView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12)
+
+        NSLayoutConstraint.activate([
+            bubbleView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
+            bubbleView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
+            bubbleView.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor, multiplier: 0.75),
+
+            messageLabel.topAnchor.constraint(equalTo: bubbleView.topAnchor, constant: 8),
+            messageLabel.bottomAnchor.constraint(equalTo: bubbleView.bottomAnchor, constant: -8),
+            messageLabel.leadingAnchor.constraint(equalTo: bubbleView.leadingAnchor, constant: 12),
+            messageLabel.trailingAnchor.constraint(equalTo: bubbleView.trailingAnchor, constant: -12),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(with text: String, isOutgoing: Bool) {
+        messageLabel.text = text
+        if isOutgoing {
+            bubbleView.backgroundColor = UIColor.systemBlue
+            messageLabel.textColor = .white
+            leadingConstraint.isActive = false
+            trailingConstraint.isActive = true
+        } else {
+            bubbleView.backgroundColor = UIColor.secondarySystemBackground
+            messageLabel.textColor = .label
+            trailingConstraint.isActive = false
+            leadingConstraint.isActive = true
+        }
     }
 }

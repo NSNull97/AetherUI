@@ -193,8 +193,8 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             safeInsets: view.safeAreaInsets,
             additionalInsets: .zero,
             statusBarHeight: view.window?.windowScene?.statusBarManager?.statusBarFrame.height,
-            inputHeight: nil,
-            inputHeightIsInteractivellyChanging: false,
+            inputHeight: validLayout?.inputHeight,
+            inputHeightIsInteractivellyChanging: validLayout?.inputHeightIsInteractivellyChanging ?? false,
             inVoiceOver: UIAccessibility.isVoiceOverRunning
         )
         containerLayoutUpdated(layout, transition: transition)

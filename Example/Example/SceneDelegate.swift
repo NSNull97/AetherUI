@@ -11,7 +11,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let window = UIWindow(windowScene: windowScene)
+        let window = CrystalWindow(windowScene: windowScene)
         window.backgroundColor = .systemBackground
 
         // Native-iOS shape:
@@ -81,7 +81,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             action: { print("Search tapped") }
         )
 
-        window.rootViewController = tabs
+        window.contentController = tabs
         window.makeKeyAndVisible()
         self.window = window
 

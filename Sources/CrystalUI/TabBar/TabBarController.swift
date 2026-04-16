@@ -162,8 +162,8 @@ open class CrystalTabBarController: ViewController {
             safeInsets: view.safeAreaInsets,
             additionalInsets: .zero,
             statusBarHeight: view.window?.windowScene?.statusBarManager?.statusBarFrame.height,
-            inputHeight: nil,
-            inputHeightIsInteractivellyChanging: false,
+            inputHeight: currentlyAppliedLayout?.inputHeight,
+            inputHeightIsInteractivellyChanging: currentlyAppliedLayout?.inputHeightIsInteractivellyChanging ?? false,
             inVoiceOver: UIAccessibility.isVoiceOverRunning
         )
         containerLayoutUpdated(layout, transition: transition)
@@ -269,22 +269,24 @@ open class CrystalTabBarController: ViewController {
             // trigger a layout pass there. We still forward an explicit
             // containerLayoutUpdated for non-CrystalNavigation children
             // that rely on our layout object shape.
-            if let tgController = current as? ViewController {
-                let childLayout = ContainerViewLayout(
-                    size: layout.size,
-                    metrics: layout.metrics,
-                    safeInsets: layout.safeInsets,
-                    additionalInsets: UIEdgeInsets(
-                        top: layout.additionalInsets.top,
-                        left: layout.additionalInsets.left,
-                        bottom: layout.additionalInsets.bottom + tabBarContentInset,
-                        right: layout.additionalInsets.right
-                    ),
-                    statusBarHeight: layout.statusBarHeight,
-                    inputHeight: layout.inputHeight,
-                    inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging,
-                    inVoiceOver: layout.inVoiceOver
-                )
+            let childLayout = ContainerViewLayout(
+                size: layout.size,
+                metrics: layout.metrics,
+                safeInsets: layout.safeInsets,
+                additionalInsets: UIEdgeInsets(
+                    top: layout.additionalInsets.top,
+                    left: layout.additionalInsets.left,
+                    bottom: layout.additionalInsets.bottom + tabBarContentInset,
+                    right: layout.additionalInsets.right
+                ),
+                statusBarHeight: layout.statusBarHeight,
+                inputHeight: layout.inputHeight,
+                inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging,
+                inVoiceOver: layout.inVoiceOver
+            )
+            if let navController = current as? CrystalNavigationController {
+                navController.containerLayoutUpdated(childLayout, transition: transition)
+            } else if let tgController = current as? ViewController {
                 tgController.containerLayoutUpdated(childLayout, transition: transition)
             }
         }
