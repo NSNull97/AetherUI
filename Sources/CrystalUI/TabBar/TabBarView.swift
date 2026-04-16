@@ -124,9 +124,9 @@ public final class TabBarView: UIView {
         didSet { rebuildSearchShowcase() }
     }
 
-    // MARK: - Search Mode
+    // MARK: - Search Mode (morph animation)
 
-    /// When `true`, the tab bar transforms into a search field.
+    /// When `true`, the tab bar is morphed into search mode.
     public private(set) var isSearchActive: Bool = false
 
     /// Text entered in the search field while search is active.
@@ -135,40 +135,75 @@ public final class TabBarView: UIView {
     /// Called when search text changes.
     public var onSearchTextChanged: ((String) -> Void)?
 
-    /// Called when search is dismissed via the close button.
+    /// Called when search is dismissed via the active-tab circle.
     public var onSearchDismissed: (() -> Void)?
 
-    private var searchTextField: UITextField?
-    private var searchCloseButton: GlassBarButtonView?
-    private var searchGlassBackground: GlassBackgroundView?
-    private var searchDimView: UIView?
+    // Search mode views
+    private var searchCapsule: GlassBackgroundView?       // expanded glass capsule for text field
+    private var searchTextField: UITextField?               // text field inside capsule
+    private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (close button)
+    private var searchDimView: UIView?                      // opaque bg
 
-    /// Expand the search showcase button into a full search field.
+    /// Morph: pill → active-tab circle, search button → capsule with text field.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
-        buildSearchField()
-        layoutSearchMode(animated: animated)
+        buildSearchViews()
+
+        if animated {
+            // Initial state: capsule starts at search showcase's frame, circle at active tab's frame
+            positionSearchViewsAtOrigin()
+            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                self.positionSearchViewsExpanded()
+                self.tabBarGlassContainer.alpha = 0.0
+                self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchDimView?.alpha = 1.0
+            } completion: { _ in
+                self.searchTextField?.becomeFirstResponder()
+            }
+        } else {
+            positionSearchViewsExpanded()
+            tabBarGlassContainer.alpha = 0.0
+            searchDimView?.alpha = 1.0
+            searchTextField?.becomeFirstResponder()
+        }
     }
 
-    /// Collapse the search field back to the normal tab bar.
+    /// Reverse morph: capsule → search button, circle → pill.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
         searchTextField?.resignFirstResponder()
-        teardownSearchField(animated: animated)
+
+        if animated {
+            UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                self.positionSearchViewsAtOrigin()
+                self.tabBarGlassContainer.alpha = 1.0
+                self.tabBarGlassContainer.transform = .identity
+                self.searchDimView?.alpha = 0.0
+                self.searchTextField?.alpha = 0.0
+            } completion: { _ in
+                self.teardownSearchViews()
+            }
+        } else {
+            tabBarGlassContainer.alpha = 1.0
+            tabBarGlassContainer.transform = .identity
+            teardownSearchViews()
+        }
     }
 
-    private func buildSearchField() {
-        // Opaque background covering entire tab bar when search is active
-        let dimView = UIView()
-        dimView.backgroundColor = .systemBackground
-        insertSubview(dimView, at: 0)
-        searchDimView = dimView
+    // -- Build / teardown
 
-        let bg = GlassBackgroundView(style: .regular)
-        addSubview(bg)
-        searchGlassBackground = bg
+    private func buildSearchViews() {
+        let dim = UIView()
+        dim.backgroundColor = .systemBackground
+        dim.alpha = 0.0
+        insertSubview(dim, at: 0)
+        searchDimView = dim
+
+        let capsule = GlassBackgroundView(style: .regular)
+        addSubview(capsule)
+        searchCapsule = capsule
 
         let tf = UITextField()
         tf.placeholder = "Search"
@@ -179,127 +214,110 @@ public final class TabBarView: UIView {
         tf.autocorrectionType = .no
         tf.autocapitalizationType = .none
         tf.clearButtonMode = .whileEditing
+        tf.alpha = 0.0
         tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
-
-        let iconView = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
-        iconView.tintColor = .secondaryLabel
-        iconView.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
-        iconView.contentMode = .center
-        tf.leftView = iconView
+        let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
+        icon.tintColor = .secondaryLabel
+        icon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        icon.contentMode = .center
+        tf.leftView = icon
         tf.leftViewMode = .always
-
         addSubview(tf)
         searchTextField = tf
 
-        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
-        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
-        close.contentTintColor = .label
-        close.action = { [weak self] _ in
-            self?.onSearchDismissed?()
-        }
-        addSubview(close)
-        searchCloseButton = close
+        // Circle with active tab's icon — acts as close button
+        let activeIcon = activeTabIcon()
+        let circle = GlassBarButtonView(icon: activeIcon, state: .glass)
+        circle.contentTintColor = theme.tabBarSelectedIconColor
+        circle.action = { [weak self] _ in self?.onSearchDismissed?() }
+        addSubview(circle)
+        searchTabCircle = circle
     }
 
-    private func layoutSearchMode(animated: Bool) {
-        // Initial state: search views start invisible at showcase button position
-        searchGlassBackground?.alpha = 0.0
-        searchTextField?.alpha = 0.0
-        searchCloseButton?.alpha = 0.0
-        searchDimView?.alpha = 0.0
-        layoutSearchFieldFrame()
-
-        let apply = {
-            // Hide tab bar items
-            self.tabBarGlassContainer.alpha = 0.0
-            self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
-            // Show search views
-            self.searchGlassBackground?.alpha = 1.0
-            self.searchTextField?.alpha = 1.0
-            self.searchCloseButton?.alpha = 1.0
-            self.searchDimView?.alpha = 1.0
-        }
-
-        if animated {
-            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-                apply()
-            } completion: { _ in
-                self.searchTextField?.becomeFirstResponder()
-            }
-        } else {
-            apply()
-            searchTextField?.becomeFirstResponder()
-        }
+    private func teardownSearchViews() {
+        searchCapsule?.removeFromSuperview()
+        searchTextField?.removeFromSuperview()
+        searchTabCircle?.removeFromSuperview()
+        searchDimView?.removeFromSuperview()
+        searchCapsule = nil
+        searchTextField = nil
+        searchTabCircle = nil
+        searchDimView = nil
     }
 
-    private func layoutSearchFieldFrame() {
-        guard let bg = searchGlassBackground, let tf = searchTextField, let close = searchCloseButton else { return }
+    private func activeTabIcon() -> UIImage? {
+        guard selectedIndex < itemViews.count else { return nil }
+        let item = items[selectedIndex]
+        return item.selectedImage ?? item.image
+    }
 
-        let safeBottom = safeAreaInsets.bottom
-        let contentHeight: CGFloat = Self.defaultHeight - safeBottom
-        let hInset: CGFloat = 16.0
-        let vPad: CGFloat = 10.0
-        let pillHeight = contentHeight - vPad * 2
-        let closeSize = pillHeight
-        let closeX = bounds.width - hInset - closeSize
-        let pillWidth = closeX - hInset - 8.0
-        let pillY = vPad
+    // -- Positioning
 
-        // Opaque background covers whole tab bar
+    /// Reference frames in TabBarView coordinates.
+    private var searchShowcaseFrame: CGRect {
+        guard let showcase = searchShowcaseView else {
+            return CGRect(x: bounds.width - theme.sideInset - theme.pillHeight,
+                          y: bounds.height - theme.bottomInset - theme.pillHeight,
+                          width: theme.pillHeight, height: theme.pillHeight)
+        }
+        return tabBarGlassContainer.convert(showcase.frame, to: self)
+    }
+
+    private var activeTabFrame: CGRect {
+        guard selectedIndex < itemViews.count else { return .zero }
+        let itemFrame = itemViews[selectedIndex].frame
+        return tabBarGlassContainer.convert(itemFrame, to: self)
+    }
+
+    /// Start: capsule at showcase origin, circle at active tab origin.
+    private func positionSearchViewsAtOrigin() {
+        let h = theme.pillHeight
+        let showcaseF = searchShowcaseFrame
+        let tabF = activeTabFrame
+        let circleSize = h
+
         searchDimView?.frame = bounds
 
-        let bgFrame = CGRect(x: hInset, y: pillY, width: pillWidth, height: pillHeight)
-        bg.frame = bgFrame
-        bg.update(
-            size: bgFrame.size,
-            cornerRadius: pillHeight / 2.0,
-            isDark: traitCollection.userInterfaceStyle == .dark,
-            tintColor: .init(kind: .panel),
-            isInteractive: false,
-            isVisible: true,
-            transition: .immediate
-        )
+        // Capsule starts at search showcase's position (small circle)
+        let capsuleFrame = CGRect(x: showcaseF.midX - h / 2, y: showcaseF.minY, width: h, height: h)
+        searchCapsule?.frame = capsuleFrame
+        searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
+                              tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
 
-        tf.frame = CGRect(x: hInset + 8, y: pillY, width: pillWidth - 16, height: pillHeight)
+        // Text field hidden at capsule position
+        searchTextField?.frame = CGRect(x: capsuleFrame.minX + 8, y: capsuleFrame.minY, width: max(0, capsuleFrame.width - 16), height: h)
+        searchTextField?.alpha = 0.0
 
-        let closeFrame = CGRect(x: closeX, y: pillY, width: closeSize, height: closeSize)
-        close.frame = closeFrame
+        // Circle starts at active tab's position
+        let circleFrame = CGRect(x: tabF.midX - circleSize / 2, y: showcaseF.minY, width: circleSize, height: circleSize)
+        searchTabCircle?.frame = circleFrame
     }
 
-    private func teardownSearchField(animated: Bool) {
-        let tf = searchTextField
-        let bg = searchGlassBackground
-        let close = searchCloseButton
-        let dim = searchDimView
-        searchTextField = nil
-        searchGlassBackground = nil
-        searchCloseButton = nil
-        searchDimView = nil
+    /// End: capsule fills most of the width, circle at the left edge.
+    private func positionSearchViewsExpanded() {
+        let h = theme.pillHeight
+        let sideInset = theme.sideInset
+        let pillY = bounds.height - theme.bottomInset - h
+        let circleSize = h
+        let spacing: CGFloat = 8.0
 
-        let apply = {
-            self.tabBarGlassContainer.alpha = 1.0
-            self.tabBarGlassContainer.transform = .identity
-            tf?.alpha = 0.0
-            bg?.alpha = 0.0
-            close?.alpha = 0.0
-            dim?.alpha = 0.0
-        }
+        searchDimView?.frame = bounds
 
-        let cleanup = {
-            tf?.removeFromSuperview()
-            bg?.removeFromSuperview()
-            close?.removeFromSuperview()
-            dim?.removeFromSuperview()
-        }
+        // Circle (active-tab icon) sits at the left
+        let circleFrame = CGRect(x: sideInset, y: pillY, width: circleSize, height: circleSize)
+        searchTabCircle?.frame = circleFrame
 
-        if animated {
-            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState], animations: apply) { _ in
-                cleanup()
-            }
-        } else {
-            apply()
-            cleanup()
-        }
+        // Capsule fills remaining space to the right
+        let capsuleX = circleFrame.maxX + spacing
+        let capsuleWidth = max(0, bounds.width - capsuleX - sideInset)
+        let capsuleFrame = CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
+        searchCapsule?.frame = capsuleFrame
+        searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
+                              tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+
+        // Text field inside capsule
+        searchTextField?.frame = CGRect(x: capsuleX + 8, y: pillY, width: max(0, capsuleWidth - 16), height: h)
+        searchTextField?.alpha = 1.0
     }
 
     @objc private func searchTextDidChange() {
@@ -484,9 +502,8 @@ public final class TabBarView: UIView {
         layoutGlassBackground()
         layoutItemViews()
 
-        // Reposition search field if active
         if isSearchActive {
-            layoutSearchFieldFrame()
+            positionSearchViewsExpanded()
         }
     }
 
