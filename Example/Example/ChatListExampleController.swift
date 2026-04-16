@@ -119,19 +119,10 @@ final class ChatListExampleController: ViewController {
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // Search pill + filter chips stacked in the nav bar (between title and content)
-        let navSearchBar = CrystalSearchBarContent()
-        navSearchBar.placeholder = "Поиск"
-        navSearchBar.isDark = traitCollection.userInterfaceStyle == .dark
-        navSearchBar.onTap = { [weak self] in self?.activateSearch() }
-        self.navSearchBar = navSearchBar
-
-        let stacked = CrystalStackedBarContent(views: [navSearchBar, filterBar])
-        self.stackedContent = stacked
-        self.navigationBarContent = stacked
-
-        // Floating bottom search bar when there's no tab bar
-        setupBottomSearchBarIfNeeded()
+        // Defer content setup until we know if we have a tab controller
+        DispatchQueue.main.async { [weak self] in
+            self?.setupSearchMode()
+        }
 
         // Demo helper: auto-scroll so the top scroll-edge fade is visible
         // without manual gesture input.
@@ -154,26 +145,51 @@ final class ChatListExampleController: ViewController {
         }
     }
 
-    // MARK: - Bottom Search Bar (no tab bar)
+    // MARK: - Search Mode Setup
 
     private var hasTabBar: Bool {
         return parent is CrystalTabBarController || navigationController?.parent is CrystalTabBarController
     }
 
-    private func setupBottomSearchBarIfNeeded() {
-        // Defer check until view is in hierarchy
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.hasTabBar else { return }
-            self.buildBottomSearchBar()
+    private func setupSearchMode() {
+        if hasTabBar {
+            // With tab controller: search pill + filters in nav bar
+            let navSearch = CrystalSearchBarContent()
+            navSearch.placeholder = "Поиск"
+            navSearch.isDark = traitCollection.userInterfaceStyle == .dark
+            navSearch.onTap = { [weak self] in self?.activateNavBarSearch() }
+            self.navSearchBar = navSearch
+            let stacked = CrystalStackedBarContent(views: [navSearch, filterBar])
+            self.stackedContent = stacked
+            self.navigationBarContent = stacked
+        } else {
+            // Without tab controller: only filters in nav bar, search is at the bottom
+            self.navigationBarContent = filterBar
+            buildBottomSearchBar()
         }
     }
 
-    private func buildBottomSearchBar() {
-        let height: CGFloat = 42.0
-        let sideInset: CGFloat = 16.0
-        let bottomInset: CGFloat = 25.0
+    // MARK: - Bottom Search Bar (no tab bar)
 
+    private static let bottomBarHeight: CGFloat = 42.0
+    private var bottomEdgeEffect: EdgeEffectView?
+    private var isBottomSearchActive = false
+
+    // Active-mode subviews
+    private var bottomSearchCapsule: GlassBackgroundView?
+    private var bottomSearchTextField: UITextField?
+    private var bottomSearchCloseButton: GlassBarButtonView?
+
+    private func buildBottomSearchBar() {
+        // Edge effect
+        let edge = EdgeEffectView()
+        edge.isUserInteractionEnabled = false
+        view.addSubview(edge)
+        bottomEdgeEffect = edge
+
+        // Glass pill
         let bg = GlassBackgroundView(style: .regular)
+        bg.isUserInteractionEnabled = true
         view.addSubview(bg)
         bottomSearchBar = bg
 
@@ -181,49 +197,207 @@ final class ChatListExampleController: ViewController {
         let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: config)?.withRenderingMode(.alwaysTemplate))
         icon.tintColor = .secondaryLabel
         icon.contentMode = .center
-        view.addSubview(icon)
+        bg.contentView.addSubview(icon)
         bottomSearchIcon = icon
 
         let label = UILabel()
         label.text = "Поиск"
         label.font = .systemFont(ofSize: 17)
         label.textColor = .secondaryLabel
-        view.addSubview(label)
+        bg.contentView.addSubview(label)
         bottomSearchLabel = label
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(bottomSearchTapped))
-        bg.isUserInteractionEnabled = true
         bg.addGestureRecognizer(tap)
 
-        layoutBottomSearchBar()
+        layoutBottomBar()
     }
 
-    private func layoutBottomSearchBar() {
-        guard let bg = bottomSearchBar else { return }
-        let height: CGFloat = 42.0
-        let sideInset: CGFloat = 16.0
+    private var bottomBarY: CGFloat {
         let safeBottom = view.safeAreaInsets.bottom
-        let bottomInset: CGFloat = max(25.0, safeBottom + 8.0)
-        let y = view.bounds.height - bottomInset - height
-        let width = view.bounds.width - sideInset * 2
+        return view.bounds.height - max(25.0, safeBottom + 8.0) - Self.bottomBarHeight
+    }
 
-        let frame = CGRect(x: sideInset, y: y, width: width, height: height)
+    private func layoutBottomBar() {
+        let h = Self.bottomBarHeight
+        let side: CGFloat = 16.0
+        let y = bottomBarY
+        let isDark = traitCollection.userInterfaceStyle == .dark
+
+        // Edge effect
+        if let edge = bottomEdgeEffect {
+            let edgeH: CGFloat = 48.0
+            let edgeFrame = CGRect(x: 0, y: y - edgeH, width: view.bounds.width, height: edgeH + h + (view.bounds.height - y - h))
+            edge.frame = edgeFrame
+            edge.update(content: .systemBackground, blur: true, alpha: 0.65,
+                        rect: CGRect(origin: .zero, size: edgeFrame.size),
+                        edge: .bottom, edgeSize: edgeH, blurRadiusAtEdge: 3.0, blurRadiusAtFade: 3.0,
+                        transition: .immediate)
+        }
+
+        guard let bg = bottomSearchBar else { return }
+        if isBottomSearchActive { return } // active mode manages its own frames
+
+        let frame = CGRect(x: side, y: y, width: view.bounds.width - side * 2, height: h)
         bg.frame = frame
-        bg.update(size: frame.size, cornerRadius: height / 2, isDark: traitCollection.userInterfaceStyle == .dark,
+        bg.update(size: frame.size, cornerRadius: h / 2, isDark: isDark,
                   tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
 
         let iconSize: CGFloat = 18
-        bottomSearchIcon?.frame = CGRect(x: frame.minX + 14, y: frame.minY + (height - iconSize) / 2, width: iconSize, height: iconSize)
-        bottomSearchLabel?.frame = CGRect(x: frame.minX + 14 + iconSize + 6, y: frame.minY, width: width - 48, height: height)
+        bottomSearchIcon?.frame = CGRect(x: 14, y: (h - iconSize) / 2, width: iconSize, height: iconSize)
+        bottomSearchLabel?.frame = CGRect(x: 14 + iconSize + 6, y: 0, width: frame.width - 48, height: h)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layoutBottomSearchBar()
+        if !hasTabBar {
+            layoutBottomBar()
+            if isBottomSearchActive {
+                layoutBottomSearchActive()
+            }
+        }
+    }
+
+    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        if isBottomSearchActive, let inputH = layout.inputHeight, inputH > 0 {
+            layoutBottomSearchActive(keyboardHeight: inputH)
+        } else if isBottomSearchActive {
+            layoutBottomSearchActive(keyboardHeight: 0)
+        }
     }
 
     @objc private func bottomSearchTapped() {
-        activateSearch()
+        activateBottomSearch()
+    }
+
+    private func activateBottomSearch() {
+        guard !isBottomSearchActive else { return }
+        isBottomSearchActive = true
+
+        let h = Self.bottomBarHeight
+        let side: CGFloat = 16.0
+        let isDark = traitCollection.userInterfaceStyle == .dark
+
+        // Create capsule for text field (expands from the pill)
+        let capsule = GlassBackgroundView(style: .regular)
+        view.addSubview(capsule)
+        bottomSearchCapsule = capsule
+
+        // Text field
+        let tf = UITextField()
+        tf.placeholder = "Поиск"
+        tf.font = .systemFont(ofSize: 17)
+        tf.textColor = .label
+        tf.tintColor = .systemBlue
+        tf.returnKeyType = .search
+        tf.autocorrectionType = .no
+        tf.autocapitalizationType = .none
+        tf.clearButtonMode = .whileEditing
+        let leftIcon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
+        leftIcon.tintColor = .secondaryLabel
+        leftIcon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        leftIcon.contentMode = .center
+        tf.leftView = leftIcon
+        tf.leftViewMode = .always
+        view.addSubview(tf)
+        bottomSearchTextField = tf
+
+        // Close button
+        let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
+        let close = GlassBarButtonView(icon: closeIcon, state: .glass)
+        close.contentTintColor = .label
+        close.action = { [weak self] _ in self?.deactivateBottomSearch() }
+        view.addSubview(close)
+        bottomSearchCloseButton = close
+
+        // Initial positions: same as the pill
+        let pillFrame = bottomSearchBar?.frame ?? .zero
+        capsule.frame = pillFrame
+        capsule.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        capsule.alpha = 0
+        tf.frame = CGRect(x: pillFrame.minX + 8, y: pillFrame.minY, width: pillFrame.width - 16, height: h)
+        tf.alpha = 0
+        close.frame = CGRect(x: pillFrame.maxX - h, y: pillFrame.minY, width: h, height: h)
+        close.alpha = 0
+        close.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+
+        // Show keyboard immediately
+        tf.becomeFirstResponder()
+
+        UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
+            // Fade out original pill
+            self.bottomSearchBar?.alpha = 0
+            self.bottomSearchBar?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+
+            // Expand capsule + close button
+            self.layoutBottomSearchActive()
+            capsule.transform = .identity
+            capsule.alpha = 1
+            tf.alpha = 1
+            close.alpha = 1
+            close.transform = .identity
+        }
+    }
+
+    private func deactivateBottomSearch() {
+        guard isBottomSearchActive else { return }
+        isBottomSearchActive = false
+        bottomSearchTextField?.resignFirstResponder()
+
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.bottomSearchCapsule?.alpha = 0
+            self.bottomSearchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            self.bottomSearchTextField?.alpha = 0
+            self.bottomSearchCloseButton?.alpha = 0
+            self.bottomSearchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+
+            self.bottomSearchBar?.alpha = 1
+            self.bottomSearchBar?.transform = .identity
+        } completion: { _ in
+            self.bottomSearchCapsule?.removeFromSuperview()
+            self.bottomSearchTextField?.removeFromSuperview()
+            self.bottomSearchCloseButton?.removeFromSuperview()
+            self.bottomSearchCapsule = nil
+            self.bottomSearchTextField = nil
+            self.bottomSearchCloseButton = nil
+            self.layoutBottomBar()
+        }
+    }
+
+    private func layoutBottomSearchActive(keyboardHeight: CGFloat? = nil) {
+        let h = Self.bottomBarHeight
+        let side: CGFloat = 16.0
+        let isDark = traitCollection.userInterfaceStyle == .dark
+
+        let kbH = keyboardHeight ?? currentlyAppliedLayout?.inputHeight ?? 0
+        let baseY: CGFloat
+        if kbH > 0 {
+            baseY = view.bounds.height - kbH - h - 8
+        } else {
+            baseY = bottomBarY
+        }
+
+        let closeX = view.bounds.width - side - h
+        let capsuleWidth = closeX - side - 8
+        let capsuleFrame = CGRect(x: side, y: baseY, width: capsuleWidth, height: h)
+
+        bottomSearchCapsule?.frame = capsuleFrame
+        bottomSearchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isDark,
+                                    tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
+        bottomSearchTextField?.frame = CGRect(x: side + 8, y: baseY, width: capsuleWidth - 16, height: h)
+        bottomSearchCloseButton?.frame = CGRect(x: closeX, y: baseY, width: h, height: h)
+
+        // Edge effect follows
+        if let edge = bottomEdgeEffect {
+            let edgeH: CGFloat = 48.0
+            let edgeFrame = CGRect(x: 0, y: baseY - edgeH, width: view.bounds.width, height: view.bounds.height - baseY + edgeH)
+            edge.frame = edgeFrame
+            edge.update(content: .systemBackground, blur: true, alpha: 0.65,
+                        rect: CGRect(origin: .zero, size: edgeFrame.size),
+                        edge: .bottom, edgeSize: edgeH, blurRadiusAtEdge: 3.0, blurRadiusAtFade: 3.0,
+                        transition: .immediate)
+        }
     }
 
     // MARK: - Search
@@ -231,15 +405,16 @@ final class ChatListExampleController: ViewController {
     private var activeSearchBar: CrystalActiveSearchBar?
 
     override func tabBarActivateSearch() {
-        activateSearch()
+        activateNavBarSearch()
     }
 
     override func tabBarDeactivateSearch() {
-        deactivateSearch()
+        deactivateNavBarSearch()
     }
 
-    private func activateSearch() {
-        guard activeSearchBar == nil else { return }
+    /// Nav bar search: only when tab controller is present
+    private func activateNavBarSearch() {
+        guard hasTabBar, activeSearchBar == nil else { return }
 
         let searchBar = CrystalActiveSearchBar()
         searchBar.placeholder = "Поиск"
@@ -248,14 +423,14 @@ final class ChatListExampleController: ViewController {
             // TODO: filter chat list
         }
         searchBar.onCancel = { [weak self] in
-            self?.deactivateSearch()
+            self?.deactivateNavBarSearch()
         }
         activeSearchBar = searchBar
         navigationBarContent = searchBar
         requestLayout(transition: .animated(duration: 0.3, curve: .spring))
     }
 
-    private func deactivateSearch() {
+    private func deactivateNavBarSearch() {
         guard activeSearchBar != nil else { return }
         activeSearchBar = nil
         navigationBarContent = stackedContent

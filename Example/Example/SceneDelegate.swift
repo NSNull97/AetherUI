@@ -82,7 +82,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         )
 
         // Toggle to test bare navigator (no tab bar) for nav-bar search
-        let noTabBar = false // flip to true to test bare navigator
+        let noTabBar = false // flip to true to test bottom search without tab bar
         if noTabBar {
             let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
             nav.setViewControllers([ChatListExampleController()], animated: false)
