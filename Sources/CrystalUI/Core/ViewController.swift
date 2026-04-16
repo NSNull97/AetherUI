@@ -157,12 +157,15 @@ public enum TabBarItemContextActionType {
     /// Rebuilds the nav bar content view to include the search pill
     /// (if `crystalSearchController` is set) stacked above `navigationBarContent`.
     internal func rebuildNavigationBarContent() {
-        guard let sc = crystalSearchController else {
+        guard let sc = crystalSearchController, sc.placement == .navBar else {
+            // No search controller, or bottom mode — just use raw content
             if navigationBarView != nil, displayNavigationBar {
                 navigationBarView?.setContentView(_rawNavigationBarContent, animated: false)
             }
+            navigationBarContentDidChange?()
             return
         }
+        // Nav bar mode: stack search pill above raw content
         var views: [NavigationBarContentView] = [sc.searchBar]
         if let raw = _rawNavigationBarContent {
             views.append(raw)
