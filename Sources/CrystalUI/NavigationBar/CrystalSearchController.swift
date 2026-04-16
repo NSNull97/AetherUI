@@ -194,6 +194,8 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             self.placement = hasTabBar ? .navBar : .bottom
             if self.placement == .bottom {
                 self.installBottomPill(on: vc)
+                // Rebuild nav bar content without search pill
+                vc.rebuildNavigationBarContent()
             }
         }
     }
