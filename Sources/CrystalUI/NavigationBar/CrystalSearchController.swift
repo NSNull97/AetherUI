@@ -65,9 +65,6 @@ public final class CrystalSearchController {
         guard !isActive, let vc = viewController, let navBar = vc.navigationBarView else { return }
         isActive = true
 
-        // Save current state
-        savedNavigationBarContent = vc.navigationBarContent
-
         // Transition pill to active: hide icon/label, keep glass
         searchBar.setSearchActive(true)
 
@@ -93,22 +90,16 @@ public final class CrystalSearchController {
         tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textField = tf
 
-        // Hide filters (only search pill in nav bar)
-        vc._rawNavigationBarContent = nil
-        vc.rebuildNavigationBarContent()
-
-        // Glass close button added directly to the nav bar (not via UIBarButtonItem)
+        // Glass close button added directly to the nav bar
         let closeIcon = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold))
         let close = GlassBarButtonView(icon: closeIcon, state: .glass)
         close.contentTintColor = .label
         let closeSize: CGFloat = 36.0
-        // Position in top-right of nav bar
         let navBarBounds = navBar.bounds
         close.frame = CGRect(
             x: navBarBounds.width - closeSize - 16,
             y: navBarBounds.height - closeSize - 10,
-            width: closeSize,
-            height: closeSize
+            width: closeSize, height: closeSize
         )
         close.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
         close.alpha = 0
@@ -117,12 +108,11 @@ public final class CrystalSearchController {
         navBar.addSubview(close)
         closeButton = close
 
-        // Hide existing right button
-        savedRightBarButtonItem = vc.navigationItem.rightBarButtonItem
-        vc.navigationItem.rightBarButtonItems = []
+        // Activate search mode on the nav bar: title/buttons fade out,
+        // search pill moves up, filters hide, nav bar shrinks
+        navBar.setSearchMode(true, animated: true)
 
         tf.becomeFirstResponder()
-        vc.requestLayout(transition: .animated(duration: 0.35, curve: .spring))
 
         UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
             close.alpha = 1
@@ -157,14 +147,10 @@ public final class CrystalSearchController {
         // Restore pill to inactive
         searchBar.setSearchActive(false)
 
-        // Restore original content and buttons
-        vc.navigationItem.rightBarButtonItem = savedRightBarButtonItem
-        vc._rawNavigationBarContent = savedNavigationBarContent
-        vc.rebuildNavigationBarContent()
-        savedRightBarButtonItem = nil
-        savedNavigationBarContent = nil
+        // Deactivate search mode on nav bar (title/buttons fade back, filters return)
+        vc.navigationBarView?.setSearchMode(false, animated: true)
 
-        vc.requestLayout(transition: .animated(duration: 0.35, curve: .spring))
+        savedNavigationBarContent = nil
     }
 
     @objc private func textDidChange() {

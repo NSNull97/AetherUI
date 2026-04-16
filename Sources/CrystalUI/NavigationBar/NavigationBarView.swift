@@ -31,6 +31,9 @@ public protocol NavigationBarView: UIView {
     func updateBackgroundAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition)
     func updatePresentationData(_ presentationData: NavigationBarPresentationData, transition: ContainedViewLayoutTransition)
 
+    /// Toggles search mode: hides title/buttons via alpha, repositions content view to title area.
+    func setSearchMode(_ active: Bool, animated: Bool)
+
     func updateLayout(size: CGSize, defaultHeight: CGFloat, additionalTopHeight: CGFloat, additionalContentHeight: CGFloat, additionalBackgroundHeight: CGFloat, additionalCutout: CGSize?, leftInset: CGFloat, rightInset: CGFloat, appearsHidden: Bool, isLandscape: Bool, transition: ContainedViewLayoutTransition)
 }
 

@@ -36,6 +36,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     private(set) var presentationData: NavigationBarPresentationData
     private var validLayout: (size: CGSize, defaultHeight: CGFloat, leftInset: CGFloat, rightInset: CGFloat)?
+    private var isSearchModeActive = false
 
     public var backPressed: () -> Void = {}
     public var userInfo: Any?
@@ -195,6 +196,14 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     // MARK: - NavigationBarView Protocol
 
     public func contentHeight(defaultHeight: CGFloat) -> CGFloat {
+        if isSearchModeActive, let contentView = _contentView {
+            // Search mode: only the search pill height, no title row or filters
+            if let stacked = contentView as? CrystalStackedBarContent {
+                // Use only the first child's height (search pill)
+                return stacked.views.first?.nominalHeight ?? contentView.height
+            }
+            return contentView.height
+        }
         if let contentView = _contentView {
             switch contentView.mode {
             case .replacement:
@@ -475,8 +484,47 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             let buttonsHeight = contentHeight - additionalTopHeight
             transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
             layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
-            buttonsContainerView.alpha = 1.0
+            if !isSearchModeActive {
+                buttonsContainerView.alpha = 1.0
+            }
         }
+
+        // In search mode: buttons hidden, first content child (search pill) moves to title area
+        if isSearchModeActive, let contentView = _contentView {
+            buttonsContainerView.alpha = 0.0
+            // If the content is a stacked view, position the first child (search pill)
+            // at the title row area, and hide everything else
+            let searchY = buttonsAreaY
+            let searchFrame = CGRect(x: 0, y: searchY, width: size.width, height: contentView.height)
+            transition.updateFrame(view: contentView, frame: searchFrame)
+            let _ = contentView.updateLayout(size: searchFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+        }
+    }
+
+    // MARK: - Search Mode
+
+    public func setSearchMode(_ active: Bool, animated: Bool) {
+        guard isSearchModeActive != active else { return }
+        isSearchModeActive = active
+
+        if animated {
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.88, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                self.buttonsContainerView.alpha = active ? 0.0 : 1.0
+                self.leftButtonsGroup?.alpha = active ? 0.0 : 1.0
+                self.rightButtonsGroup?.alpha = active ? 0.0 : 1.0
+                if let layout = self.validLayout {
+                    self.updateLayout(size: layout.size, defaultHeight: layout.defaultHeight, additionalTopHeight: 0, additionalContentHeight: 0, additionalBackgroundHeight: 0, leftInset: layout.leftInset, rightInset: layout.rightInset, appearsHidden: false, isLandscape: layout.size.width > layout.size.height, transition: .immediate)
+                }
+            }
+        } else {
+            buttonsContainerView.alpha = active ? 0.0 : 1.0
+            leftButtonsGroup?.alpha = active ? 0.0 : 1.0
+            rightButtonsGroup?.alpha = active ? 0.0 : 1.0
+            if let layout = validLayout {
+                updateLayout(size: layout.size, defaultHeight: layout.defaultHeight, additionalTopHeight: 0, additionalContentHeight: 0, additionalBackgroundHeight: 0, leftInset: layout.leftInset, rightInset: layout.rightInset, appearsHidden: false, isLandscape: layout.size.width > layout.size.height, transition: .immediate)
+            }
+        }
+        requestContainerLayout?(.animated(duration: 0.35, curve: .spring))
     }
 
     // MARK: - Private
