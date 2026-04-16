@@ -94,7 +94,7 @@ public final class GlassBarButtonView: UIControl {
         super.layoutSubviews()
 
         glassBackground.frame = bounds
-        glassBackground.update(size: bounds.size, cornerRadius: bounds.height / 2.0, transition: .immediate)
+        glassBackground.update(size: bounds.size, cornerRadius: bounds.height / 2.0, isDark: traitCollection.userInterfaceStyle == .dark, tintColor: .init(kind: .panel), isInteractive: displayState == .glass || displayState == .tintedGlass, isVisible: true, transition: .immediate)
         contentContainer.frame = bounds
 
         if let iconView = iconView, titleLabel == nil {
