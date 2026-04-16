@@ -471,6 +471,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             // Buttons always above content view (glass capsules over filter bar).
             clippingView.bringSubviewToFront(buttonsContainerView)
         } else {
+            // No content view — buttons fill the entire content area
+            let buttonsHeight = contentHeight - additionalTopHeight
+            transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+            layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
             buttonsContainerView.alpha = 1.0
         }
     }
