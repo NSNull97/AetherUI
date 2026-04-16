@@ -148,7 +148,15 @@ final class ChatListExampleController: ViewController {
     // MARK: - Search Mode Setup
 
     private var hasTabBar: Bool {
-        return parent is CrystalTabBarController || navigationController?.parent is CrystalTabBarController
+        // Walk the responder chain to find a CrystalTabBarController ancestor.
+        // Can't use `parent` because CrystalNavigationController doesn't use
+        // UIKit child-VC containment for its stack controllers.
+        var responder: UIResponder? = self
+        while let next = responder?.next {
+            if next is CrystalTabBarController { return true }
+            responder = next
+        }
+        return false
     }
 
     private func setupSearchMode() {
