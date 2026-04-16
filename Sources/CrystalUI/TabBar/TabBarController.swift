@@ -162,8 +162,8 @@ open class CrystalTabBarController: ViewController {
             safeInsets: view.safeAreaInsets,
             additionalInsets: .zero,
             statusBarHeight: view.window?.windowScene?.statusBarManager?.statusBarFrame.height,
-            inputHeight: nil,
-            inputHeightIsInteractivellyChanging: false,
+            inputHeight: currentlyAppliedLayout?.inputHeight,
+            inputHeightIsInteractivellyChanging: currentlyAppliedLayout?.inputHeightIsInteractivellyChanging ?? false,
             inVoiceOver: UIAccessibility.isVoiceOverRunning
         )
         containerLayoutUpdated(layout, transition: transition)
@@ -255,7 +255,9 @@ open class CrystalTabBarController: ViewController {
             additionalSafeAreaInsets = desiredChildInsets
         }
 
-        let tabBarY: CGFloat = tabBarHidden ? layout.size.height : (layout.size.height - tabBarHeight)
+        // When tab bar search is active AND keyboard is visible, lift the tab bar above the keyboard
+        let keyboardLift: CGFloat = tabBarView.isSearchActive ? (layout.inputHeight ?? 0) : 0
+        let tabBarY: CGFloat = tabBarHidden ? layout.size.height : (layout.size.height - tabBarHeight - keyboardLift)
         let tabBarFrame = CGRect(x: 0, y: tabBarY, width: layout.size.width, height: tabBarHeight)
         transition.updateFrame(view: tabBarView, frame: tabBarFrame)
         tabBarView.layoutSubviews()
@@ -269,22 +271,24 @@ open class CrystalTabBarController: ViewController {
             // trigger a layout pass there. We still forward an explicit
             // containerLayoutUpdated for non-CrystalNavigation children
             // that rely on our layout object shape.
-            if let tgController = current as? ViewController {
-                let childLayout = ContainerViewLayout(
-                    size: layout.size,
-                    metrics: layout.metrics,
-                    safeInsets: layout.safeInsets,
-                    additionalInsets: UIEdgeInsets(
-                        top: layout.additionalInsets.top,
-                        left: layout.additionalInsets.left,
-                        bottom: layout.additionalInsets.bottom + tabBarContentInset,
-                        right: layout.additionalInsets.right
-                    ),
-                    statusBarHeight: layout.statusBarHeight,
-                    inputHeight: layout.inputHeight,
-                    inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging,
-                    inVoiceOver: layout.inVoiceOver
-                )
+            let childLayout = ContainerViewLayout(
+                size: layout.size,
+                metrics: layout.metrics,
+                safeInsets: layout.safeInsets,
+                additionalInsets: UIEdgeInsets(
+                    top: layout.additionalInsets.top,
+                    left: layout.additionalInsets.left,
+                    bottom: layout.additionalInsets.bottom + tabBarContentInset,
+                    right: layout.additionalInsets.right
+                ),
+                statusBarHeight: layout.statusBarHeight,
+                inputHeight: layout.inputHeight,
+                inputHeightIsInteractivellyChanging: layout.inputHeightIsInteractivellyChanging,
+                inVoiceOver: layout.inVoiceOver
+            )
+            if let navController = current as? CrystalNavigationController {
+                navController.containerLayoutUpdated(childLayout, transition: transition)
+            } else if let tgController = current as? ViewController {
                 tgController.containerLayoutUpdated(childLayout, transition: transition)
             }
         }
@@ -292,18 +296,18 @@ open class CrystalTabBarController: ViewController {
         view.bringSubviewToFront(tabBarView)
     }
 
+    /// Activate tab bar search: expands the search button into a search field.
+    /// Does NOT affect the navigation bar — that's a separate action.
     public func activateSearch() {
-        (currentController as? ViewController)?.tabBarActivateSearch()
-        if let nav = currentController as? CrystalNavigationController {
-            (nav.topController)?.tabBarActivateSearch()
+        tabBarView.activateSearchMode(animated: true)
+        tabBarView.onSearchDismissed = { [weak self] in
+            self?.deactivateSearch()
         }
     }
 
+    /// Deactivate tab bar search: collapses the search field back to the tab bar.
     public func deactivateSearch() {
-        (currentController as? ViewController)?.tabBarDeactivateSearch()
-        if let nav = currentController as? CrystalNavigationController {
-            (nav.topController)?.tabBarDeactivateSearch()
-        }
+        tabBarView.deactivateSearchMode(animated: true)
     }
 
     // MARK: - Private

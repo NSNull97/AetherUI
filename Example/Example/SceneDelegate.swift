@@ -11,7 +11,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let window = UIWindow(windowScene: windowScene)
+        let window = CrystalWindow(windowScene: windowScene)
         window.backgroundColor = .systemBackground
 
         // Native-iOS shape:
@@ -78,10 +78,18 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         tabs.setControllers([contacts, calls, chats, settings], selectedIndex: 2)
         tabs.searchShowcase = TabBarView.SearchShowcase(
             icon: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))!,
-            action: { print("Search tapped") }
+            action: { [weak tabs] in tabs?.activateSearch() }
         )
 
-        window.rootViewController = tabs
+        // Toggle to test bare navigator (no tab bar) for nav-bar search
+        let noTabBar = false // flip to true to test bottom search without tab bar
+        if noTabBar {
+            let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
+            nav.setViewControllers([ChatListExampleController()], animated: false)
+            window.contentController = nav
+        } else {
+            window.contentController = tabs
+        }
         window.makeKeyAndVisible()
         self.window = window
 
