@@ -90,8 +90,9 @@ public final class CrystalSearchController {
         tf.leftView = leftIcon
         tf.leftViewMode = .always
         tf.addTarget(self, action: #selector(textDidChange), for: .editingChanged)
-        searchBar.addSubview(tf)
-        tf.frame = searchBar.bounds.insetBy(dx: 8, dy: 0)
+        // Add text field inside the glass pill (not the full searchBar container)
+        searchBar.pillView.contentView.addSubview(tf)
+        tf.frame = searchBar.pillView.bounds.insetBy(dx: 12, dy: 0)
         tf.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         textField = tf
 

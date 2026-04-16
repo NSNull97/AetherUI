@@ -38,7 +38,8 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
 
     // MARK: - Subviews
 
-    private let pillView = GlassBackgroundView(style: .regular)
+    /// The glass pill background. Public for positioning text field overlays.
+    public let pillView = GlassBackgroundView(style: .regular)
     private let iconView = UIImageView()
     private let placeholderLabel = UILabel()
 
