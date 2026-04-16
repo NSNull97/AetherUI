@@ -114,10 +114,22 @@ final class ChatListExampleController: ViewController {
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // Install the filter chip bar as a NavigationBarContentView in
-        // `.expansion` mode. The TabBar controller forwards it to the shared
-        // nav bar; `additionalSafeAreaInsets.top` is recomputed to include it.
+        // Filter chips below the nav bar title.
         self.navigationBarContent = filterBar
+
+        // Glass search bar as table header — scrolls with content.
+        let searchBar = CrystalSearchBarContent()
+        searchBar.placeholder = "Поиск"
+        searchBar.isDark = traitCollection.userInterfaceStyle == .dark
+        searchBar.onTap = { print("Search tapped") }
+        searchBar.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: searchBar.nominalHeight)
+        let _ = searchBar.updateLayout(
+            size: searchBar.frame.size,
+            leftInset: view.safeAreaInsets.left,
+            rightInset: view.safeAreaInsets.right,
+            transition: .immediate
+        )
+        tableView.tableHeaderView = searchBar
 
         // Demo helper: auto-scroll so the top scroll-edge fade is visible
         // without manual gesture input.
