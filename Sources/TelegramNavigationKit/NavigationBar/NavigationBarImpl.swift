@@ -449,31 +449,24 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // Layout buttons
         layoutButtons(width: size.width, height: buttonsAreaHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
-        // Content view — during transitions, the content view frame is
-        // controlled by updateTransitionCrossfade (slides with controller).
+        // Content view
         if let contentView = _contentView {
             switch contentView.mode {
             case .replacement:
-                if !isTransitionActive {
-                    let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
-                    transition.updateFrame(view: contentView, frame: contentFrame)
-                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-                    buttonsContainerView.alpha = 0.0
-                }
+                let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
+                transition.updateFrame(view: contentView, frame: contentFrame)
+                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                buttonsContainerView.alpha = 0.0
             case .expansion:
-                if !isTransitionActive {
-                    let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
-                    transition.updateFrame(view: contentView, frame: contentFrame)
-                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-                    buttonsContainerView.alpha = 1.0
-                }
+                let contentFrame = CGRect(x: 0, y: buttonsAreaY + defaultHeight, width: size.width, height: contentView.height)
+                transition.updateFrame(view: contentView, frame: contentFrame)
+                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                buttonsContainerView.alpha = 1.0
             }
             // Buttons always above content view (glass capsules over filter bar).
             clippingView.bringSubviewToFront(buttonsContainerView)
         } else {
-            if !isTransitionActive {
-                buttonsContainerView.alpha = 1.0
-            }
+            buttonsContainerView.alpha = 1.0
         }
     }
 
@@ -828,59 +821,6 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         self.edgeEffectView = edgeEffect
     }
 
-    // MARK: - Transition
-
-    /// `true` while a push/pop transition is in flight.
-    private(set) var isTransitionActive: Bool = false
-
-    /// The frame of the title label in the bar's superview coordinate space.
-    /// Used by NavigationController to position floating titles on controller views.
-    var titleFrameInParent: CGRect {
-        let titleView: UIView = titleContentView ?? titleLabel
-        guard let sv = superview else { return titleView.frame }
-        return buttonsContainerView.convert(titleView.frame, to: sv)
-    }
-
-    /// The frame of the content view in the bar's superview coordinate space.
-    var contentViewFrameInParent: CGRect {
-        guard let cv = _contentView, let sv = superview else { return .zero }
-        return cv.convert(cv.bounds, to: sv)
-    }
-
-    /// Hide title + content view during transition (floating copies on controller
-    /// views take over). Buttons stay visible — GlassControlGroup morphs them.
-    func beginTransition() {
-        isTransitionActive = true
-        titleLabel.alpha = 0.0
-        titleContentView?.alpha = 0.0
-        _contentView?.alpha = 0.0
-    }
-
-    /// Update buttons to the new state with an animated morph
-    /// (GlassControlGroup's item diff handles the fade).
-    func commitTransitionButtons() {
-        if let layout = validLayout {
-            let h = buttonsContainerView.bounds.height
-            layoutButtons(
-                width: layout.size.width,
-                height: h > 0 ? h : layout.defaultHeight,
-                leftInset: layout.leftInset,
-                rightInset: layout.rightInset,
-                defaultHeight: layout.defaultHeight,
-                transition: .animated(duration: 0.3, curve: .easeInOut)
-            )
-        }
-    }
-
-    /// Restore title + content view visibility after transition.
-    func endTransition() {
-        isTransitionActive = false
-        titleLabel.alpha = titleContentView != nil ? 0.0 : 1.0
-        titleContentView?.alpha = 1.0
-        _contentView?.alpha = 1.0
-        rightButtonsGroup?.alpha = 1.0
-        leftButtonsGroup?.alpha = 1.0
-    }
 }
 
 // MARK: - Back Button Content View (for GlassControlGroup)

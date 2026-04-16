@@ -124,7 +124,7 @@ public enum TabBarItemContextActionType {
 
     // MARK: - Navigation Bar
 
-    public private(set) var navigationBarView: NavigationBarView?
+    public var navigationBarView: NavigationBarView?
     public var displayNavigationBar: Bool = true
 
     /// Custom content view installed below the nav bar title row in `.expansion`
