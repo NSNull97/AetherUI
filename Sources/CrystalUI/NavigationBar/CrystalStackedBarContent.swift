@@ -10,10 +10,10 @@ import UIKit
 /// ```
 public final class CrystalStackedBarContent: NavigationBarContentView {
 
-    private var contentViews: [NavigationBarContentView]
+    public private(set) var views: [NavigationBarContentView]
 
     public init(views: [NavigationBarContentView]) {
-        self.contentViews = views
+        self.views = views
         super.init(frame: .zero)
         for v in views {
             addSubview(v)
@@ -25,14 +25,14 @@ public final class CrystalStackedBarContent: NavigationBarContentView {
     override public var mode: NavigationBarContentMode { .expansion }
 
     override public var nominalHeight: CGFloat {
-        contentViews.reduce(0) { $0 + $1.nominalHeight }
+        views.reduce(0) { $0 + $1.nominalHeight }
     }
 
     override public var height: CGFloat { nominalHeight }
 
     override public func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) -> CGSize {
         var y: CGFloat = 0
-        for v in contentViews {
+        for v in views {
             let h = v.nominalHeight
             let frame = CGRect(x: 0, y: y, width: size.width, height: h)
             transition.updateFrame(view: v, frame: frame)
