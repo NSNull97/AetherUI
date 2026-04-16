@@ -1,5 +1,5 @@
 import UIKit
-import TelegramNavigationKit
+import CrystalUI
 
 struct ChatPreview {
     let title: String
@@ -51,7 +51,7 @@ final class ChatListExampleController: ViewController {
     ]
 
     init() {
-        // No per-controller bar: the enclosing TelegramNavigationController
+        // No per-controller bar: the enclosing CrystalNavigationController
         // owns the single shared nav bar.
         super.init(navigationBarPresentationData: nil)
 

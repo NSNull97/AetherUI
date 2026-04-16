@@ -1,8 +1,8 @@
 import UIKit
-import TelegramNavigationKit
+import CrystalUI
 
-/// Telegram-style sticker-pack modal sheet. Demonstrates `presentModal` on
-/// `TelegramNavigationController` plus the Figma reference modal layout:
+/// the originaltyle sticker-pack modal sheet. Demonstrates `presentModal` on
+/// `CrystalNavigationController` plus the Figma reference modal layout:
 /// glass "X" close capsule (left), title capsule (centre), more-actions
 /// capsule (right), scrollable grid content, bottom action pill.
 final class StickerPackModalController: ViewController {
@@ -130,7 +130,7 @@ final class StickerPackModalController: ViewController {
     }
 
     private func dismiss() {
-        guard let nav = self.navigationController as? TelegramNavigationController else { return }
+        guard let nav = self.navigationController as? CrystalNavigationController else { return }
         nav.dismissModal(animated: true)
     }
 }
