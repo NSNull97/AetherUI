@@ -100,9 +100,11 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
 
     private var _viewControllers: [ViewController] = []
 
-    // Bar crossfade state for animated push/pop transitions.
+    // Bar transition state.
     private var barTransitionFromItem: UINavigationItem?
     private var barTransitionFromPreviousItem: NavigationPreviousAction?
+    // Floating titles + content snapshots added to controller views.
+    private var transitionFloatingViews: [UIView] = []
     public var viewControllerStack: [ViewController] {
         _viewControllers
     }
@@ -732,15 +734,59 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         }
     }
 
-    private func handleBarTransitionStarted(from: ViewController, to: ViewController, isPush: Bool) {
-        // Save current bar state for potential cancellation (interactive pop).
+    private func handleBarTransitionStarted(from: ViewController, to: ViewController, isPush: Bool, isInteractive: Bool) {
         barTransitionFromItem = navigationBar.item
         barTransitionFromPreviousItem = navigationBar.previousItem
 
-        // Phase 1: capture outgoing element clones before the bar updates.
-        navigationBar.beginTransitionCrossfade(direction: isPush ? .push : .pop)
+        // --- Floating titles on controller views (correct z-order) ---
+        let titleFrame = navigationBar.titleFrameInParent
+        let contentFrame = navigationBar.contentViewFrameInParent
 
-        // Update bar to the destination controller's state.
+        // Outgoing title → on `from.view` (moves with outgoing controller)
+        let outTitle = UILabel()
+        outTitle.font = .systemFont(ofSize: 17, weight: .semibold)
+        outTitle.textColor = navigationBar.item?.titleView == nil
+            ? (navigationBar.presentationData.theme.primaryTextColor)
+            : .clear
+        outTitle.text = navigationBar.item?.title
+        outTitle.textAlignment = .center
+        outTitle.frame = titleFrame
+        from.view.addSubview(outTitle)
+        transitionFloatingViews.append(outTitle)
+
+        // Incoming title → on `to.view` (moves with incoming controller)
+        let inTitle = UILabel()
+        inTitle.font = outTitle.font
+        inTitle.textColor = outTitle.textColor
+        inTitle.text = to.navigationItem.title
+        inTitle.textAlignment = .center
+        inTitle.frame = titleFrame
+        to.view.addSubview(inTitle)
+        transitionFloatingViews.append(inTitle)
+
+        // Outgoing content view snapshot → on `from.view`
+        if contentFrame.height > 0, let cv = navigationBar.contentView,
+           let snap = cv.snapshotView(afterScreenUpdates: false) {
+            snap.frame = contentFrame
+            from.view.addSubview(snap)
+            transitionFloatingViews.append(snap)
+        }
+
+        // Incoming content view: will be added by syncBarToTopController on completion.
+
+        // --- Bar: hide title + content, buttons stay ---
+        navigationBar.beginTransition()
+
+        if !isInteractive {
+            // Programmatic push/pop: update bar items so GlassControlGroup
+            // morphs buttons (back ↔ edit) with animated fade.
+            updateBarToDestination(to)
+            navigationBar.commitTransitionButtons()
+        }
+        // Interactive: bar stays in outgoing state. Morph on completion.
+    }
+
+    private func updateBarToDestination(_ to: ViewController) {
         let toIndex = _viewControllers.firstIndex(where: { $0 === to })
         let previousAction: NavigationPreviousAction?
         if let idx = toIndex, idx > 0 {
@@ -748,14 +794,15 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         } else {
             previousAction = nil
         }
-
         navigationBar.item = to.navigationItem
         navigationBar.previousItem = previousAction
+    }
 
-        // Phase 2: incoming elements are configured — set them invisible,
-        // re-layout, and set initial slide positions before animation starts.
-        navigationBar.commitTransitionCrossfade(incomingContentView: to.navigationBarContent)
-        navigationBar.updateTransitionCrossfade(progress: 0.0, transition: .immediate)
+    private func cleanupTransitionFloatingViews() {
+        for view in transitionFloatingViews {
+            view.removeFromSuperview()
+        }
+        transitionFloatingViews.removeAll()
     }
 
     private func ensureFlatRootContainer() -> NavigationContainer {
@@ -771,29 +818,28 @@ open class TelegramNavigationController: UIViewController, UIGestureRecognizerDe
         container.requestLayout = { [weak self] transition in
             self?.requestLayout(transition: transition)
         }
-        container.onTransitionStarted = { [weak self] from, to, isPush, _ in
-            self?.handleBarTransitionStarted(from: from, to: to, isPush: isPush)
+        container.onTransitionStarted = { [weak self] from, to, isPush, isInteractive in
+            self?.handleBarTransitionStarted(from: from, to: to, isPush: isPush, isInteractive: isInteractive)
         }
-        container.onTransitionProgress = { [weak self] progress, transition in
-            self?.navigationBar.updateTransitionCrossfade(progress: progress, transition: transition)
+        container.onTransitionProgress = { _, _ in
+            // Floating titles are on controller views — they move automatically.
+            // Buttons morph via GlassControlGroup. Nothing to drive per-frame.
         }
         container.onTransitionCompleted = { [weak self] in
             guard let self else { return }
-            self.navigationBar.endTransitionCrossfade()
+            self.cleanupTransitionFloatingViews()
+            self.navigationBar.endTransition()
             self.syncBarToTopController(animated: false)
             self.barTransitionFromItem = nil
             self.barTransitionFromPreviousItem = nil
         }
         container.onTransitionCancelled = { [weak self] in
             guard let self else { return }
-            self.navigationBar.endTransitionCrossfade()
-            if let item = self.barTransitionFromItem {
-                self.navigationBar.item = item
-            }
-            self.navigationBar.previousItem = self.barTransitionFromPreviousItem
+            self.cleanupTransitionFloatingViews()
+            self.navigationBar.endTransition()
+            // Interactive gestures don't update bar items, so no restore needed.
             self.barTransitionFromItem = nil
             self.barTransitionFromPreviousItem = nil
-            self.requestLayout(transition: .immediate)
         }
 
         installRootContainerView(container)
