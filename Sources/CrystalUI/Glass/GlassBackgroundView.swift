@@ -942,6 +942,29 @@ public final class GlassBackgroundContainerView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Explicit override for the `isDark` passed to `update(...)`. When
+    /// non-`nil`, wins over the caller-supplied value so one container can
+    /// be pinned to a specific theme regardless of what per-frame code
+    /// threads through `update`. Default `nil` → the caller decides.
+    public var isDarkOverride: Bool? {
+        didSet {
+            if isDarkOverride == oldValue { return }
+            if let memo = lastUpdateMemo {
+                update(size: memo.size, isDark: resolvedIsDark(passed: memo.isDark), transition: .immediate)
+            }
+        }
+    }
+
+    private struct UpdateMemo {
+        let size: CGSize
+        let isDark: Bool
+    }
+    private var lastUpdateMemo: UpdateMemo?
+
+    private func resolvedIsDark(passed: Bool) -> Bool {
+        isDarkOverride ?? passed
+    }
+
     public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, isUserInteractionEnabled else {
             return nil
@@ -957,12 +980,17 @@ public final class GlassBackgroundContainerView: UIView {
     }
 
     public func update(size: CGSize, isDark: Bool, transition: ContainedViewLayoutTransition) {
+        // Remember the caller-supplied isDark so the `isDarkOverride`
+        // setter can re-apply without needing a fresh update() call.
+        self.lastUpdateMemo = UpdateMemo(size: size, isDark: isDark)
+        let effectiveIsDark = resolvedIsDark(passed: isDark)
+
         if let nativeView, let nativeParamsView, #available(iOS 26.0, *) {
-            let targetStyle: UIUserInterfaceStyle = isDark ? .dark : .light
+            let targetStyle: UIUserInterfaceStyle = effectiveIsDark ? .dark : .light
             if nativeView.overrideUserInterfaceStyle != targetStyle {
                 nativeView.overrideUserInterfaceStyle = targetStyle
             }
-            if isDark {
+            if effectiveIsDark {
                 nativeParamsView.lumaMin = 0.0
                 nativeParamsView.lumaMax = 0.15
             } else {

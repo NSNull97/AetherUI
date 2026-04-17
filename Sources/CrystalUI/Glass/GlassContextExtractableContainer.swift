@@ -48,6 +48,14 @@ public final class GlassContextExtractableContainerView: UIView, ContextExtracta
         return extractedContentView
     }
 
+    /// Override for the `isDark` flag used by the glass background. `nil`
+    /// (default) → derived from `traitCollection.userInterfaceStyle` by
+    /// the underlying `GlassBackgroundView`. Use when the container sits
+    /// on a custom dark background while the system is in light mode.
+    public var isDarkAppearance: Bool? {
+        didSet { glassBackground.isDarkOverride = isDarkAppearance }
+    }
+
     public init(style: GlassBackgroundView.Style = .regular) {
         self.glassBackground = GlassBackgroundView(style: style)
         self.contentContainerView = UIView()

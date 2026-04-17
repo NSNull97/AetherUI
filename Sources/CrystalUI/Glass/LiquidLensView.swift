@@ -142,6 +142,22 @@ public final class LiquidLensView: UIView {
         liftedContainerView
     }
 
+    /// Explicit override for the `isDark` flag. When non-`nil`, wins over
+    /// the `isDark:` parameter passed to `update(...)` and pins the lens
+    /// tint/tone regardless of caller or system theme. Set once on the
+    /// outer component and the lens stays consistent across layout passes
+    /// — avoids the subtle-mismatch issue where the lens reads one theme
+    /// while its parent glass reads another.
+    public var isDarkAppearance: Bool? {
+        didSet {
+            guard isDarkAppearance != oldValue else { return }
+            // Re-apply the last params with the override resolved in.
+            if let last = self.params {
+                update(params: last, transition: .immediate)
+            }
+        }
+    }
+
     public var selectionOrigin: CGPoint? {
         params?.selectionOrigin
     }
@@ -297,6 +313,10 @@ public final class LiquidLensView: UIView {
         isCollapsed: Bool = false,
         transition: ContainedViewLayoutTransition
     ) {
+        // `isDarkAppearance` wins over the caller-supplied `isDark` so a
+        // consumer can pin the lens theme once and not worry about every
+        // call site threading the same value through.
+        let resolvedIsDark = isDarkAppearance ?? isDark
         let params = Params(
             size: size,
             cornerRadius: cornerRadius,
@@ -304,7 +324,7 @@ public final class LiquidLensView: UIView {
             selectionSize: selectionSize,
             inset: inset,
             liftedInset: liftedInset,
-            isDark: isDark,
+            isDark: resolvedIsDark,
             isLifted: isLifted,
             isCollapsed: isCollapsed
         )
