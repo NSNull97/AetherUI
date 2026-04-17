@@ -19,8 +19,19 @@ public final class ContextMenuController {
     // MARK: - Animation constants (mirror ContextControllerExtractedPresentationNode)
 
     private static let lensDuration: TimeInterval = 0.5
-    private static let dimAlpha: CGFloat = 0.22
+    private static let dimAlpha: CGFloat = 0.12
     private static let menuSpacing: CGFloat = 10.0
+    private static let menuCornerRadius: CGFloat = 27.0
+
+    // MARK: - Self-retention
+    //
+    // Callers store the returned `ContextMenuController` in a `weak` ivar by
+    // convention (it doesn't make sense to keep a context menu around longer
+    // than its presentation lifetime). To survive long enough to handle
+    // dismissal taps, the controller adds itself to this set on `present()`
+    // and removes itself once `dismiss()` has finished cleanup.
+    private static var presentedControllers: Set<ContextMenuControllerBox> = []
+    private lazy var retainBox = ContextMenuControllerBox(controller: self)
 
     // MARK: - Inputs
 
@@ -69,6 +80,7 @@ public final class ContextMenuController {
     public func present() {
         guard !isPresented, let source = source.view, let window = source.window else { return }
         isPresented = true
+        ContextMenuController.presentedControllers.insert(retainBox)
 
         let host = UIView(frame: window.bounds)
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -143,10 +155,26 @@ public final class ContextMenuController {
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Hide the source so it doesn't fight the lens's source effect view.
-        source.isHidden = true
+        // Capture the source snapshot BEFORE hiding the source view — otherwise
+        // `snapshotView(afterScreenUpdates:)` returns a blank ghost and the
+        // morph appears to grow out of nothing while the original button keeps
+        // showing in its old spot for one render cycle.
+        let sourceSnapshot = makeSourceSnapshot(source: source)
 
-        animateIn(host: host, dim: dim, lens: lens, actionsView: actionsView, source: source)
+        // Hide the source synchronously, then ask UIKit to flush the layer
+        // change before any animation starts so the original button can never
+        // visually leak through during the lens morph.
+        source.isHidden = true
+        CATransaction.flush()
+
+        animateIn(
+            host: host,
+            dim: dim,
+            lens: lens,
+            actionsView: actionsView,
+            source: source,
+            sourceSnapshot: sourceSnapshot
+        )
     }
 
     public func dismiss(animated: Bool = true) {
@@ -178,6 +206,10 @@ public final class ContextMenuController {
             self?.lensContainer = nil
             self?.actionsView = nil
             self?.onDismiss?()
+            // Drop the self-retain — last reference, controller deallocates next.
+            if let strongSelf = self {
+                ContextMenuController.presentedControllers.remove(strongSelf.retainBox)
+            }
         }
 
         guard animated, let lens, let sourceView else { cleanup(); return }
@@ -221,18 +253,17 @@ public final class ContextMenuController {
         dim: UIView,
         lens: LensTransitionContainer,
         actionsView: ContextMenuActionsView,
-        source: UIView
+        source: UIView,
+        sourceSnapshot: UIView
     ) {
         // 1) Dim fades in quickly.
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut], animations: {
             dim.alpha = 1.0
         })
 
-        // 2) Build the source effect view: a snapshot wrapped in a glass effect
-        // that the lens will absorb during the morph. The lens internally
-        // positions / sizes / blurs this view via baked SDF keyframes.
-        let sourceSnapshotView = makeSourceSnapshot(source: source)
-        let sourceEffectView = LensEffectView(contentView: sourceSnapshotView)
+        // 2) Wrap the pre-captured snapshot in a lens effect view; the lens
+        // internally positions / sizes / blurs this view via baked SDF keyframes.
+        let sourceEffectView = LensEffectView(contentView: sourceSnapshot)
         sourceEffectView.updateAppearance(isDark: source.traitCollection.userInterfaceStyle == .dark)
 
         // 3) Hand off to the lens. fromRect / toRect must be in the lens
@@ -337,5 +368,26 @@ public extension ContextMenuController {
         )
         controller.present()
         return controller
+    }
+}
+
+// MARK: - Self-retain box
+
+/// Wrapper that gives a `ContextMenuController` value-style identity inside a
+/// `Set` while strongly retaining it. Equality / hashing are reference-based
+/// so two boxes for the same controller collapse to a single entry.
+private final class ContextMenuControllerBox: Hashable {
+    let controller: ContextMenuController
+
+    init(controller: ContextMenuController) {
+        self.controller = controller
+    }
+
+    static func == (lhs: ContextMenuControllerBox, rhs: ContextMenuControllerBox) -> Bool {
+        return lhs.controller === rhs.controller
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(controller))
     }
 }
