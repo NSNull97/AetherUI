@@ -291,7 +291,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         }
 
         let isCollapsingTowardStage1 = targetDetent == .stage1 && currentFrame.minY < targetFrame.minY
-        let baseDuration: CFTimeInterval = isCollapsingTowardStage1 ? 0.38 : 0.42
+        let baseDuration: CFTimeInterval = isCollapsingTowardStage1 ? 0.46 : 0.5
         // Scale down when the distance remaining is small — keep brief
         // corrections crisp rather than padding them out to the full
         // duration.
@@ -321,7 +321,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         }
         let elapsed = CACurrentMediaTime() - settleStartTime
         let raw: CGFloat = settleDuration > 0 ? max(0.0, min(1.0, CGFloat(elapsed / settleDuration))) : 1.0
-        let t = Self.easeOutCubic(raw)
+        let t = Self.easeOutSpring(raw)
 
         let f = CGRect(
             x: settleStartFrame.origin.x + (settleTargetFrame.origin.x - settleStartFrame.origin.x) * t,
@@ -346,9 +346,17 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         settleAnimating = false
     }
 
-    private static func easeOutCubic(_ t: CGFloat) -> CGFloat {
-        let u = 1.0 - t
-        return 1.0 - u * u * u
+    /// Underdamped spring step response — light overshoot (~4%), quick settle.
+    /// Approximates the "natural" spring UIKit gives you with spring damping
+    /// ≈ 0.78 / initialVelocity 0. Fully settled by t = 1.
+    private static func easeOutSpring(_ t: CGFloat) -> CGFloat {
+        if t <= 0 { return 0 }
+        if t >= 1 { return 1 }
+        let zeta: CGFloat = 0.78
+        let omega: CGFloat = 9.0
+        let omegaD = omega * sqrt(max(0.0, 1.0 - zeta * zeta))
+        let envelope = exp(-zeta * omega * t)
+        return 1.0 - envelope * (cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t))
     }
 
     private func animateDismiss() {
