@@ -1474,33 +1474,182 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
 
 private final class LensTransitionContainerFallbackImpl: UIView, LensTransitionContainerProtocol {
     private let backgroundView: GlassBackgroundView
-    
+
+    private var currentSize: CGSize = .zero
+    private var currentCornerRadius: CGFloat = 0
+    private var currentIsDark: Bool = false
+
     public var contentsView: UIView {
         return self.backgroundView.contentView
     }
-    
+
     override init(frame: CGRect) {
         self.backgroundView = GlassBackgroundView()
-        
+
         super.init(frame: frame)
-        
+
         self.addSubview(self.backgroundView)
     }
-    
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
+    /// Pre-iOS 26 fallback morph. No SDF displacement effect available, so the
+    /// glass blob just springs from `fromRect` → `toRect` with the same 30
+    /// keyframes Telegram uses on iOS 26 (size / position / cornerRadius).
+    /// The contents view is also keyframed so its corner radius matches
+    /// during the morph.
     func animateIn(fromRect: CGRect, toRect: CGRect, fromCornerRadius: CGFloat, toCornerRadius: CGFloat, isDark: Bool, sourceEffectView: LensTransitionContainerEffectView) {
+        let duration: Double = 0.5
+
+        // Compute the same keyframe arrays the iOS-26 impl bakes for its
+        // SDF lens. We only use `bakedSizes` / `containerPositions` / `radiusKeyframes`
+        // — there's no displacement filter to drive on this path.
+        let keyframes = computeKeyframes(fromRect: fromRect, toRect: toRect, toCornerRadius: toCornerRadius)
+
+        // Make sure the model values match the END state (lens.update() may
+        // have been called before us — confirm the resting shape).
+        backgroundView.bounds = CGRect(origin: .zero, size: toRect.size)
+        backgroundView.center = CGPoint(x: toRect.midX, y: toRect.midY)
+        backgroundView.layer.cornerRadius = toCornerRadius
+
+        // Apply keyframed bounds.size on the background view's layer.
+        let sizeAnim = CAKeyframeAnimation(keyPath: "bounds.size")
+        sizeAnim.values = keyframes.bakedSizes.map { NSValue(cgSize: $0) }
+        sizeAnim.duration = duration * UIView.animationDurationFactor()
+        sizeAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        sizeAnim.isRemovedOnCompletion = true
+        sizeAnim.fillMode = .both
+        backgroundView.layer.add(sizeAnim, forKey: "bounds.size")
+
+        // Position (in lens-local coords).
+        let posAnim = CAKeyframeAnimation(keyPath: "position")
+        posAnim.values = keyframes.containerPositions.map { NSValue(cgPoint: $0) }
+        posAnim.duration = duration * UIView.animationDurationFactor()
+        posAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        posAnim.isRemovedOnCompletion = true
+        posAnim.fillMode = .both
+        backgroundView.layer.add(posAnim, forKey: "position")
+
+        // Corner radius (interpolates source-radius → menu-radius via the same
+        // ease the iOS-26 impl uses).
+        let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius")
+        radiusAnim.values = keyframes.radiusKeyframes.map { $0 as NSNumber }
+        radiusAnim.duration = duration * UIView.animationDurationFactor()
+        radiusAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        radiusAnim.isRemovedOnCompletion = true
+        radiusAnim.fillMode = .both
+        backgroundView.layer.add(radiusAnim, forKey: "cornerRadius")
+
+        // Soft alpha fade-in over the first half of the morph so the glass
+        // doesn't pop on full-strength at t=0.
+        backgroundView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.18)
     }
-    
+
     func animateOut(fromRect: CGRect, toRect: CGRect, fromCornerRadius: CGFloat, toCornerRadius: CGFloat, isDark: Bool, sourceEffectView: LensTransitionContainerEffectView) {
+        let duration: Double = 0.32
+
+        // Reverse: shrink from fromRect → toRect (i.e. menu → source).
+        let reversed = computeKeyframes(fromRect: toRect, toRect: fromRect, toCornerRadius: fromCornerRadius)
+        let bakedSizes = Array(reversed.bakedSizes.reversed())
+        let containerPositions = Array(reversed.containerPositions.reversed())
+        let radiusKeyframes = Array(reversed.radiusKeyframes.reversed())
+
+        // Resting state ends at toRect (= source rect).
+        backgroundView.bounds = CGRect(origin: .zero, size: toRect.size)
+        backgroundView.center = CGPoint(x: toRect.midX, y: toRect.midY)
+        backgroundView.layer.cornerRadius = toCornerRadius
+
+        let sizeAnim = CAKeyframeAnimation(keyPath: "bounds.size")
+        sizeAnim.values = bakedSizes.map { NSValue(cgSize: $0) }
+        sizeAnim.duration = duration * UIView.animationDurationFactor()
+        sizeAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        sizeAnim.isRemovedOnCompletion = true
+        sizeAnim.fillMode = .both
+        backgroundView.layer.add(sizeAnim, forKey: "bounds.size")
+
+        let posAnim = CAKeyframeAnimation(keyPath: "position")
+        posAnim.values = containerPositions.map { NSValue(cgPoint: $0) }
+        posAnim.duration = duration * UIView.animationDurationFactor()
+        posAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        posAnim.isRemovedOnCompletion = true
+        posAnim.fillMode = .both
+        backgroundView.layer.add(posAnim, forKey: "position")
+
+        let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius")
+        radiusAnim.values = radiusKeyframes.map { $0 as NSNumber }
+        radiusAnim.duration = duration * UIView.animationDurationFactor()
+        radiusAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        radiusAnim.isRemovedOnCompletion = true
+        radiusAnim.fillMode = .both
+        backgroundView.layer.add(radiusAnim, forKey: "cornerRadius")
+
+        backgroundView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.22)
     }
-    
+
     func update(size: CGSize, cornerRadius: CGFloat, isDark: Bool, transition: ContainedViewLayoutTransition) {
+        currentSize = size
+        currentCornerRadius = cornerRadius
+        currentIsDark = isDark
         transition.setBounds(view: self.backgroundView, bounds: CGRect(origin: .zero, size: size))
         transition.setPosition(view: self.backgroundView, position: CGPoint(x: size.width * 0.5, y: size.height * 0.5))
         self.backgroundView.update(size: size, cornerRadius: cornerRadius, isDark: isDark, tintColor: .init(kind: .panel), transition: transition)
+    }
+
+    // MARK: - Keyframe baker (subset of iOS-26 impl, no SDF maths)
+
+    private struct FallbackKeyframes {
+        let bakedSizes: [CGSize]
+        let containerPositions: [CGPoint]
+        let radiusKeyframes: [CGFloat]
+    }
+
+    /// Bakes 30 sample keyframes that replicate the size / position / corner
+    /// arc the iOS-26 impl produces. No displacement / SDF fields needed.
+    private func computeKeyframes(fromRect: CGRect, toRect: CGRect, toCornerRadius: CGFloat) -> FallbackKeyframes {
+        let sampleCount = 30
+        let sampleEndIndex = CGFloat(sampleCount - 1)
+        let toSize = toRect.size
+        let minSide = min(toSize.width, toSize.height)
+        let maxSide = max(toSize.width, toSize.height)
+        let fromCenter = CGPoint(x: fromRect.midX, y: fromRect.midY)
+        let toCenter = CGPoint(x: toRect.midX, y: toRect.midY)
+
+        var bakedSizes: [CGSize] = []
+        var containerPositions: [CGPoint] = []
+        var radiusKeyframes: [CGFloat] = []
+        bakedSizes.reserveCapacity(sampleCount)
+        containerPositions.reserveCapacity(sampleCount)
+        radiusKeyframes.reserveCapacity(sampleCount)
+
+        for i in 0 ..< sampleCount {
+            let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
+            let scale = CGFloat(scaleEase(Double(t)))
+
+            let sideFraction = max(0.0, min(1.0, sideFractionEase(Double(t))))
+            let sideValue = (1.0 - sideFraction) * minSide + sideFraction * maxSide
+            let baseSize: CGSize
+            if toSize.width > toSize.height {
+                baseSize = CGSize(width: sideValue, height: minSide)
+            } else {
+                baseSize = CGSize(width: minSide, height: sideValue)
+            }
+            let scaledSize = CGSize(width: baseSize.width * scale, height: baseSize.height * scale)
+            bakedSizes.append(scaledSize)
+
+            let radiusFraction = max(0.0, min(1.0, radiusFractionEase(Double(t))))
+            let baseRadius = (1.0 - radiusFraction) * (minSide * 0.5) + radiusFraction * toCornerRadius
+            radiusKeyframes.append(baseRadius * scale)
+
+            let positionFraction = springProgress(Double(t))
+            containerPositions.append(CGPoint(
+                x: (1.0 - positionFraction) * fromCenter.x + positionFraction * toCenter.x,
+                y: (1.0 - positionFraction) * fromCenter.y + positionFraction * toCenter.y
+            ))
+        }
+
+        return FallbackKeyframes(bakedSizes: bakedSizes, containerPositions: containerPositions, radiusKeyframes: radiusKeyframes)
     }
 }
 

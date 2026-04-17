@@ -280,13 +280,12 @@ public final class ContextMenuController {
             sourceEffectView: sourceEffectView
         )
 
-        // 4) Cosmetic actions fade-in over the lens (the actions view is parked
-        // at the menu rect and just needs to become visible once the morph
-        // starts settling). The lens itself drives the glass surface morph.
-        actionsView.alpha = 0.0
-        UIView.animate(withDuration: 0.18, delay: 0.16, options: [.curveEaseOut], animations: {
-            actionsView.alpha = 1.0
-        })
+        // 4) The lens already animates its `contentsView.layer` alpha 0→1 over
+        // 0.15s on the iOS-26 path (and the fallback impl drives the glass
+        // alpha for us too). DO NOT gate the actions view with a separate
+        // alpha — that used to leave the morph completely transparent until
+        // 0.16s, hiding the lens-glass effect entirely.
+        actionsView.alpha = 1.0
     }
 
     // MARK: - Source snapshot
