@@ -366,12 +366,17 @@ public class GlassBackgroundView: UIView {
 
     // MARK: Update
 
-    /// Convenience that keeps the old call sites working.
+    /// Convenience wrapper. `isDark` is auto-derived from the view's current
+    /// `traitCollection` so callers that share one `GlassBackgroundView(style: .regular)`
+    /// configuration across multiple places get visually consistent glass —
+    /// the previous `isDark: false` hard-code produced inconsistent tints
+    /// when some call sites passed explicit `true` and others went through
+    /// this short form.
     public func update(size: CGSize, cornerRadius: CGFloat, transition: ContainedViewLayoutTransition) {
         update(
             size: size,
             cornerRadius: cornerRadius,
-            isDark: false,
+            isDark: traitCollection.userInterfaceStyle == .dark,
             tintColor: .init(kind: .panel),
             isInteractive: false,
             isVisible: true,
