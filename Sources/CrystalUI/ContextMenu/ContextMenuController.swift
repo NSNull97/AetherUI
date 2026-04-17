@@ -20,7 +20,6 @@ public final class ContextMenuController {
 
     private static let lensDuration: TimeInterval = 0.5
     private static let dimAlpha: CGFloat = 0.12
-    private static let menuSpacing: CGFloat = 10.0
     private static let menuCornerRadius: CGFloat = 27.0
 
     /// Rubber-band stretch metrics for the WHOLE menu container (the lens),
@@ -356,6 +355,11 @@ public final class ContextMenuController {
 
     // MARK: - Menu placement
 
+    /// The menu OPENS FROM the source's position — its top edge is anchored
+    /// to the source's top edge (not below the source). Visually the button
+    /// "unfolds" into the menu: the lens grows downward + outward from the
+    /// source's top-left corner without leaving a visible gap. Same trick
+    /// the iOS 26 native menu (e.g. ChatGPT mode picker) uses.
     private func computeMenuFrame(sourceRect: CGRect, menuSize: CGSize, hostBounds: CGRect) -> CGRect {
         let sideInset: CGFloat = 12.0
         // Prefer the hosting window's insets — the freshly-attached host view
@@ -364,17 +368,21 @@ public final class ContextMenuController {
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
 
+        // Horizontal: anchor menu's left edge to source's left, clamped on-screen.
         var x = sourceRect.minX
         if x + menuSize.width > hostBounds.maxX - sideInset {
             x = hostBounds.maxX - sideInset - menuSize.width
         }
         x = max(sideInset, x)
 
-        var y = sourceRect.maxY + ContextMenuController.menuSpacing
+        // Vertical: top-anchored. Menu's top = source's top. If the menu's
+        // bottom would clip below the safe area, fall back to bottom-anchored
+        // (menu's bottom = source's bottom, opens upward). Last resort: clamp.
+        var y = sourceRect.minY
         if y + menuSize.height > hostBounds.maxY - safeBottom {
-            let above = sourceRect.minY - ContextMenuController.menuSpacing - menuSize.height
-            if above >= safeTop {
-                y = above
+            let upward = sourceRect.maxY - menuSize.height
+            if upward >= safeTop {
+                y = upward
             } else {
                 y = hostBounds.maxY - safeBottom - menuSize.height
             }
