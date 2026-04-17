@@ -18,19 +18,15 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.5
-    private static let morphDamping: CGFloat = 0.55  // strong elastic overshoot (was 0.78)
-    private static let dismissDuration: TimeInterval = 0.42
-    private static let dismissDamping: CGFloat = 0.7
+    private static let morphDuration: TimeInterval = 0.55
+    private static let morphDamping: CGFloat = 0.48  // very elastic overshoot (was 0.55)
+    private static let dismissDuration: TimeInterval = 0.46
+    private static let dismissDamping: CGFloat = 0.62
     /// Peak gaussian-blur radius applied to the SNAPSHOT view (not the
     /// glass host) during the morph. Smears the button visual as it
-    /// dissolves into the menu — sells the lens transition. Applied to the
-    /// snapshot specifically so it doesn't color-shift the UIVisualEffectView's
-    /// glass underneath (the previous attempt put the filter on
-    /// `sdfHost.layer` which interacts with `UIGlassEffect`'s own filter
-    /// chain and tinted everything violet).
-    private static let snapshotBlurPeak: CGFloat = 14.0
-    private static let snapshotBlurDuration: TimeInterval = 0.28
+    /// dissolves into the menu — sells the lens transition.
+    private static let snapshotBlurPeak: CGFloat = 22.0
+    private static let snapshotBlurDuration: TimeInterval = 0.34
     private static let dimAlpha: CGFloat = 0.12
     private static let menuCornerRadius: CGFloat = 27.0
 
@@ -468,8 +464,8 @@ public final class ContextMenuController {
         reversed: Bool
     ) {
         let scaleValues: [CGFloat] = reversed
-            ? [1.0, 1.025, 0.97, 1.10, 1.0]
-            : [1.0, 1.10, 0.97, 1.025, 0.995, 1.0]
+            ? [1.0, 1.04, 0.95, 1.14, 1.0]
+            : [1.0, 1.14, 0.95, 1.04, 0.99, 1.0]
         let keyTimes: [NSNumber] = reversed
             ? [0.0, 0.18, 0.4, 0.72, 1.0]
             : [0.0, 0.28, 0.5, 0.72, 0.88, 1.0]
