@@ -40,6 +40,13 @@ public struct ContextMenuActionItem {
     public let isEnabled: Bool
     public let action: ((ContextMenuActionItem, ContextMenuDismissHandle) -> Void)?
 
+    /// If non-nil, tapping this row pushes a new menu page containing
+    /// `submenu` instead of invoking `action`. The row renders with a
+    /// trailing chevron (`chevron.right`) and its title is reused as the
+    /// back-button label on the pushed page. `action` is ignored when a
+    /// submenu is present.
+    public let submenu: [ContextMenuItem]?
+
     public init(
         id: AnyHashable = UUID(),
         title: String,
@@ -49,6 +56,7 @@ public struct ContextMenuActionItem {
         textColor: TextColor = .primary,
         isSelected: Bool = false,
         isEnabled: Bool = true,
+        submenu: [ContextMenuItem]? = nil,
         action: ((ContextMenuActionItem, ContextMenuDismissHandle) -> Void)? = nil
     ) {
         self.id = id
@@ -59,6 +67,7 @@ public struct ContextMenuActionItem {
         self.textColor = textColor
         self.isSelected = isSelected
         self.isEnabled = isEnabled
+        self.submenu = submenu
         self.action = action
     }
 }

@@ -68,6 +68,7 @@ final class SettingsExampleController: ViewController {
     private let destructivePill = GlassBarButtonView(title: "Group actions")
     private let topAnchoredButton = GlassBarButtonView(title: "Top anchored")
     private let bottomAnchoredButton = GlassBarButtonView(title: "Bottom anchored")
+    private let submenuPill = GlassBarButtonView(title: "Settings ›")
 
     private let statusLabel = UILabel()
 
@@ -77,6 +78,8 @@ final class SettingsExampleController: ViewController {
     private var currentMode: Mode = .instant
     private var notificationsEnabled: Bool = true
     private var soundEnabled: Bool = false
+    private var theme: String = "System"
+    private var fontSize: String = "Default"
 
     // MARK: - Init
 
@@ -165,6 +168,17 @@ final class SettingsExampleController: ViewController {
             title: "3. Grouped + destructive",
             description: "Two action groups split by a separator, with one destructive row.",
             content: destructivePill,
+            contentHeight: 36.0
+        ))
+
+        // 6. Submenus.
+        submenuPill.contentTintColor = .label
+        submenuPill.contextMenuTrigger = .tap
+        submenuPill.contextMenuItemsProvider = { [weak self] in self?.submenuRootItems() ?? [] }
+        stack.addArrangedSubview(section(
+            title: "6. Submenus (push / pop)",
+            description: "Tap a row with a chevron to push a submenu page; the back-row at the top pops back. Container resizes to fit each page.",
+            content: submenuPill,
             contentHeight: 36.0
         ))
 
@@ -358,6 +372,96 @@ final class SettingsExampleController: ViewController {
                 id: "three",
                 title: "Option three",
                 action: { [weak self] _, handle in self?.report("Option three"); handle.dismiss() }
+            ))
+        ]
+    }
+
+    // MARK: - Submenu items
+
+    private func submenuRootItems() -> [ContextMenuItem] {
+        return [
+            .action(ContextMenuActionItem(
+                id: "appearance",
+                title: "Appearance",
+                submenu: appearanceSubmenuItems()
+            )),
+            .action(ContextMenuActionItem(
+                id: "notifications",
+                title: "Notifications",
+                submenu: notificationsSubmenuItems()
+            )),
+            .separator,
+            .action(ContextMenuActionItem(
+                id: "about",
+                title: "About",
+                action: { [weak self] _, handle in self?.report("About"); handle.dismiss() }
+            ))
+        ]
+    }
+
+    private func appearanceSubmenuItems() -> [ContextMenuItem] {
+        let themes = ["System", "Light", "Dark"]
+        let themeItems: [ContextMenuItem] = themes.map { name in
+            .action(ContextMenuActionItem(
+                id: "theme-\(name)",
+                title: name,
+                isSelected: self.theme == name,
+                action: { [weak self] _, handle in
+                    self?.theme = name
+                    self?.report("Theme: \(name)")
+                    handle.dismiss()
+                }
+            ))
+        }
+        return [
+            .header(title: "Theme"),
+        ] + themeItems + [
+            .separator,
+            .action(ContextMenuActionItem(
+                id: "font",
+                title: "Font size: \(fontSize)",
+                submenu: fontSizeSubmenuItems()
+            ))
+        ]
+    }
+
+    private func fontSizeSubmenuItems() -> [ContextMenuItem] {
+        let sizes = ["Small", "Default", "Large", "Extra Large"]
+        return sizes.map { size in
+            .action(ContextMenuActionItem(
+                id: "font-\(size)",
+                title: size,
+                isSelected: self.fontSize == size,
+                action: { [weak self] _, handle in
+                    self?.fontSize = size
+                    self?.report("Font: \(size)")
+                    handle.dismiss()
+                }
+            ))
+        }
+    }
+
+    private func notificationsSubmenuItems() -> [ContextMenuItem] {
+        return [
+            .action(ContextMenuActionItem(
+                id: "notif-on",
+                title: "Enabled",
+                isSelected: notificationsEnabled,
+                action: { [weak self] _, handle in
+                    self?.notificationsEnabled.toggle()
+                    self?.report("Notifications: \(self?.notificationsEnabled == true ? "on" : "off")")
+                    handle.dismiss()
+                }
+            )),
+            .action(ContextMenuActionItem(
+                id: "notif-sound",
+                title: "Sound",
+                isSelected: soundEnabled,
+                action: { [weak self] _, handle in
+                    self?.soundEnabled.toggle()
+                    self?.report("Sound: \(self?.soundEnabled == true ? "on" : "off")")
+                    handle.dismiss()
+                }
             ))
         ]
     }
