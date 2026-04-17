@@ -133,8 +133,14 @@ public final class GlassButton: UIView {
         glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
+        // Content lives INSIDE the glass's own content host (the
+        // UIVisualEffectView.contentView). When UIGlassEffect warps on
+        // press, the effect view's rendering chain deforms the entire
+        // content layer in lockstep — so the icon/label ride the liquid
+        // wave together with the glass surface instead of staying pinned
+        // while only the glass moves.
         contentContainer.isUserInteractionEnabled = false
-        addSubview(contentContainer)
+        glassBackground.contentView.addSubview(contentContainer)
 
         self.title = title
         self.image = image
