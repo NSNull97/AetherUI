@@ -15,9 +15,9 @@ public final class CrystalModalController: UIViewController {
 
         public init(
             sideInset: CGFloat = 8.0,
-            topInsetStage1: CGFloat = 80.0,
+            topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
-            topCornerRadius: CGFloat = 27.0,
+            topCornerRadius: CGFloat = 38.0,
             dimAlphaStage2: CGFloat = 0.25
         ) {
             self.sideInset = sideInset

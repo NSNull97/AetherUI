@@ -10,8 +10,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private var dragStartFrame: CGRect = .zero
     private var dragStartDetent: CrystalModalController.Detent = .stage1
     private var dragDriving: Bool = false
-    private var dragInitialScrollOffset: CGFloat = 0
-    private var dragInitialScrollEnabled: Bool = true
+    private var settleAnimating: Bool = false
 
     lazy var deviceCornerRadius: CGFloat = {
         if let window = presentingViewController.view.window,
@@ -19,7 +18,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
            value > 0 {
             return value
         }
-        return 39.0
+        return 38.0
     }()
 
     private var modalController: CrystalModalController? {
@@ -47,6 +46,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         pan.delegate = self
         presentedView?.addGestureRecognizer(pan)
         panGesture = pan
+        if let scrollView = modalController?.primaryScrollView {
+            scrollView.panGestureRecognizer.require(toFail: pan)
+        }
 
         modalController?.applyCurrentDetent(detent)
         modalController?.applyDetentProgress(0.0)
@@ -73,7 +75,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     override func containerViewWillLayoutSubviews() {
         super.containerViewWillLayoutSubviews()
         dimView.frame = containerView?.bounds ?? .zero
-        if !dragDriving {
+        if !dragDriving && !settleAnimating {
             presentedView?.frame = frameOfPresentedViewInContainerView
         }
     }
@@ -82,46 +84,25 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
     func setDetent(_ newDetent: CrystalModalController.Detent, animated: Bool) {
         guard detent != newDetent else { return }
-        detent = newDetent
-        modalController?.applyCurrentDetent(newDetent)
-
-        let targetFrame = frameOfPresentedViewInContainerView
-        let targetProgress: CGFloat = newDetent == .stage2 ? 1.0 : 0.0
-        let targetDim = (modalController?.config.dimAlphaStage2 ?? 0.25) * targetProgress
-
-        let animations = { [weak self] in
-            guard let self = self else { return }
-            self.presentedView?.frame = targetFrame
-            self.modalController?.applyDetentProgress(targetProgress)
-            self.dimView.alpha = targetDim
-        }
-        if animated {
-            UIView.animate(
-                withDuration: 0.4,
-                delay: 0.0,
-                usingSpringWithDamping: 0.88,
-                initialSpringVelocity: 0.0,
-                options: [.allowUserInteraction, .beginFromCurrentState],
-                animations: animations
-            )
-        } else {
-            animations()
-        }
+        animateTo(detent: newDetent, container: containerView, initialVelocityY: 0.0, animated: animated)
     }
 
     // MARK: - Frame calc
 
     private func frame(for detent: CrystalModalController.Detent, in bounds: CGRect) -> CGRect {
         let cfg = modalController?.config ?? .init()
-        let safeArea = presentingViewController.view.safeAreaInsets
+        let safeArea = containerView?.safeAreaInsets ?? presentingViewController.view.safeAreaInsets
         switch detent {
         case .stage1:
-            let top = safeArea.top + cfg.topInsetStage1
+            let configuredTop = safeArea.top + cfg.topInsetStage1
+            let minimumHeight = bounds.height * 0.5
+            let height = max(bounds.height - configuredTop, minimumHeight)
+            let top = bounds.height - height
             return CGRect(
                 x: cfg.sideInset,
                 y: top,
                 width: bounds.width - cfg.sideInset * 2.0,
-                height: max(0.0, bounds.height - top)
+                height: max(0.0, height)
             )
         case .stage2:
             let top = safeArea.top + cfg.topInsetStage2
@@ -143,59 +124,33 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     // MARK: - Pan gesture
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard let container = containerView, let presentedView else { return }
-        let translation = gesture.translation(in: container)
+        guard let container = containerView,
+              let presentedView else {
+            return
+        }
         let velocity = gesture.velocity(in: container)
 
         switch gesture.state {
         case .began:
+            cancelSettleAnimationIfNeeded(container: container)
             dragStartFrame = presentedView.frame
-            dragStartDetent = detent
-            dragDriving = false
-            if let sv = modalController?.primaryScrollView {
-                dragInitialScrollOffset = sv.contentOffset.y - scrollTopOffset(for: sv)
-                dragInitialScrollEnabled = sv.isScrollEnabled
-            } else {
-                dragInitialScrollOffset = 0.0
-                dragInitialScrollEnabled = true
-            }
+            dragStartDetent = nearestDetent(to: presentedView.frame, in: container.bounds)
+            dragDriving = true
 
         case .changed:
+            guard dragDriving else { return }
+            let translation = gesture.translation(in: container)
             let draggingDown = translation.y > 0
             let draggingUp = translation.y < 0
-
-            if !dragDriving {
-                if dragStartDetent == .stage1 {
-                    dragDriving = true
-                } else {
-                    if draggingDown && dragInitialScrollOffset <= 0.5 {
-                        dragDriving = true
-                    }
-                }
-            }
-
-            guard dragDriving else { return }
-
-            if let sv = modalController?.primaryScrollView {
-                let topOffset = scrollTopOffset(for: sv)
-                if sv.contentOffset.y != topOffset {
-                    sv.contentOffset.y = topOffset
-                }
-                if sv.isScrollEnabled {
-                    sv.isScrollEnabled = false
-                }
-            }
-
             applyDrag(translation: translation, container: container, draggingDown: draggingDown, draggingUp: draggingUp)
 
         case .ended, .cancelled, .failed:
-            defer {
-                if let sv = modalController?.primaryScrollView {
-                    sv.isScrollEnabled = dragInitialScrollEnabled
-                }
+            if !dragDriving {
+                return
             }
-            guard dragDriving else { return }
+
             dragDriving = false
+            let translation = gesture.translation(in: container)
             finishDrag(translation: translation, velocity: velocity, container: container)
 
         default:
@@ -214,22 +169,20 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         switch dragStartDetent {
         case .stage1:
             if draggingUp {
-                // Expand toward stage2.
-                let distance: CGFloat = 140.0
+                let distance = transitionDistance(from: stage1, to: stage2)
                 let t = max(0.0, min(1.0, -translation.y / distance))
                 newFrame = interpolate(from: stage1, to: stage2, t: t)
                 progress = t
             } else {
-                // Translate down, no resize, no progress.
+                // Dismiss from the compact state while keeping its size.
                 newFrame = stage1.offsetBy(dx: 0.0, dy: max(0.0, translation.y))
                 progress = 0.0
             }
         case .stage2:
             if draggingDown {
-                // Collapse toward stage1.
-                let distance: CGFloat = max(1.0, stage2.height - stage1.height)
+                let distance = transitionDistance(from: stage1, to: stage2)
                 let t = max(0.0, min(1.0, translation.y / distance))
-                newFrame = interpolate(from: stage2, to: stage1, t: t)
+                newFrame = collapseFrame(from: stage2, to: stage1, t: t)
                 progress = 1.0 - t
             } else {
                 // Drag up from stage2 — no-op here, scroll should be handling.
@@ -257,63 +210,172 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         case .stage1:
             if translation.y > 0 {
                 if velocity.y > dismissVelocityThreshold {
-                    animateDismiss(from: presentedView?.frame ?? stage1, container: container, velocity: velocity)
+                    animateDismiss()
                 } else {
-                    animateTo(detent: .stage1, container: container)
+                    animateTo(detent: .stage1, container: container, initialVelocityY: velocity.y)
                 }
             } else {
-                let distance: CGFloat = 140.0
+                let distance = transitionDistance(from: stage1, to: stage2)
                 let progress = max(0.0, min(1.0, -translation.y / distance))
                 if progress > expandProgressThreshold || velocity.y < -expandVelocityThreshold {
-                    animateTo(detent: .stage2, container: container)
+                    animateTo(detent: .stage2, container: container, initialVelocityY: velocity.y)
                 } else {
-                    animateTo(detent: .stage1, container: container)
+                    animateTo(detent: .stage1, container: container, initialVelocityY: velocity.y)
                 }
             }
         case .stage2:
             if translation.y > 0 {
-                let distance: CGFloat = max(1.0, stage2.height - stage1.height)
+                let distance = transitionDistance(from: stage1, to: stage2)
                 let progress = max(0.0, min(1.0, translation.y / distance))
                 if progress > collapseProgressThreshold || velocity.y > expandVelocityThreshold {
-                    animateTo(detent: .stage1, container: container)
+                    animateTo(detent: .stage1, container: container, initialVelocityY: velocity.y)
                 } else {
-                    animateTo(detent: .stage2, container: container)
+                    animateTo(detent: .stage2, container: container, initialVelocityY: velocity.y)
                 }
             } else {
-                animateTo(detent: .stage2, container: container)
+                animateTo(detent: .stage2, container: container, initialVelocityY: velocity.y)
             }
         }
     }
 
-    private func animateTo(detent targetDetent: CrystalModalController.Detent, container: UIView) {
+    private func animateTo(
+        detent targetDetent: CrystalModalController.Detent,
+        container: UIView?,
+        initialVelocityY: CGFloat,
+        animated: Bool = true
+    ) {
+        guard let container else {
+            detent = targetDetent
+            modalController?.applyCurrentDetent(targetDetent)
+            modalController?.applyDetentProgress(targetDetent == .stage2 ? 1.0 : 0.0)
+            return
+        }
+
+        let currentFrame =
+            presentedView?.layer.presentation()?.frame ??
+            presentedView?.frame ??
+            frame(for: detent, in: container.bounds)
+        let currentProgress = progress(for: currentFrame, in: container.bounds)
+        let currentDimAlpha =
+            CGFloat(dimView.layer.presentation()?.opacity ?? Float(dimView.alpha))
+
+        if animated {
+            settleAnimating = true
+        }
+
         self.detent = targetDetent
         modalController?.applyCurrentDetent(targetDetent)
 
         let targetFrame = frame(for: targetDetent, in: container.bounds)
         let targetProgress: CGFloat = targetDetent == .stage2 ? 1.0 : 0.0
         let targetDim = (modalController?.config.dimAlphaStage2 ?? 0.25) * targetProgress
+        let distance = max(1.0, abs(targetFrame.minY - currentFrame.minY))
+        let isCollapsingTowardStage1 = targetDetent == .stage1 && currentFrame.minY < targetFrame.minY
+        let velocityLimit: CGFloat = isCollapsingTowardStage1 ? 2.5 : 8.0
+        let normalizedVelocity = max(-velocityLimit, min(velocityLimit, initialVelocityY / distance))
+        let damping: CGFloat = isCollapsingTowardStage1 ? 0.96 : 0.9
+        let duration: TimeInterval = isCollapsingTowardStage1 ? 0.38 : 0.42
 
-        UIView.animate(
-            withDuration: 0.4,
-            delay: 0.0,
-            usingSpringWithDamping: 0.88,
-            initialSpringVelocity: 0.0,
-            options: [.allowUserInteraction, .beginFromCurrentState],
-            animations: { [weak self] in
-                guard let self = self else { return }
-                self.presentedView?.frame = targetFrame
-                self.modalController?.applyDetentProgress(targetProgress)
-                self.dimView.alpha = targetDim
+        // Keep the sheet at the exact interactive frame while switching the logical
+        // detent, otherwise UIKit may briefly resolve the compact geometry first.
+        presentedView?.frame = currentFrame
+        modalController?.applyDetentProgress(currentProgress)
+        dimView.alpha = currentDimAlpha
+
+        let animations = { [weak self] in
+            guard let self = self else { return }
+            self.presentedView?.frame = targetFrame
+            self.modalController?.applyDetentProgress(targetProgress)
+            self.dimView.alpha = targetDim
+        }
+
+        if animated {
+            let completion: (Bool) -> Void = { [weak self] _ in
+                guard let self else { return }
+                self.settleAnimating = false
             }
-        )
+
+            if isCollapsingTowardStage1 {
+                UIView.animate(
+                    withDuration: 0.34,
+                    delay: 0.0,
+                    options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState],
+                    animations: animations,
+                    completion: completion
+                )
+            } else {
+                UIView.animate(
+                    withDuration: duration,
+                    delay: 0.0,
+                    usingSpringWithDamping: damping,
+                    initialSpringVelocity: normalizedVelocity,
+                    options: [.allowUserInteraction, .beginFromCurrentState],
+                    animations: animations,
+                    completion: completion
+                )
+            }
+        } else {
+            animations()
+        }
     }
 
-    private func animateDismiss(from currentFrame: CGRect, container: UIView, velocity: CGPoint) {
+    private func animateDismiss() {
         presentedViewController.dismiss(animated: true)
+    }
+
+    private func cancelSettleAnimationIfNeeded(container: UIView) {
+        guard settleAnimating else { return }
+
+        presentedView?.layer.removeAllAnimations()
+        dimView.layer.removeAllAnimations()
+        settleAnimating = false
+
+        guard let currentFrame = presentedView?.frame else { return }
+        let snappedDetent = nearestDetent(to: currentFrame, in: container.bounds)
+        let currentProgress = progress(for: currentFrame, in: container.bounds)
+        detent = snappedDetent
+        modalController?.applyCurrentDetent(snappedDetent)
+        modalController?.applyDetentProgress(currentProgress)
+        dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * currentProgress
+    }
+
+    private func gestureStartedInPrimaryScrollContent(_ gesture: UIGestureRecognizer) -> Bool {
+        guard let presentedView,
+              let scrollView = modalController?.primaryScrollView else {
+            return false
+        }
+        let location = gesture.location(in: presentedView)
+        guard let hitView = presentedView.hitTest(location, with: nil) else {
+            return false
+        }
+        return hitView.isDescendant(of: scrollView)
+    }
+
+    private func isPrimaryScrollViewAtTop(_ scrollView: UIScrollView) -> Bool {
+        scrollView.contentOffset.y - scrollTopOffset(for: scrollView) <= 0.5
+    }
+
+    private func nearestDetent(to frame: CGRect, in bounds: CGRect) -> CrystalModalController.Detent {
+        let stage1 = self.frame(for: .stage1, in: bounds)
+        let stage2 = self.frame(for: .stage2, in: bounds)
+        let stage1Distance = abs(frame.minY - stage1.minY)
+        let stage2Distance = abs(frame.minY - stage2.minY)
+        return stage1Distance <= stage2Distance ? .stage1 : .stage2
+    }
+
+    private func progress(for frame: CGRect, in bounds: CGRect) -> CGFloat {
+        let stage1 = self.frame(for: .stage1, in: bounds)
+        let stage2 = self.frame(for: .stage2, in: bounds)
+        let distance = transitionDistance(from: stage1, to: stage2)
+        return max(0.0, min(1.0, (stage1.minY - frame.minY) / distance))
     }
 
     private func scrollTopOffset(for sv: UIScrollView) -> CGFloat {
         return -sv.adjustedContentInset.top
+    }
+
+    private func transitionDistance(from stage1: CGRect, to stage2: CGRect) -> CGFloat {
+        max(1.0, stage1.minY - stage2.minY)
     }
 
     private func interpolate(from a: CGRect, to b: CGRect, t: CGFloat) -> CGRect {
@@ -325,9 +387,47 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         )
     }
 
+    private func collapseFrame(from expanded: CGRect, to compact: CGRect, t: CGFloat) -> CGRect {
+        let verticalT = t
+        let horizontalT = t * t
+        let y = expanded.minY + (compact.minY - expanded.minY) * verticalT
+        let x = expanded.minX + (compact.minX - expanded.minX) * horizontalT
+        let width = expanded.width + (compact.width - expanded.width) * horizontalT
+        let bottom = expanded.maxY
+        return CGRect(
+            x: x,
+            y: y,
+            width: width,
+            height: max(0.0, bottom - y)
+        )
+    }
+
     // MARK: - UIGestureRecognizerDelegate
 
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+              let view = pan.view else {
+            return true
+        }
+        let velocity = pan.velocity(in: view)
+        guard abs(velocity.y) >= abs(velocity.x) else {
+            return false
+        }
+        guard gestureStartedInPrimaryScrollContent(pan),
+              let scrollView = modalController?.primaryScrollView else {
+            return true
+        }
+
+        let atTop = isPrimaryScrollViewAtTop(scrollView)
+        switch detent {
+        case .stage1:
+            return atTop
+        case .stage2:
+            return velocity.y > 0.0 && atTop
+        }
+    }
+
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        return true
+        return false
     }
 }
