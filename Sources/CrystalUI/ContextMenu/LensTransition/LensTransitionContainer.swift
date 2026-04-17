@@ -1823,6 +1823,24 @@ func sideFractionEase(_ uIn: Double) -> Double {
     return max(0.0, min(1.0, eased))
 }
 
+// MARK: - Internal exports
+//
+// Thin internal wrappers around the file-private SDF / CAFilter helpers so
+// other CrystalUI files (the context-menu controller) can spin up a
+// matching displacement filter without re-implementing the runtime dance.
+
+internal func crystal_makeSDFObject(_ className: String) -> NSObject? {
+    return createObject(className: className)
+}
+
+internal func crystal_makeCAFilter(name: String) -> NSObject? {
+    return createFilter(name: name)
+}
+
+internal func crystal_setCAFilterName(_ object: NSObject, _ name: String) {
+    setFilterName(object: object, name: name)
+}
+
 // Radius transition fraction easing fitted to your series.
 /// Normalization:
 /// - step 0  -> 0.0

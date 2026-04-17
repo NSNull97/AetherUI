@@ -54,6 +54,12 @@ public final class ContextMenuController {
 
     private weak var hostView: UIView?
     private var dimView: UIView?
+    /// Outer wrapper UIView that owns the SDF lens distortion filter (iOS 26+).
+    /// `menuContainer` lives inside it as the visible glass surface; SDF filters
+    /// applied to `sdfHost.layer` distort the rendering of everything inside.
+    /// On older systems `sdfHost` is just a plain wrapper with no filters.
+    private var sdfHost: UIView?
+    private var sdfFilter: AnyObject?  // erased LensSDFFilter? for pre-iOS-26 build
     private var menuContainer: UIVisualEffectView?
     private var snapshotView: UIView?
     private var actionsView: ContextMenuActionsView?
@@ -107,22 +113,40 @@ public final class ContextMenuController {
         self.sourceRectInHost = sourceRectInHost
         self.sourceCornerRadius = sourceCornerRadius
 
-        // SINGLE morphing container: one glass surface that starts as the
-        // button's shape (sourceRect + sourceCornerRadius) and animates to
-        // the menu's shape (menuFrame + menuCornerRadius). No external lens,
-        // no separate source-effect-view — everything lives inside this one
-        // entity, so the morph reads as a single unfolding action.
+        // Two-layer wrapper. `sdfHost` is the morphing entity that owns the
+        // SDF lens distortion filter on iOS 26+ — its layer is what
+        // CASDFGlassDisplacementEffect rewrites pixel positions on. The
+        // visible glass (UIVisualEffectView) lives inside, auto-resizing to
+        // fill the wrapper. Filters apply transitively to the rendered
+        // glass + content.
+        //
+        // The wrapper carries the cornerRadius + clipping (the menuContainer
+        // inside has its own corner-clipping disabled to avoid a double-clip
+        // mismatch as cornerRadius animates).
+        let sdfHost = UIView(frame: sourceRectInHost)
+        sdfHost.layer.cornerRadius = sourceCornerRadius
+        sdfHost.layer.masksToBounds = true
+        if #available(iOS 13.0, *) {
+            sdfHost.layer.cornerCurve = .continuous
+        }
+        host.addSubview(sdfHost)
+        self.sdfHost = sdfHost
+
         let menuContainer = UIVisualEffectView(effect: ContextMenuController.makeMenuEffect(
             isDark: source.traitCollection.userInterfaceStyle == .dark
         ))
-        menuContainer.frame = sourceRectInHost
-        menuContainer.layer.cornerRadius = sourceCornerRadius
-        menuContainer.layer.masksToBounds = true
-        if #available(iOS 13.0, *) {
-            menuContainer.layer.cornerCurve = .continuous
-        }
-        host.addSubview(menuContainer)
+        menuContainer.frame = sdfHost.bounds
+        menuContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        sdfHost.addSubview(menuContainer)
         self.menuContainer = menuContainer
+
+        // Install SDF lens filter (iOS 26+). On older systems we fall back to
+        // a non-distorted morph — the cornerRadius + frame spring still gives
+        // a clean "glass expanding" feel; the SDF just adds the wobbly bulge.
+        if #available(iOS 26.0, *), let filter = LensSDFFilter() {
+            filter.install(on: sdfHost.layer, size: sourceRectInHost.size, cornerRadius: sourceCornerRadius)
+            self.sdfFilter = filter
+        }
 
         // Capture the source button's pixels BEFORE we hide it. The snapshot
         // sits at top-left of the container at source size — at t=0 it
@@ -162,14 +186,16 @@ public final class ContextMenuController {
             if shouldAutoDismiss { self.dismiss(animated: true) }
         }
 
-        // Stretch the WHOLE menu container toward active touch.
-        actionsView.onStretchUpdate = { [weak self, weak menuContainer, weak actionsView] point in
-            guard let self, let menuContainer, let actionsView else { return }
-            self.applyStretch(toContainer: menuContainer, touchInActions: point, actionsBounds: actionsView.bounds, animated: false)
+        // Stretch the WHOLE morphing entity (the sdfHost wrapper) toward
+        // the active touch — translates the SDF host so the lens distortion
+        // and glass surface lean as a single unit.
+        actionsView.onStretchUpdate = { [weak self, weak sdfHost, weak actionsView] point in
+            guard let self, let sdfHost, let actionsView else { return }
+            self.applyStretch(toContainer: sdfHost, touchInActions: point, actionsBounds: actionsView.bounds, animated: false)
         }
-        actionsView.onStretchRelease = { [weak self, weak menuContainer] in
-            guard let self, let menuContainer else { return }
-            self.releaseStretch(onContainer: menuContainer)
+        actionsView.onStretchRelease = { [weak self, weak sdfHost] in
+            guard let self, let sdfHost else { return }
+            self.releaseStretch(onContainer: sdfHost)
         }
 
         // Haptic.
@@ -184,7 +210,13 @@ public final class ContextMenuController {
         CATransaction.commit()
         CATransaction.flush()
 
-        animateIn(dim: dim, container: menuContainer, snapshot: snapshot, actionsView: actionsView)
+        animateIn(
+            dim: dim,
+            sdfHost: sdfHost,
+            snapshot: snapshot,
+            actionsView: actionsView,
+            sourceMinSide: min(sourceRectInHost.width, sourceRectInHost.height)
+        )
     }
 
     public func dismiss(animated: Bool = true) {
@@ -193,6 +225,7 @@ public final class ContextMenuController {
 
         let host = hostView
         let dim = dimView
+        let sdfHost = self.sdfHost
         let container = menuContainer
         let snapshot = snapshotView
         let actionsView = self.actionsView
@@ -212,13 +245,19 @@ public final class ContextMenuController {
             CATransaction.setDisableActions(true)
             sourceView?.alpha = 1.0
             CATransaction.commit()
+            if #available(iOS 26.0, *), let filter = self?.sdfFilter as? LensSDFFilter {
+                filter.uninstall()
+            }
             dim?.removeFromSuperview()
+            sdfHost?.removeFromSuperview()
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
             snapshot?.removeFromSuperview()
             host?.removeFromSuperview()
             self?.hostView = nil
             self?.dimView = nil
+            self?.sdfHost = nil
+            self?.sdfFilter = nil
             self?.menuContainer = nil
             self?.snapshotView = nil
             self?.actionsView = nil
@@ -228,18 +267,18 @@ public final class ContextMenuController {
             }
         }
 
-        guard animated, let container else { cleanup(); return }
+        guard animated, let sdfHost else { cleanup(); return }
 
-        // Reverse: container shrinks back to source rect + corner, actions
-        // fade out, snapshot fades back in so the final visible thing at
-        // sourceRect is identical to the original source button.
+        // Reverse morph on sdfHost (= the morphing entity carrying the SDF
+        // filter). The internal menuContainer auto-resizes, snapshot stays at
+        // top-left source size, actionsView fades out.
         let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
-        radiusAnim.fromValue = container.layer.cornerRadius
+        radiusAnim.fromValue = sdfHost.layer.cornerRadius
         radiusAnim.toValue = sourceCornerRadius
         radiusAnim.duration = ContextMenuController.dismissDuration
         radiusAnim.timingFunction = CAMediaTimingFunction(name: .easeIn)
-        container.layer.cornerRadius = sourceCornerRadius
-        container.layer.add(radiusAnim, forKey: "cornerRadius")
+        sdfHost.layer.cornerRadius = sourceCornerRadius
+        sdfHost.layer.add(radiusAnim, forKey: "cornerRadius")
 
         UIView.animate(
             withDuration: ContextMenuController.dismissDuration,
@@ -248,12 +287,25 @@ public final class ContextMenuController {
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
             animations: {
-                container.frame = sourceRect
-                container.transform = .identity
+                sdfHost.frame = sourceRect
+                sdfHost.transform = .identity
                 dim?.alpha = 0.0
+                if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
+                    filter.updateLayout(size: sourceRect.size, cornerRadius: self.sourceCornerRadius)
+                }
             },
             completion: { _ in cleanup() }
         )
+
+        // Re-apply the SDF wobble for the morph-out (strong → none).
+        if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
+            let minSide = min(sourceRect.width, sourceRect.height)
+            filter.animateDisplacement(
+                fromHeight: minSide * 0.25, toHeight: 0.001,
+                duration: ContextMenuController.dismissDuration
+            )
+            filter.animateBlur(duration: ContextMenuController.dismissDuration)
+        }
 
         UIView.animate(
             withDuration: ContextMenuController.dismissDuration * 0.4,
@@ -276,21 +328,29 @@ public final class ContextMenuController {
 
     // MARK: - Animate in
 
-    private func animateIn(dim: UIView, container: UIVisualEffectView, snapshot: UIView, actionsView: ContextMenuActionsView) {
+    private func animateIn(
+        dim: UIView,
+        sdfHost: UIView,
+        snapshot: UIView,
+        actionsView: ContextMenuActionsView,
+        sourceMinSide: CGFloat
+    ) {
         // 1) Dim fades in.
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut], animations: {
             dim.alpha = 1.0
         })
 
-        // 2) Container morphs from source rect → menu rect with spring.
-        // CornerRadius animates via CABasicAnimation on the same curve.
+        // 2) sdfHost (= the morphing entity) morphs from source rect → menu
+        // rect with spring. CornerRadius animates via CABasicAnimation, and
+        // the SDF filter (if installed) is given matching keyframed
+        // displacement + blur ramps so the lens wobble follows the morph.
         let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
         radiusAnim.fromValue = sourceCornerRadius
         radiusAnim.toValue = ContextMenuActionsView.cornerRadius
         radiusAnim.duration = ContextMenuController.morphDuration
         radiusAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.4, 1.0)
-        container.layer.cornerRadius = ContextMenuActionsView.cornerRadius
-        container.layer.add(radiusAnim, forKey: "cornerRadius")
+        sdfHost.layer.cornerRadius = ContextMenuActionsView.cornerRadius
+        sdfHost.layer.add(radiusAnim, forKey: "cornerRadius")
 
         UIView.animate(
             withDuration: ContextMenuController.morphDuration,
@@ -299,10 +359,28 @@ public final class ContextMenuController {
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
             animations: {
-                container.frame = self.menuFrameInHost
+                sdfHost.frame = self.menuFrameInHost
+                if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
+                    filter.updateLayout(
+                        size: self.menuFrameInHost.size,
+                        cornerRadius: ContextMenuActionsView.cornerRadius
+                    )
+                }
             },
             completion: nil
         )
+
+        // SDF wobble: strong displacement at t=0 decaying to none, and a
+        // matching blur ramp. The displacement amount is rooted in the
+        // source button's smaller side so smaller buttons get proportionally
+        // smaller bulges.
+        if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
+            filter.animateDisplacement(
+                fromHeight: sourceMinSide * 0.25, toHeight: 0.001,
+                duration: ContextMenuController.morphDuration
+            )
+            filter.animateBlur(duration: ContextMenuController.morphDuration)
+        }
 
         // 3) Cross-fade snapshot → actions view.
         // Snapshot fades out fast (most of it gone in the first ~30% of morph)
