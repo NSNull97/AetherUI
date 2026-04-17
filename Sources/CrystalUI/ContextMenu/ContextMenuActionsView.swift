@@ -21,9 +21,14 @@ final class ContextMenuActionsView: UIView {
     static let preferredWidth: CGFloat = 260.0
     static let headerHeight: CGFloat = 32.0
     static let separatorHeight: CGFloat = 8.0
-    static let highlightHorizontalInset: CGFloat = 6.0
-    static let highlightCornerRadius: CGFloat = 14.0
+    static let highlightHorizontalInset: CGFloat = 0.0
+    static let highlightCornerRadius: CGFloat = 20.0
     static let backRowHeight: CGFloat = 44.0
+    /// Inset applied to the content area inside the menu's glass surface.
+    /// Rows + headers + separators all live inside `bounds.inset(by:)` of
+    /// this. Each row's own `horizontalInset` is then set to 0 so the
+    /// 16pt outer padding isn't doubled.
+    static let contentInset: UIEdgeInsets = .init(top: 16, left: 16, bottom: 16, right: 16)
 
     // MARK: - Subviews
 
@@ -33,7 +38,11 @@ final class ContextMenuActionsView: UIView {
     /// with UIGlassEffect / UIBlurEffect) — this view is just rows on
     /// transparent background.
     private let contentContainer = UIView()
-    private let highlightView = UIView()
+    /// Glass selection pill (like the tab bar's `LiquidLensView`). Sits
+    /// on top of the rows and slides between them via spring animation.
+    /// On iOS 26+ uses native UIGlassEffect (so it visibly refracts the
+    /// content underneath); falls back to a tinted backdrop blur otherwise.
+    private let highlightView: GlassBackgroundView
     private var rowViews: [RowEntry] = []
 
     // MARK: - State
@@ -88,6 +97,7 @@ final class ContextMenuActionsView: UIView {
     init(items: [ContextMenuItem], headerStyle: HeaderStyle = .none) {
         self.items = items
         self.headerStyle = headerStyle
+        self.highlightView = GlassBackgroundView(style: .regular)
 
         super.init(frame: .zero)
 
@@ -96,7 +106,6 @@ final class ContextMenuActionsView: UIView {
         contentContainer.clipsToBounds = false
         addSubview(contentContainer)
 
-        highlightView.backgroundColor = UIColor.label.withAlphaComponent(0.08)
         highlightView.layer.cornerRadius = ContextMenuActionsView.highlightCornerRadius
         if #available(iOS 13.0, *) {
             highlightView.layer.cornerCurve = .continuous
@@ -113,10 +122,12 @@ final class ContextMenuActionsView: UIView {
     // MARK: - Public
 
     /// Intrinsic size for a given width — sums the heights of the items
-    /// (plus the header row when one is configured).
+    /// (plus the header row when one is configured) and adds the
+    /// `contentInset` top + bottom.
     func preferredSize(maxWidth: CGFloat) -> CGSize {
         let width = min(maxWidth, ContextMenuActionsView.preferredWidth)
-        var height: CGFloat = 0.0
+        let inset = ContextMenuActionsView.contentInset
+        var height: CGFloat = inset.top + inset.bottom
         if hasHeader { height += ContextMenuActionsView.backRowHeight }
         for item in items {
             height += heightForItem(item)
@@ -134,28 +145,42 @@ final class ContextMenuActionsView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        let frame = CGRect(origin: .zero, size: bounds.size)
-        contentContainer.frame = frame
+        // contentContainer is inset by 16pt on all sides. Rows live inside
+        // and are positioned in contentContainer-local coords starting at
+        // (0, 0). Each row's internal slots already use 0 horizontal inset
+        // (the outer 16pt is enough), so text/icons sit visually 16pt
+        // from the menu's glass edge.
+        contentContainer.frame = bounds.inset(by: ContextMenuActionsView.contentInset)
 
+        let contentWidth = contentContainer.bounds.width
         var y: CGFloat = 0.0
-        // When a header is configured the first rowView is the header row.
         let itemsStart = hasHeader ? 1 : 0
         if itemsStart > 0 {
             rowViews[0].view.frame = CGRect(
-                x: 0, y: y, width: bounds.width,
+                x: 0, y: y, width: contentWidth,
                 height: ContextMenuActionsView.backRowHeight
             )
             y += ContextMenuActionsView.backRowHeight
         }
         for (index, item) in items.enumerated() {
             let h = heightForItem(item)
-            rowViews[itemsStart + index].view.frame = CGRect(x: 0, y: y, width: bounds.width, height: h)
+            rowViews[itemsStart + index].view.frame = CGRect(x: 0, y: y, width: contentWidth, height: h)
             y += h
         }
 
         // Reposition the highlight if it's currently anchored on a row.
         if let highlightedIndex {
-            highlightView.frame = highlightFrame(forRowAt: highlightedIndex)
+            let frame = highlightFrame(forRowAt: highlightedIndex)
+            highlightView.frame = frame
+            highlightView.update(
+                size: frame.size,
+                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+                isDark: traitCollection.userInterfaceStyle == .dark,
+                tintColor: .init(kind: .panel),
+                isInteractive: false,
+                isVisible: true,
+                transition: .immediate
+            )
         }
     }
 
@@ -204,9 +229,20 @@ final class ContextMenuActionsView: UIView {
 
         highlightedIndex = index
 
+        let isDark = traitCollection.userInterfaceStyle == .dark
+
         if isFirstShow {
             // First show: jump to position with no slide, only fade in.
             highlightView.frame = targetFrame
+            highlightView.update(
+                size: targetFrame.size,
+                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+                isDark: isDark,
+                tintColor: .init(kind: .panel),
+                isInteractive: false,
+                isVisible: true,
+                transition: .immediate
+            )
             UIView.animate(
                 withDuration: 0.15, delay: 0,
                 options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
@@ -216,8 +252,14 @@ final class ContextMenuActionsView: UIView {
             return
         }
 
-        // Subsequent moves: slide via spring.
+        // Subsequent moves: slide via spring (matches the tab bar's lens
+        // motion). `glassBackground.update(...)` is also given the same
+        // animated transition so its internal sizing tracks the spring.
         if animated {
+            let glassTransition: ContainedViewLayoutTransition = .animated(
+                duration: 0.32,
+                curve: .customSpring(damping: 0.85, initialVelocity: 0)
+            )
             UIView.animate(
                 withDuration: 0.32, delay: 0,
                 usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
@@ -225,8 +267,26 @@ final class ContextMenuActionsView: UIView {
                 animations: { self.highlightView.frame = targetFrame },
                 completion: nil
             )
+            highlightView.update(
+                size: targetFrame.size,
+                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+                isDark: isDark,
+                tintColor: .init(kind: .panel),
+                isInteractive: false,
+                isVisible: true,
+                transition: glassTransition
+            )
         } else {
             highlightView.frame = targetFrame
+            highlightView.update(
+                size: targetFrame.size,
+                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+                isDark: isDark,
+                tintColor: .init(kind: .panel),
+                isInteractive: false,
+                isVisible: true,
+                transition: .immediate
+            )
         }
     }
 
@@ -268,16 +328,25 @@ final class ContextMenuActionsView: UIView {
     }
 
     /// Returns the index of the enabled tappable row (action OR header row)
-    /// whose frame contains `point`. Headers / separators / disabled rows
-    /// return nil.
+    /// whose frame contains `point`. `point` is in actions-view bounds; rows
+    /// live inside the inset contentContainer so we offset by its origin
+    /// before hit-testing. Headers / separators / disabled rows return nil.
     private func enabledRowIndex(at point: CGPoint) -> Int? {
+        let pointInContent = convertToContentContainer(point)
         for (index, entry) in rowViews.enumerated() {
-            guard entry.view.frame.contains(point) else { continue }
+            guard entry.view.frame.contains(pointInContent) else { continue }
             if entry.isHeaderRow { return index }
             guard let actionItem = entry.actionItem, actionItem.isEnabled else { return nil }
             return index
         }
         return nil
+    }
+
+    private func convertToContentContainer(_ point: CGPoint) -> CGPoint {
+        return CGPoint(
+            x: point.x - contentContainer.frame.minX,
+            y: point.y - contentContainer.frame.minY
+        )
     }
 
     private func highlightFrame(forRowAt index: Int) -> CGRect {
