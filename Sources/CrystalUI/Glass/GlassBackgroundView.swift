@@ -215,6 +215,29 @@ public class GlassBackgroundView: UIView {
 
     public private(set) var params: Params?
 
+    /// When `true` (default) the glass automatically re-applies its last
+    /// `update(...)` with an `isDark` value derived from
+    /// `traitCollection.userInterfaceStyle` whenever the trait collection
+    /// changes. This fixes mixed-tint glass on screens where only some
+    /// call sites go through the short-form `update`, and keeps all
+    /// GlassBackgroundView instances visually consistent as the system
+    /// toggles light/dark. Set to `false` if you want the explicit
+    /// `isDark` you passed to update(...) to stay pinned regardless of
+    /// trait changes (e.g. a forced-dark glass on a blue custom background).
+    public var tracksTraitCollection: Bool = true
+
+    /// Remembers the last `cornerRadius`, `tintColor`, `isInteractive`,
+    /// `isVisible` the caller passed to `update(...)`. Only referenced by
+    /// `traitCollectionDidChange` to rebuild params with a fresh isDark.
+    private struct UpdateMemo {
+        let size: CGSize
+        let cornerRadius: CGFloat
+        let tintColor: TintColor
+        let isInteractive: Bool
+        let isVisible: Bool
+    }
+    private var lastUpdateMemo: UpdateMemo?
+
     // Legacy back-compat: expose GlassParams for callers that read it.
     public var glassParams: GlassParams? {
         guard let params else { return nil }
@@ -336,6 +359,26 @@ public class GlassBackgroundView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // MARK: Trait tracking
+
+    public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard tracksTraitCollection, let memo = lastUpdateMemo else { return }
+        // Only re-apply if the resolved dark/light style actually changed —
+        // avoids unnecessary redraws on e.g. content size category changes.
+        let previousStyle = previousTraitCollection?.userInterfaceStyle
+        if previousStyle == traitCollection.userInterfaceStyle { return }
+        update(
+            size: memo.size,
+            cornerRadius: memo.cornerRadius,
+            isDark: traitCollection.userInterfaceStyle == .dark,
+            tintColor: memo.tintColor,
+            isInteractive: memo.isInteractive,
+            isVisible: memo.isVisible,
+            transition: .immediate
+        )
+    }
+
     // MARK: Hit testing
 
     public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -393,6 +436,15 @@ public class GlassBackgroundView: UIView {
         isVisible: Bool = true,
         transition: ContainedViewLayoutTransition
     ) {
+        // Remember everything except `isDark` so `traitCollectionDidChange`
+        // can rebuild the params with a fresh trait-derived isDark.
+        self.lastUpdateMemo = UpdateMemo(
+            size: size,
+            cornerRadius: cornerRadius,
+            tintColor: tintColor,
+            isInteractive: isInteractive,
+            isVisible: isVisible
+        )
         let shape: Shape = .roundedRect(cornerRadius: cornerRadius)
 
         // Native UIGlassEffect pipeline
