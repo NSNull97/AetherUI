@@ -30,7 +30,11 @@ final class ContextMenuActionItemView: UIView {
 
     static let rowHeight: CGFloat = 44.0
     static let rowHeightWithSubtitle: CGFloat = 56.0
-    static let horizontalInset: CGFloat = 16.0
+    /// Internal horizontal inset of a row. The PARENT actions view applies
+    /// its own 16pt `contentInset` around the row container, so leaving
+    /// this at 0 means text + slot positions sit 16pt from the menu's
+    /// glass edge (no double-padding).
+    static let horizontalInset: CGFloat = 0.0
     static let leadingSlotWidth: CGFloat = 18.0
     static let leadingSlotSpacing: CGFloat = 12.0
     static let trailingIconSize: CGFloat = 22.0
