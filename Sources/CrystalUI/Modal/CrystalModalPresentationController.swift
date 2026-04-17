@@ -310,6 +310,13 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         settleAnimating = true
 
         let link = CADisplayLink(target: self, selector: #selector(tickSettleLink))
+        if #available(iOS 15.0, *) {
+            // Opt into ProMotion 120Hz. Requires the host app's Info.plist
+            // to include `CADisableMinimumFrameDurationOnPhone = YES`
+            // (otherwise iOS caps the display link at 60Hz regardless of
+            // the range).
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60.0, maximum: 120.0, preferred: 120.0)
+        }
         link.add(to: .main, forMode: .common)
         settleLink = link
     }
