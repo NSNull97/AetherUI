@@ -69,11 +69,16 @@ public final class ContextMenuController {
     private var snapshotView: UIView?
     private var actionsView: ContextMenuActionsView?
     private var tapRecognizer: UITapGestureRecognizer?
-    /// Stack of menu pages. Index 0 is the root (built in present()); each
-    /// submenu push appends, each back-tap pops. Top of stack is always the
-    /// page receiving touches; lower pages are kept around so we can pop
-    /// back to them without rebuilding.
-    private var pageStack: [ContextMenuActionsView] = []
+    /// Inline submenu overlay (Yandex Music style). When non-nil, the parent
+    /// `actionsView` is dimmed + disabled and `submenuCard` is overlaid on
+    /// the parent menu, anchored to the source row's Y position. Tap on the
+    /// card's header chevron OR on the dimmed parent collapses it.
+    private var submenuCard: UIVisualEffectView?
+    private var submenuActions: ContextMenuActionsView?
+    /// Transparent hit-target placed inside `sdfHost` while a submenu is
+    /// open: catches taps that miss the submenu card and collapses instead
+    /// of dismissing the entire menu.
+    private var submenuCollapseHitView: UIView?
 
     private var menuFrameInHost: CGRect = .zero
     private var sourceRectInHost: CGRect = .zero
@@ -180,7 +185,6 @@ public final class ContextMenuController {
         actionsView.alpha = 0.0
         menuContainer.contentView.addSubview(actionsView)
         self.actionsView = actionsView
-        self.pageStack = [actionsView]
 
         // Tap-outside to dismiss.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
@@ -255,7 +259,11 @@ public final class ContextMenuController {
             self?.menuContainer = nil
             self?.snapshotView = nil
             self?.actionsView = nil
-            self?.pageStack.removeAll()
+            self?.submenuCard?.removeFromSuperview()
+            self?.submenuCard = nil
+            self?.submenuActions = nil
+            self?.submenuCollapseHitView?.removeFromSuperview()
+            self?.submenuCollapseHitView = nil
             self?.onDismiss?()
             if let strongSelf = self {
                 ContextMenuController.presentedControllers.remove(strongSelf.retainBox)
@@ -555,7 +563,8 @@ public final class ContextMenuController {
     private func wireActionsView(
         _ view: ContextMenuActionsView,
         handle: ContextMenuDismissHandle,
-        sdfHost: UIView
+        sdfHost: UIView,
+        isSubmenu: Bool = false
     ) {
         view.onActionSelected = { [weak self] actionItem in
             guard let self else { return }
@@ -564,120 +573,193 @@ public final class ContextMenuController {
             if shouldAutoDismiss { self.dismiss(animated: true) }
         }
         view.onSubmenuRequested = { [weak self] actionItem in
-            self?.pushSubmenu(from: actionItem)
+            self?.openInlineSubmenu(from: actionItem)
         }
-        view.onBackTapped = { [weak self] in
-            self?.popSubmenu()
+        view.onHeaderTapped = { [weak self] in
+            // The submenu card's header (down-chevron) collapses the card.
+            // The root actions view never has a header, so this only fires
+            // for submenu cards.
+            self?.collapseInlineSubmenu()
         }
         view.onStretchUpdate = { [weak self, weak sdfHost, weak view] point in
             guard let self, let sdfHost, let view else { return }
+            // Stretch only the parent host. Submenu cards don't carry the
+            // SDF lens — they're a lightweight popover.
+            if isSubmenu { return }
             self.applyStretch(toContainer: sdfHost, touchInActions: point, actionsBounds: view.bounds, animated: false)
         }
         view.onStretchRelease = { [weak self, weak sdfHost] in
-            guard let self, let sdfHost else { return }
+            guard let self, let sdfHost, !isSubmenu else { return }
             self.releaseStretch(onContainer: sdfHost)
         }
     }
 
-    private static let pageTransitionDuration: TimeInterval = 0.36
-    private static let pageTransitionDamping: CGFloat = 0.78
+    // MARK: - Inline submenu (Yandex-Music-style overlay)
 
-    /// Push a submenu page. The current top slides slightly left + fades,
-    /// the new page slides in from the right; the menu container resizes
-    /// its height to fit the new page (top-anchored, so the menu's top
-    /// edge stays put).
-    private func pushSubmenu(from item: ContextMenuActionItem) {
+    private static let submenuTransitionDuration: TimeInterval = 0.32
+    private static let submenuTransitionDamping: CGFloat = 0.82
+    /// Alpha applied to the parent actions view while a submenu card is open.
+    /// The dimmed parent stays visible so the user has visual context, but
+    /// becomes secondary to the popped-out submenu.
+    private static let submenuParentDimAlpha: CGFloat = 0.32
+
+    /// Open an inline submenu card overlaid on the parent menu, anchored to
+    /// the source row's Y position. The parent actions view dims behind it;
+    /// taps that miss the card collapse it (caught by `submenuCollapseHitView`).
+    private func openInlineSubmenu(from item: ContextMenuActionItem) {
         guard
             let submenu = item.submenu,
-            let menuContainer = self.menuContainer,
+            let host = self.hostView,
             let sdfHost = self.sdfHost,
-            let dismissHandle = self.dismissHandle,
-            let topPage = pageStack.last
+            let menuContainer = self.menuContainer,
+            let parentActions = self.actionsView,
+            let handle = self.dismissHandle
         else { return }
 
-        let containerBounds = menuContainer.bounds
-        let newPage = ContextMenuActionsView(items: submenu, backTitle: item.title)
-        let newPageSize = newPage.preferredSize(maxWidth: containerBounds.width)
-        newPage.frame = CGRect(
-            x: containerBounds.width, y: 0,
-            width: containerBounds.width, height: newPageSize.height
-        )
-        newPage.autoresizingMask = []
-        menuContainer.contentView.addSubview(newPage)
-        wireActionsView(newPage, handle: dismissHandle, sdfHost: sdfHost)
+        // If a submenu is already open, collapse it first (we don't stack
+        // inline submenus — only one card at a time).
+        if submenuCard != nil {
+            collapseInlineSubmenu(animated: false)
+        }
 
-        pageStack.append(newPage)
-        self.actionsView = newPage
+        // Build the card.
+        let isDark = sdfHost.traitCollection.userInterfaceStyle == .dark
+        let card = UIVisualEffectView(effect: ContextMenuController.makeMenuEffect(isDark: isDark))
+        card.layer.cornerRadius = ContextMenuActionsView.cornerRadius
+        card.layer.masksToBounds = true
+        if #available(iOS 13.0, *) {
+            card.layer.cornerCurve = .continuous
+        }
+
+        let submenuActions = ContextMenuActionsView(
+            items: submenu,
+            headerStyle: .disclosure(title: item.title)
+        )
+        let cardWidth = sdfHost.bounds.width
+        let cardSize = submenuActions.preferredSize(maxWidth: cardWidth)
+        submenuActions.frame = CGRect(origin: .zero, size: cardSize)
+        submenuActions.autoresizingMask = [.flexibleWidth]
+        card.contentView.addSubview(submenuActions)
+        wireActionsView(submenuActions, handle: handle, sdfHost: sdfHost, isSubmenu: true)
+
+        // Anchor card.minY to the source row's Y in screen coords. We can
+        // approximate by finding the touched item's row in `parentActions`
+        // — but a simpler robust path is "use the source row's frame directly".
+        let cardOriginInParent = sourceRowFrame(for: item, in: parentActions)?.origin ?? .zero
+        let cardOriginInHost = parentActions.convert(cardOriginInParent, to: host)
+        let cardFrame = CGRect(
+            x: sdfHost.frame.minX,
+            y: cardOriginInHost.y,
+            width: cardWidth,
+            height: cardSize.height
+        )
+        card.frame = cardFrame
+        host.addSubview(card)
+        self.submenuCard = card
+        self.submenuActions = submenuActions
+
+        // Hit-target inside sdfHost that catches taps which miss the card.
+        // Lives BELOW the card in the host hierarchy (sdfHost is below the
+        // card sibling), so card touches still go to the card first.
+        let hitView = UIView(frame: sdfHost.bounds)
+        hitView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hitView.backgroundColor = .clear
+        let collapseTap = UITapGestureRecognizer(target: self, action: #selector(handleCollapseTap))
+        hitView.addGestureRecognizer(collapseTap)
+        sdfHost.addSubview(hitView)
+        self.submenuCollapseHitView = hitView
+
+        // Dim parent + disable its touches so the card / hit-view interaction
+        // model cleanly takes over.
+        parentActions.isUserInteractionEnabled = false
+
+        // Spring + fade-in. Card scales from 0.96 to 1.0 anchored at its
+        // header center to match where the source row is — visually it pops
+        // out of the row.
+        card.alpha = 0.0
+        card.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
 
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-        // Resize host to the new page's height. Width unchanged.
-        let newHostFrame = CGRect(
-            x: sdfHost.frame.minX, y: sdfHost.frame.minY,
-            width: sdfHost.frame.width, height: newPageSize.height
-        )
-
         UIView.animate(
-            withDuration: ContextMenuController.pageTransitionDuration,
+            withDuration: ContextMenuController.submenuTransitionDuration,
             delay: 0,
-            usingSpringWithDamping: ContextMenuController.pageTransitionDamping,
+            usingSpringWithDamping: ContextMenuController.submenuTransitionDamping,
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
             animations: {
-                sdfHost.frame = newHostFrame
-                topPage.transform = CGAffineTransform(translationX: -containerBounds.width * 0.25, y: 0)
-                topPage.alpha = 0.0
-                newPage.frame = CGRect(
-                    x: 0, y: 0,
-                    width: containerBounds.width, height: newPageSize.height
-                )
+                card.alpha = 1.0
+                card.transform = .identity
+                parentActions.alpha = ContextMenuController.submenuParentDimAlpha
             },
             completion: nil
         )
     }
 
-    /// Pop the top submenu page. The top slides out to the right + fades;
-    /// the page below restores; the container resizes back to that page's
-    /// height. Does nothing if only the root page remains.
-    private func popSubmenu() {
-        guard pageStack.count > 1,
-              let menuContainer = self.menuContainer,
-              let sdfHost = self.sdfHost else { return }
+    /// Walk the parent actions view's subview tree and return the frame
+    /// (in `parent`'s own coordinates) of the row whose item matches `item`.
+    /// Used to anchor the submenu card's Y position to the row that
+    /// triggered the open.
+    private func sourceRowFrame(for item: ContextMenuActionItem, in parent: UIView) -> CGRect? {
+        guard let row = findActionRow(matching: item, in: parent) else { return nil }
+        return row.convert(row.bounds, to: parent)
+    }
 
-        let topPage = pageStack.removeLast()
-        let restorePage = pageStack.last!
-        self.actionsView = restorePage
+    private func findActionRow(matching item: ContextMenuActionItem, in view: UIView) -> ContextMenuActionItemView? {
+        if let row = view as? ContextMenuActionItemView, row.item.id == item.id {
+            return row
+        }
+        for subview in view.subviews {
+            if let found = findActionRow(matching: item, in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// Close the inline submenu card. Reverses the open animation; restores
+    /// parent alpha + interaction.
+    @discardableResult
+    private func collapseInlineSubmenu(animated: Bool = true) -> Bool {
+        guard let card = submenuCard else { return false }
+        let parentActions = self.actionsView
+        let hitView = self.submenuCollapseHitView
+
+        let teardown = {
+            card.removeFromSuperview()
+            hitView?.removeFromSuperview()
+            parentActions?.isUserInteractionEnabled = true
+            self.submenuCard = nil
+            self.submenuActions = nil
+            self.submenuCollapseHitView = nil
+        }
 
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-        let containerBounds = menuContainer.bounds
-        let restoreSize = restorePage.preferredSize(maxWidth: containerBounds.width)
-        let newHostFrame = CGRect(
-            x: sdfHost.frame.minX, y: sdfHost.frame.minY,
-            width: sdfHost.frame.width, height: restoreSize.height
-        )
+        guard animated else {
+            parentActions?.alpha = 1.0
+            teardown()
+            return true
+        }
 
         UIView.animate(
-            withDuration: ContextMenuController.pageTransitionDuration,
+            withDuration: ContextMenuController.submenuTransitionDuration,
             delay: 0,
-            usingSpringWithDamping: ContextMenuController.pageTransitionDamping,
+            usingSpringWithDamping: 0.95,
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
             animations: {
-                sdfHost.frame = newHostFrame
-                topPage.transform = CGAffineTransform(translationX: containerBounds.width, y: 0)
-                topPage.alpha = 0.0
-                restorePage.transform = .identity
-                restorePage.alpha = 1.0
-                restorePage.frame = CGRect(
-                    x: 0, y: 0,
-                    width: containerBounds.width, height: restoreSize.height
-                )
+                card.alpha = 0.0
+                card.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+                parentActions?.alpha = 1.0
             },
-            completion: { _ in
-                topPage.removeFromSuperview()
-            }
+            completion: { _ in teardown() }
         )
+        return true
+    }
+
+    @objc private func handleCollapseTap() {
+        collapseInlineSubmenu()
     }
 
     // MARK: - Rubber-band stretch
