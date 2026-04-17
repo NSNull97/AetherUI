@@ -114,23 +114,46 @@ public final class GlassButton: UIControl {
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: - Touch feedback
+    //
+    // Port of the navbar back-button press animation (from
+    // `NavigationBackButtonView.applyPressAnimation` / `HighlightTrackingButton`):
+    // a `CASpringAnimation` on `transform.scale` with stiffness / damping
+    // tuned for iOS-26 glass, plus a small alpha dip. The spring's from / to
+    // stay at 1.0 by design — the visible deformation comes from
+    // `UIGlassEffect.isInteractive = true` which the glass background
+    // activates in `layoutSubviews`. On platforms without a real
+    // interactive glass effect the alpha dip gives a minimum acknowledgement.
 
     public override var isHighlighted: Bool {
         didSet {
-            let pressed = isHighlighted
-            let duration: TimeInterval = pressed ? 0.12 : 0.32
-            UIView.animate(
-                withDuration: duration, delay: 0,
-                usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
-                options: [.allowUserInteraction, .beginFromCurrentState],
-                animations: {
-                    self.transform = pressed
-                        ? CGAffineTransform(scaleX: 0.96, y: 0.96)
-                        : .identity
-                    self.alpha = pressed ? 0.9 : 1.0
-                }
-            )
+            guard isHighlighted != oldValue else { return }
+            applyPressAnimation(pressed: isHighlighted)
         }
+    }
+
+    private func applyPressAnimation(pressed: Bool) {
+        let scaleKey = "transform.scale"
+        layer.removeAnimation(forKey: scaleKey)
+
+        let fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)?.floatValue ?? 1.0
+        let toValue: Float = 1.0
+
+        let spring = CASpringAnimation(keyPath: scaleKey)
+        spring.fromValue = fromValue
+        spring.toValue = toValue
+        spring.mass = 1.0
+        spring.stiffness = pressed ? 520.0 : 480.0
+        spring.damping = pressed ? 34.0 : 22.0
+        spring.initialVelocity = 0.0
+        spring.duration = spring.settlingDuration
+        spring.fillMode = .forwards
+        spring.isRemovedOnCompletion = false
+        layer.add(spring, forKey: scaleKey)
+        layer.setValue(toValue, forKeyPath: scaleKey)
+
+        UIView.animate(withDuration: pressed ? 0.1 : 0.25, animations: {
+            self.alpha = pressed ? 0.7 : 1.0
+        })
     }
 
     // MARK: - Layout
