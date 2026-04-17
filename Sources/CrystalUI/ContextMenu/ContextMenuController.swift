@@ -75,11 +75,15 @@ public final class ContextMenuController {
         window.addSubview(host)
         self.hostView = host
 
-        // Dim layer — sits under everything else.
+        // Dim layer — sits under everything else, AND owns the tap-to-dismiss
+        // handler. Anything inside the lens (= the menu) intercepts touches
+        // before they reach dim, so a tap on dim by definition lives outside
+        // the menu rect.
         let dim = UIView(frame: host.bounds)
         dim.backgroundColor = UIColor.black.withAlphaComponent(ContextMenuController.dimAlpha)
         dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         dim.alpha = 0
+        dim.isUserInteractionEnabled = true
         host.addSubview(dim)
         self.dimView = dim
 
@@ -118,10 +122,12 @@ public final class ContextMenuController {
         lens.contentsView.addSubview(actionsView)
         self.actionsView = actionsView
 
-        // Tap-outside to dismiss.
+        // Tap-outside to dismiss — attached to dim so it only fires when the
+        // touch missed the lens. (Touches inside the lens are intercepted by
+        // the lens / actions view earlier in the hit-test chain and never
+        // reach dim.)
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
-        tap.cancelsTouchesInView = false
-        host.addGestureRecognizer(tap)
+        dim.addGestureRecognizer(tap)
         self.tapRecognizer = tap
 
         // Wire up the actions.
@@ -156,7 +162,12 @@ public final class ContextMenuController {
         if let sourceView, let host { sourceRect = sourceView.convert(sourceView.bounds, to: host) }
         else { sourceRect = self.sourceRectInHost }
 
+        // `cleanup` is reentrancy-guarded with a token so the timeout fallback
+        // and the UIView.animate completion can't both run it.
+        var didClean = false
         let cleanup: () -> Void = { [weak self] in
+            if didClean { return }
+            didClean = true
             sourceView?.isHidden = false
             dim?.removeFromSuperview()
             lens?.removeFromSuperview()
@@ -172,8 +183,12 @@ public final class ContextMenuController {
         guard animated, let lens, let sourceView else { cleanup(); return }
 
         // Drive the lens out: a fresh source effect view (with the current source
-        // snapshot) is what the lens animates toward.
+        // snapshot) is what the lens animates toward. Source view is currently
+        // hidden — temporarily unhide it so snapshotView captures real pixels.
+        let wasHidden = sourceView.isHidden
+        sourceView.isHidden = false
         let sourceSnapshotView = makeSourceSnapshot(source: sourceView)
+        sourceView.isHidden = wasHidden
         let sourceEffectView = LensEffectView(contentView: sourceSnapshotView)
         sourceEffectView.updateAppearance(isDark: sourceView.traitCollection.userInterfaceStyle == .dark)
 
@@ -192,6 +207,11 @@ public final class ContextMenuController {
             dim?.alpha = 0.0
             actionsView?.alpha = 0.0
         }, completion: { _ in cleanup() })
+
+        // Defensive timer: even if the alpha animation's completion is starved
+        // (interrupted by a higher-priority animation, app backgrounded, etc.),
+        // the menu still tears down.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { cleanup() }
     }
 
     // MARK: - Animate in
@@ -291,13 +311,9 @@ public final class ContextMenuController {
     // MARK: - Gestures
 
     @objc private func handleBackgroundTap(_ recognizer: UITapGestureRecognizer) {
-        guard let host = hostView else { dismiss(); return }
-        let location = recognizer.location(in: host)
-        // actionsView lives inside the lens.contentsView; the menu rect in
-        // host coordinates is the lens container's frame.
-        if !menuFrameInHost.contains(location) {
-            dismiss()
-        }
+        // Recognizer lives on the dim view, which only receives touches that
+        // missed the lens. Therefore any fired tap is always outside the menu.
+        dismiss()
     }
 }
 
