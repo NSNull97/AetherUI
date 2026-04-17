@@ -24,7 +24,7 @@ final class CrystalModalTransitioningDelegate: NSObject, UIViewControllerTransit
 
 final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTransitioning {
     func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
-        return 0.6
+        return 0.68
     }
 
     func animateTransition(using ctx: UIViewControllerContextTransitioning) {
@@ -43,8 +43,8 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
         UIView.animate(
             withDuration: transitionDuration(using: ctx),
             delay: 0.0,
-            usingSpringWithDamping: 0.78,
-            initialSpringVelocity: 0.2,
+            usingSpringWithDamping: 0.68,
+            initialSpringVelocity: 0.35,
             options: [.allowUserInteraction],
             animations: {
                 toView.frame = finalFrame
