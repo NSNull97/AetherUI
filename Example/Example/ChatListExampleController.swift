@@ -198,10 +198,10 @@ final class ChatListExampleController: ViewController {
     @objc private func editTapped() {}
 
     @objc private func addTapped() {
-        let modal = StickerPackModalController(
-            navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass())
-        )
-        presentModal(modal, animated: true)
+        let content = StickerPackModalController()
+        let modal = CrystalModalController(content: content)
+        modal.primaryScrollView = content.collectionView
+        present(modal, animated: true)
     }
 }
 

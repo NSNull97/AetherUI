@@ -60,7 +60,6 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     private var theme: NavigationControllerTheme
 
     private var rootContainer: RootContainer?
-    private var modalContainers: [NavigationModalContainer] = []
     private var overlayContainers: [NavigationOverlayContainer] = []
 
     public var minimizedContainer: MinimizedContainerProtocol? {
@@ -100,10 +99,6 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     public var topController: ViewController? {
         if let topOverlayController = overlayContainers.last?.controller {
             return topOverlayController
-        }
-
-        if let topModalController = modalContainers.last?.topController {
-            return topModalController
         }
 
         switch rootContainer {
@@ -226,26 +221,14 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
 
     @discardableResult
     public func popViewController(animated: Bool = true) -> ViewController? {
-        guard let layout = currentLayoutForComputation() else {
-            guard _viewControllers.count > 1 else {
-                return nil
-            }
-            return _viewControllers.removeLast()
-        }
-
-        let navigationLayout = makeNavigationLayout(mode: mode, layout: layout, controllers: _viewControllers)
-        if let lastModal = navigationLayout.modal.last, let removedController = lastModal.controllers.last {
-            _viewControllers.removeAll { $0 === removedController }
-            updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
-            return removedController
-        }
-
         guard _viewControllers.count > 1 else {
             return nil
         }
 
         let removedController = _viewControllers.removeLast()
-        updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
+        if let layout = currentLayoutForComputation() {
+            updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
+        }
         return removedController
     }
 
@@ -270,47 +253,6 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
 
         if let layout = currentLayoutForComputation() {
             updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
-        }
-    }
-
-    // MARK: - Modal Presentation
-
-    public func presentModal(_ controller: ViewController, animated: Bool = true, completion: (() -> Void)? = nil) {
-        if case .default = controller.navigationPresentation {
-            controller.navigationPresentation = .modal
-        }
-
-        pushViewController(controller, animated: animated)
-        if animated {
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionForUpdate(animated: true).duration) {
-                completion?()
-            }
-        } else {
-            completion?()
-        }
-    }
-
-    public func dismissModal(animated: Bool = true, completion: (() -> Void)? = nil) {
-        guard let layout = currentLayoutForComputation() else {
-            completion?()
-            return
-        }
-
-        let navigationLayout = makeNavigationLayout(mode: mode, layout: layout, controllers: _viewControllers)
-        guard let lastModal = navigationLayout.modal.last, !lastModal.controllers.isEmpty else {
-            completion?()
-            return
-        }
-
-        removeControllers(lastModal.controllers)
-        updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
-
-        if animated {
-            DispatchQueue.main.asyncAfter(deadline: .now() + transitionForUpdate(animated: true).duration) {
-                completion?()
-            }
-        } else {
-            completion?()
         }
     }
 
@@ -433,9 +375,6 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
         if case let .split(container)? = rootContainer {
             container.updateTheme(theme: theme)
         }
-        for modalContainer in modalContainers {
-            modalContainer.updateTheme(theme)
-        }
 
         if let layout = validLayout {
             updateVisibleContainers(layout: layout, transition: .immediate)
@@ -447,13 +386,9 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     // MARK: - Private
 
     private func updateVisibleContainers(layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        // Per-screen bars: no shared bar to position. Each controller
-        // manages its own bar via containerLayoutUpdated. Pass the full
-        // layout — children compute their own top inset from their bar.
         let navigationLayout = makeNavigationLayout(mode: mode, layout: layout, controllers: _viewControllers)
         updateRootContainer(for: navigationLayout.root, layout: layout, transition: transition)
         updateMinimizedContainer(layout: layout, transition: transition)
-        updateModalContainers(for: navigationLayout.modal, layout: layout, transition: transition)
         updateOverlayContainers(layout: overlayLayout(from: layout), transition: transition)
         cleanupRemovedChildren()
         updateStatusBarAppearance()
@@ -509,75 +444,6 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
         view.bringSubviewToFront(minimizedContainer)
     }
 
-    private func updateModalContainers(for modalLayouts: [ModalContainerLayout], layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        for index in 0..<modalLayouts.count {
-            let modalLayout = modalLayouts[index]
-            let container: NavigationModalContainer
-            let isNewContainer: Bool
-
-            if index < modalContainers.count {
-                container = modalContainers[index]
-                isNewContainer = false
-                container.updateTheme(theme)
-                container.setControllers(modalLayout.controllers, isFlat: modalLayout.isFlat, animated: transition.isAnimated)
-            } else {
-                let newContainer = NavigationModalContainer(
-                    controllers: modalLayout.controllers,
-                    theme: theme,
-                    isFlat: modalLayout.isFlat,
-                    controllerRemoved: { [weak self] controller in
-                        self?.handleControllerRemoved(controller)
-                    },
-                    requestLayout: { [weak self] transition in
-                        self?.requestLayout(transition: transition)
-                    },
-                    dismissRequested: { [weak self] in
-                        self?.dismissModal(animated: true, completion: nil)
-                    }
-                )
-                modalContainers.append(newContainer)
-                view.addSubview(newContainer)
-                container = newContainer
-                isNewContainer = true
-            }
-
-            container.frame = CGRect(origin: .zero, size: layout.size)
-            container.containerLayoutUpdated(layout, transition: transition)
-            if isNewContainer {
-                if transition.isAnimated {
-                    container.animateIn()
-                } else {
-                    container.applyPresentedState()
-                }
-            }
-            view.bringSubviewToFront(container)
-        }
-
-        while modalContainers.count > modalLayouts.count {
-            let container = modalContainers.removeLast()
-            if transition.isAnimated {
-                container.animateOut {
-                    container.removeFromSuperview()
-                }
-            } else {
-                container.removeFromSuperview()
-            }
-        }
-
-        // The backing controller stays in place — modal sheet sits on top
-        // without transforming root content (per user spec).
-    }
-
-    private func isModalPresentation(_ mode: ViewControllerNavigationPresentation) -> Bool {
-        switch mode {
-        case .modal, .flatModal, .standaloneModal, .standaloneFlatModal,
-             .modalInLargeLayout, .modalInCompactLayout:
-            return true
-        case .default, .master:
-            return false
-        }
-    }
-
     private func wireControllers(_ viewControllers: [ViewController]) {
         let barData = NavigationBarPresentationData(theme: theme.navigationBar)
 
@@ -601,8 +467,7 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             if let bar = controller.navigationBarView {
                 bar.item = controller.navigationItem
 
-                // Back button: point to previous non-modal controller.
-                if index > 0, !isModalPresentation(controller.navigationPresentation) {
+                if index > 0 {
                     bar.previousItem = .item(viewControllers[index - 1].navigationItem)
                 } else {
                     bar.previousItem = nil
@@ -724,21 +589,12 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             }
         }
 
-        if let firstModalContainer = modalContainers.first {
-            view.insertSubview(newView, belowSubview: firstModalContainer)
-        } else {
-            view.insertSubview(newView, at: 0)
-        }
+        view.insertSubview(newView, at: 0)
     }
 
     private func updateStatusBarAppearance() {
         currentStatusBarStyle = theme.statusBar
         setNeedsStatusBarAppearanceUpdate()
-    }
-
-    private func removeControllers(_ controllers: [ViewController]) {
-        let identifiers = Set(controllers.map { ObjectIdentifier($0) })
-        _viewControllers.removeAll { identifiers.contains(ObjectIdentifier($0)) }
     }
 
     private func overlayLayout(from layout: ContainerViewLayout) -> ContainerViewLayout {

@@ -1,10 +1,5 @@
 import UIKit
 
-public enum ViewControllerPresentationAnimation {
-    case none
-    case modalSheet
-}
-
 public struct ViewControllerSupportedOrientations: Equatable {
     public var regularSize: UIInterfaceOrientationMask
     public var compactSize: UIInterfaceOrientationMask
@@ -22,25 +17,9 @@ public struct ViewControllerSupportedOrientations: Equatable {
     }
 }
 
-open class ViewControllerPresentationArguments {
-    public let presentationAnimation: ViewControllerPresentationAnimation
-    public let completion: (() -> Void)?
-
-    public init(presentationAnimation: ViewControllerPresentationAnimation = .none, completion: (() -> Void)? = nil) {
-        self.presentationAnimation = presentationAnimation
-        self.completion = completion
-    }
-}
-
 public enum ViewControllerNavigationPresentation {
     case `default`
     case master
-    case modal
-    case flatModal
-    case standaloneModal
-    case standaloneFlatModal
-    case modalInLargeLayout
-    case modalInCompactLayout
 }
 
 public enum TabBarItemContextActionType {
@@ -87,18 +66,7 @@ public enum TabBarItemContextActionType {
 
     open var previousItem: NavigationPreviousAction?
     open var navigationPresentation: ViewControllerNavigationPresentation = .default
-    open var _presentedInModal: Bool = false
     open var _hasGlassStyle: Bool = false
-    open var flatReceivesModalTransition: Bool = false
-
-    public final var isOpaqueWhenInOverlay: Bool = false
-    public final var blocksBackgroundWhenInOverlay: Bool = false
-    public final var acceptsFocusWhenInOverlay: Bool = false
-    public final var automaticallyControlPresentationContextLayout: Bool = true
-
-    public var presentationArguments: Any?
-    public var presentedOverCoveringView: Bool = false
-    public var updateTransitionWhenPresentedAsModal: ((CGFloat, ContainedViewLayoutTransition) -> Void)?
 
     // MARK: - Tab Bar
 
@@ -106,21 +74,6 @@ public enum TabBarItemContextActionType {
     open var tabBarItemContextActionType: TabBarItemContextActionType = .none
     public private(set) var tabBarSearchState: TabBarSearchState?
     public var tabBarSearchStateUpdated: ((ContainedViewLayoutTransition) -> Void)?
-
-    // MARK: - Modal
-
-    public private(set) var modalStyleOverlayTransitionFactor: CGFloat = 0.0
-    public var modalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
-    public var customModalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
-    public var internalOverlayWantsToBeBelowKeyboardUpdated: ((ContainedViewLayoutTransition) -> Void)?
-
-    public func updateModalStyleOverlayTransitionFactor(_ value: CGFloat, transition: ContainedViewLayoutTransition) {
-        if self.modalStyleOverlayTransitionFactor != value {
-            self.modalStyleOverlayTransitionFactor = value
-            self.modalStyleOverlayTransitionFactorUpdated?(transition)
-            self.customModalStyleOverlayTransitionFactorUpdated?(transition)
-        }
-    }
 
     // MARK: - Search
 
@@ -321,12 +274,7 @@ public enum TabBarItemContextActionType {
 
     open func navigationLayout(layout: ContainerViewLayout) -> NavigationLayout {
         let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
-        let defaultNavigationBarHeight: CGFloat
-        if _presentedInModal && _hasGlassStyle {
-            defaultNavigationBarHeight = 68.0
-        } else {
-            defaultNavigationBarHeight = 60.0
-        }
+        let defaultNavigationBarHeight: CGFloat = 60.0
         let navBarContentHeight = navigationBarView?.contentHeight(defaultHeight: defaultNavigationBarHeight) ?? defaultNavigationBarHeight
         let navigationBarHeight: CGFloat = statusBarHeight + navBarContentHeight + additionalNavigationBarHeight
 
@@ -469,10 +417,6 @@ public enum TabBarItemContextActionType {
         }
     }
 
-    public func overlayWantsToBeBelowKeyboardUpdated(transition: ContainedViewLayoutTransition) {
-        self.internalOverlayWantsToBeBelowKeyboardUpdated?(transition)
-    }
-
     // MARK: - Private
 
     private func updateScrollToTopView() {
@@ -514,17 +458,6 @@ public enum TabBarItemContextActionType {
         } else {
             self.navigationController?.popViewController(animated: animated)
         }
-    }
-
-    /// Present a `.modal` controller above the current stack (sheet-style).
-    /// Walks up the responder chain to find the owning `CrystalNavigationController`.
-    open func presentModal(_ controller: ViewController, animated: Bool = true, completion: (() -> Void)? = nil) {
-        crystalNavigationController?.presentModal(controller, animated: animated, completion: completion)
-    }
-
-    /// Dismiss the topmost modal, if any.
-    open func dismissModal(animated: Bool = true, completion: (() -> Void)? = nil) {
-        crystalNavigationController?.dismissModal(animated: animated, completion: completion)
     }
 
     public func requestLayout(transition: ContainedViewLayoutTransition) {
