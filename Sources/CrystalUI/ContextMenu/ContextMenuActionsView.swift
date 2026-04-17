@@ -26,7 +26,10 @@ final class ContextMenuActionsView: UIView {
 
     // MARK: - Subviews
 
-    private let glassBackground: GlassBackgroundView
+    /// `contentContainer` clips rows to a rounded shape. The glass surface is
+    /// owned by the outer `ContextMenuController.menuContainer`
+    /// (`UIVisualEffectView` with `UIGlassEffect`) — this view is just rows +
+    /// highlight on a transparent background.
     private let contentContainer = UIView()
     private let highlightView = UIView()
     private var rowViews: [RowEntry] = []
@@ -55,18 +58,13 @@ final class ContextMenuActionsView: UIView {
 
     init(items: [ContextMenuItem]) {
         self.items = items
-        self.glassBackground = GlassBackgroundView(style: .regular)
 
         super.init(frame: .zero)
 
-        glassBackground.isUserInteractionEnabled = false
-        addSubview(glassBackground)
+        // No internal glass — the outer container owns it.
+        backgroundColor = .clear
 
-        contentContainer.clipsToBounds = true
-        contentContainer.layer.cornerRadius = ContextMenuActionsView.cornerRadius
-        if #available(iOS 13.0, *) {
-            contentContainer.layer.cornerCurve = .continuous
-        }
+        contentContainer.clipsToBounds = false
         addSubview(contentContainer)
 
         highlightView.backgroundColor = UIColor.label.withAlphaComponent(0.08)
@@ -101,16 +99,6 @@ final class ContextMenuActionsView: UIView {
         super.layoutSubviews()
 
         let frame = CGRect(origin: .zero, size: bounds.size)
-        glassBackground.frame = frame
-        glassBackground.update(
-            size: bounds.size,
-            cornerRadius: ContextMenuActionsView.cornerRadius,
-            isDark: traitCollection.userInterfaceStyle == .dark,
-            tintColor: .init(kind: .panel),
-            isInteractive: false,
-            isVisible: true,
-            transition: .immediate
-        )
         contentContainer.frame = frame
 
         var y: CGFloat = 0.0
