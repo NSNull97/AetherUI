@@ -69,6 +69,11 @@ public final class ContextMenuController {
     private var snapshotView: UIView?
     private var actionsView: ContextMenuActionsView?
     private var tapRecognizer: UITapGestureRecognizer?
+    /// Stack of menu pages. Index 0 is the root (built in present()); each
+    /// submenu push appends, each back-tap pops. Top of stack is always the
+    /// page receiving touches; lower pages are kept around so we can pop
+    /// back to them without rebuilding.
+    private var pageStack: [ContextMenuActionsView] = []
 
     private var menuFrameInHost: CGRect = .zero
     private var sourceRectInHost: CGRect = .zero
@@ -175,33 +180,17 @@ public final class ContextMenuController {
         actionsView.alpha = 0.0
         menuContainer.contentView.addSubview(actionsView)
         self.actionsView = actionsView
+        self.pageStack = [actionsView]
 
         // Tap-outside to dismiss.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
         dim.addGestureRecognizer(tap)
         self.tapRecognizer = tap
 
-        // Wire actions.
+        // Wire root actions view (callbacks + stretch hooks).
         let handle = ContextMenuDismissHandle(dismiss: { [weak self] animated in self?.dismiss(animated: animated) })
         self.dismissHandle = handle
-        actionsView.onActionSelected = { [weak self] actionItem in
-            guard let self else { return }
-            let shouldAutoDismiss = actionItem.action == nil
-            actionItem.action?(actionItem, handle)
-            if shouldAutoDismiss { self.dismiss(animated: true) }
-        }
-
-        // Stretch the WHOLE morphing entity (the sdfHost wrapper) toward
-        // the active touch — translates the SDF host so the lens distortion
-        // and glass surface lean as a single unit.
-        actionsView.onStretchUpdate = { [weak self, weak sdfHost, weak actionsView] point in
-            guard let self, let sdfHost, let actionsView else { return }
-            self.applyStretch(toContainer: sdfHost, touchInActions: point, actionsBounds: actionsView.bounds, animated: false)
-        }
-        actionsView.onStretchRelease = { [weak self, weak sdfHost] in
-            guard let self, let sdfHost else { return }
-            self.releaseStretch(onContainer: sdfHost)
-        }
+        wireActionsView(actionsView, handle: handle, sdfHost: sdfHost)
 
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -266,6 +255,7 @@ public final class ContextMenuController {
             self?.menuContainer = nil
             self?.snapshotView = nil
             self?.actionsView = nil
+            self?.pageStack.removeAll()
             self?.onDismiss?()
             if let strongSelf = self {
                 ContextMenuController.presentedControllers.remove(strongSelf.retainBox)
@@ -555,6 +545,139 @@ public final class ContextMenuController {
 
     @objc private func handleBackgroundTap(_ recognizer: UITapGestureRecognizer) {
         dismiss()
+    }
+
+    // MARK: - Submenu page stack
+
+    /// Hooks an actions view into the controller — action callbacks,
+    /// submenu push, back-tap, and stretch reporting. Used for both the
+    /// root page and pushed submenu pages.
+    private func wireActionsView(
+        _ view: ContextMenuActionsView,
+        handle: ContextMenuDismissHandle,
+        sdfHost: UIView
+    ) {
+        view.onActionSelected = { [weak self] actionItem in
+            guard let self else { return }
+            let shouldAutoDismiss = actionItem.action == nil
+            actionItem.action?(actionItem, handle)
+            if shouldAutoDismiss { self.dismiss(animated: true) }
+        }
+        view.onSubmenuRequested = { [weak self] actionItem in
+            self?.pushSubmenu(from: actionItem)
+        }
+        view.onBackTapped = { [weak self] in
+            self?.popSubmenu()
+        }
+        view.onStretchUpdate = { [weak self, weak sdfHost, weak view] point in
+            guard let self, let sdfHost, let view else { return }
+            self.applyStretch(toContainer: sdfHost, touchInActions: point, actionsBounds: view.bounds, animated: false)
+        }
+        view.onStretchRelease = { [weak self, weak sdfHost] in
+            guard let self, let sdfHost else { return }
+            self.releaseStretch(onContainer: sdfHost)
+        }
+    }
+
+    private static let pageTransitionDuration: TimeInterval = 0.36
+    private static let pageTransitionDamping: CGFloat = 0.78
+
+    /// Push a submenu page. The current top slides slightly left + fades,
+    /// the new page slides in from the right; the menu container resizes
+    /// its height to fit the new page (top-anchored, so the menu's top
+    /// edge stays put).
+    private func pushSubmenu(from item: ContextMenuActionItem) {
+        guard
+            let submenu = item.submenu,
+            let menuContainer = self.menuContainer,
+            let sdfHost = self.sdfHost,
+            let dismissHandle = self.dismissHandle,
+            let topPage = pageStack.last
+        else { return }
+
+        let containerBounds = menuContainer.bounds
+        let newPage = ContextMenuActionsView(items: submenu, backTitle: item.title)
+        let newPageSize = newPage.preferredSize(maxWidth: containerBounds.width)
+        newPage.frame = CGRect(
+            x: containerBounds.width, y: 0,
+            width: containerBounds.width, height: newPageSize.height
+        )
+        newPage.autoresizingMask = []
+        menuContainer.contentView.addSubview(newPage)
+        wireActionsView(newPage, handle: dismissHandle, sdfHost: sdfHost)
+
+        pageStack.append(newPage)
+        self.actionsView = newPage
+
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        // Resize host to the new page's height. Width unchanged.
+        let newHostFrame = CGRect(
+            x: sdfHost.frame.minX, y: sdfHost.frame.minY,
+            width: sdfHost.frame.width, height: newPageSize.height
+        )
+
+        UIView.animate(
+            withDuration: ContextMenuController.pageTransitionDuration,
+            delay: 0,
+            usingSpringWithDamping: ContextMenuController.pageTransitionDamping,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: {
+                sdfHost.frame = newHostFrame
+                topPage.transform = CGAffineTransform(translationX: -containerBounds.width * 0.25, y: 0)
+                topPage.alpha = 0.0
+                newPage.frame = CGRect(
+                    x: 0, y: 0,
+                    width: containerBounds.width, height: newPageSize.height
+                )
+            },
+            completion: nil
+        )
+    }
+
+    /// Pop the top submenu page. The top slides out to the right + fades;
+    /// the page below restores; the container resizes back to that page's
+    /// height. Does nothing if only the root page remains.
+    private func popSubmenu() {
+        guard pageStack.count > 1,
+              let menuContainer = self.menuContainer,
+              let sdfHost = self.sdfHost else { return }
+
+        let topPage = pageStack.removeLast()
+        let restorePage = pageStack.last!
+        self.actionsView = restorePage
+
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        let containerBounds = menuContainer.bounds
+        let restoreSize = restorePage.preferredSize(maxWidth: containerBounds.width)
+        let newHostFrame = CGRect(
+            x: sdfHost.frame.minX, y: sdfHost.frame.minY,
+            width: sdfHost.frame.width, height: restoreSize.height
+        )
+
+        UIView.animate(
+            withDuration: ContextMenuController.pageTransitionDuration,
+            delay: 0,
+            usingSpringWithDamping: ContextMenuController.pageTransitionDamping,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: {
+                sdfHost.frame = newHostFrame
+                topPage.transform = CGAffineTransform(translationX: containerBounds.width, y: 0)
+                topPage.alpha = 0.0
+                restorePage.transform = .identity
+                restorePage.alpha = 1.0
+                restorePage.frame = CGRect(
+                    x: 0, y: 0,
+                    width: containerBounds.width, height: restoreSize.height
+                )
+            },
+            completion: { _ in
+                topPage.removeFromSuperview()
+            }
+        )
     }
 
     // MARK: - Rubber-band stretch

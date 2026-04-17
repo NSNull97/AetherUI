@@ -21,6 +21,10 @@ final class ContextMenuActionItemView: UIView {
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let iconView = UIImageView()
+    /// Trailing `chevron.right` shown when `item.submenu != nil`. Mutually
+    /// exclusive with the trailing icon — submenu chevron wins (a row with
+    /// a submenu doesn't carry an extra trailing icon).
+    private let submenuIndicator = UIImageView()
 
     // MARK: - State
 
@@ -57,6 +61,12 @@ final class ContextMenuActionItemView: UIView {
         iconView.tintColor = .label
         addSubview(iconView)
 
+        submenuIndicator.contentMode = .scaleAspectFit
+        submenuIndicator.tintColor = .tertiaryLabel
+        submenuIndicator.image = ContextMenuActionItemView.chevronImage()
+        submenuIndicator.isHidden = true
+        addSubview(submenuIndicator)
+
         apply(item: item)
     }
 
@@ -88,6 +98,11 @@ final class ContextMenuActionItemView: UIView {
             iconView.image = nil
             iconView.isHidden = true
         }
+        // Submenu chevron supersedes the trailing icon (a submenu row's icon
+        // is shown leading by convention; trailing slot is reserved for the
+        // chevron).
+        submenuIndicator.isHidden = (item.submenu == nil)
+        if item.submenu != nil { iconView.isHidden = true }
 
         alpha = item.isEnabled ? 1.0 : 0.4
         accessibilityLabel = item.title
@@ -120,9 +135,21 @@ final class ContextMenuActionItemView: UIView {
             height: checkW
         )
 
-        // Trailing icon (if any) sits on the right edge.
+        // Trailing slot: submenu chevron > trailing icon. (Mutually exclusive
+        // — apply(item:) clears `iconView.isHidden = true` when a submenu is
+        // present, so only one of these renders.)
         var trailingContentX = layoutRect.maxX
-        if !iconView.isHidden {
+        if !submenuIndicator.isHidden {
+            let chevronW: CGFloat = 12.0
+            let chevronH: CGFloat = 18.0
+            submenuIndicator.frame = CGRect(
+                x: trailingContentX - chevronW,
+                y: (bounds.height - chevronH) / 2.0,
+                width: chevronW,
+                height: chevronH
+            )
+            trailingContentX -= chevronW + 10.0
+        } else if !iconView.isHidden {
             let iconW = ContextMenuActionItemView.iconSize
             iconView.frame = CGRect(
                 x: trailingContentX - iconW,
@@ -158,6 +185,15 @@ final class ContextMenuActionItemView: UIView {
         if #available(iOS 13.0, *) {
             let config = UIImage.SymbolConfiguration(pointSize: 15.0, weight: .semibold)
             return UIImage(systemName: "checkmark", withConfiguration: config)?
+                .withRenderingMode(.alwaysTemplate)
+        }
+        return nil
+    }
+
+    private static func chevronImage() -> UIImage? {
+        if #available(iOS 13.0, *) {
+            let config = UIImage.SymbolConfiguration(pointSize: 13.0, weight: .semibold)
+            return UIImage(systemName: "chevron.right", withConfiguration: config)?
                 .withRenderingMode(.alwaysTemplate)
         }
         return nil
