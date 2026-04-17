@@ -252,6 +252,54 @@ public enum ContainedViewLayoutTransition {
 
     public static var none: ContainedViewLayoutTransition { .immediate }
 
+    // MARK: - setBlur (private CAFilter "gaussianBlur")
+    //
+    // Port of `ComponentTransition.setBlur`. Telegram's lens transition uses
+    // this to fade between sharp and blurred contents for the source effect
+    // view. Backed by the same private `CAFilter("gaussianBlur")` runtime API
+    // already used elsewhere in CrystalUI's glass pipeline.
+
+    public func setBlur(layer: CALayer, radius: CGFloat, completion: ((Bool) -> Void)? = nil) {
+        var currentRadius: CGFloat = 0.0
+        if let currentFilters = layer.filters {
+            for filter in currentFilters {
+                if let f = filter as? NSObject, f.description.contains("gaussianBlur") {
+                    currentRadius = f.value(forKey: "inputRadius") as? CGFloat ?? 0.0
+                }
+            }
+        }
+
+        if currentRadius == radius {
+            completion?(true)
+            return
+        }
+
+        guard let blurFilter = CALayer.blur() else {
+            completion?(true)
+            return
+        }
+        blurFilter.setValue(radius as NSNumber, forKey: "inputRadius")
+        layer.filters = [blurFilter]
+
+        switch self {
+        case .immediate:
+            if radius <= 0.0 { layer.filters = nil }
+            completion?(true)
+        case let .animated(duration, _):
+            let from = NSNumber(value: Float(currentRadius))
+            let to = NSNumber(value: Float(radius))
+            layer.animate(
+                from: from, to: to,
+                keyPath: "filters.gaussianBlur.inputRadius",
+                duration: duration,
+                completion: { [weak layer] flag in
+                    if let layer, radius <= 0.0 { layer.filters = nil }
+                    completion?(flag)
+                }
+            )
+        }
+    }
+
     // MARK: - Additive animations (`animatePositionAdditive` /
     // `animateOffsetAdditive`). These add a CABasicAnimation with
     // `isAdditive = true` on top of the already-set model layer value, so
