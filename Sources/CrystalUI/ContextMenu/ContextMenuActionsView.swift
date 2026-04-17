@@ -26,13 +26,11 @@ final class ContextMenuActionsView: UIView {
 
     // MARK: - Subviews
 
-    /// Direct `UIVisualEffectView` (UIGlassEffect on iOS 26+, UIBlurEffect
-    /// fallback) instead of `GlassBackgroundView` — the latter is correct in
-    /// isolation but disappears once placed inside `LensTransitionContainer`'s
-    /// keyframe-driven contentsView (the lens sublayerTransform / clipping
-    /// interactions hide its native pipeline). A plain `UIVisualEffectView`
-    /// renders reliably regardless of where it's placed.
-    private let glassView: UIVisualEffectView
+    /// `contentContainer` clips rows + highlight to a rounded shape that
+    /// matches the menu's outer cornerRadius. The glass surface is owned by
+    /// the outer `ContextMenuController.menuContainer` (UIVisualEffectView
+    /// with UIGlassEffect / UIBlurEffect) — this view is just rows on
+    /// transparent background.
     private let contentContainer = UIView()
     private let highlightView = UIView()
     private var rowViews: [RowEntry] = []
@@ -61,29 +59,12 @@ final class ContextMenuActionsView: UIView {
 
     init(items: [ContextMenuItem]) {
         self.items = items
-        let blur = UIVisualEffectView()
-        if #available(iOS 26.0, *) {
-            blur.effect = UIGlassEffect(style: .regular)
-        } else {
-            blur.effect = UIBlurEffect(style: .systemMaterial)
-        }
-        blur.layer.cornerRadius = ContextMenuActionsView.cornerRadius
-        blur.layer.masksToBounds = true
-        if #available(iOS 13.0, *) {
-            blur.layer.cornerCurve = .continuous
-        }
-        blur.isUserInteractionEnabled = false
-        self.glassView = blur
 
         super.init(frame: .zero)
 
-        addSubview(glassView)
+        backgroundColor = .clear
 
-        contentContainer.clipsToBounds = true
-        contentContainer.layer.cornerRadius = ContextMenuActionsView.cornerRadius
-        if #available(iOS 13.0, *) {
-            contentContainer.layer.cornerCurve = .continuous
-        }
+        contentContainer.clipsToBounds = false
         addSubview(contentContainer)
 
         highlightView.backgroundColor = UIColor.label.withAlphaComponent(0.08)
@@ -118,7 +99,6 @@ final class ContextMenuActionsView: UIView {
         super.layoutSubviews()
 
         let frame = CGRect(origin: .zero, size: bounds.size)
-        glassView.frame = frame
         contentContainer.frame = frame
 
         var y: CGFloat = 0.0
