@@ -59,7 +59,7 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
 
 final class CrystalModalDismissAnimator: NSObject, UIViewControllerAnimatedTransitioning {
     func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
-        return 0.22
+        return 0.16
     }
 
     func animateTransition(using ctx: UIViewControllerContextTransitioning) {
