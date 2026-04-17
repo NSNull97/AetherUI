@@ -177,26 +177,19 @@ public final class ContextMenuController {
         // Capture the source snapshot while it's still visible.
         let sourceSnapshot = makeSourceSnapshot(source: source)
 
-        // Animate the source button along the SAME path as the lens morph —
-        // scale up to menu size, translate to menu center — so the button
-        // visually "unfolds" into the menu instead of just fading on the spot.
-        // `transform` doesn't affect the source's layout slot, so its parent
-        // collection (e.g. navbar GlassControlGroup) stays put. Alpha fades
-        // alongside, matching the lens's source-effect-view fade.
-        let morphTransform = ContextMenuController.transformForMorph(
-            from: sourceRectInHost,
-            to: menuFrame
-        )
+        // Smoothly fade the source button instead of snapping it invisible.
+        // Sync timing with the lens's source-effect-view fade (which runs its
+        // own 0.2s setTransitionFraction inside animateIn) so the original
+        // button and the lens's snapshot fade as a single unit — visually the
+        // button "unfolds" into the morphing menu instead of disappearing
+        // before the morph starts.
+        // Important: we still keep the source in layout — only `alpha`
+        // changes, never `isHidden`, so the navbar's GlassControlGroup (or
+        // whichever collection the source lives in) doesn't reflow.
         UIView.animate(
-            withDuration: ContextMenuController.lensDuration,
-            delay: 0,
-            usingSpringWithDamping: 0.78,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: {
-                source.transform = morphTransform
-                source.alpha = 0.0
-            },
+            withDuration: 0.2, delay: 0,
+            options: [.curveEaseOut, .beginFromCurrentState],
+            animations: { source.alpha = 0.0 },
             completion: nil
         )
 
@@ -208,19 +201,6 @@ public final class ContextMenuController {
             source: source,
             sourceSnapshot: sourceSnapshot
         )
-    }
-
-    /// Compute the affine transform that maps `from` rect to `to` rect — used
-    /// to morph the source button along the same scale + position path as
-    /// the lens. Anchor point of the source view is its center, so the
-    /// translation component is `to.center - from.center`.
-    private static func transformForMorph(from: CGRect, to: CGRect) -> CGAffineTransform {
-        let scaleX = to.width / max(1, from.width)
-        let scaleY = to.height / max(1, from.height)
-        let translateX = to.midX - from.midX
-        let translateY = to.midY - from.midY
-        return CGAffineTransform(translationX: translateX, y: translateY)
-            .scaledBy(x: scaleX, y: scaleY)
     }
 
     public func dismiss(animated: Bool = true) {
@@ -242,12 +222,12 @@ public final class ContextMenuController {
         let cleanup: () -> Void = { [weak self] in
             if didClean { return }
             didClean = true
-            // Snap the source back to fully visible at identity transform —
-            // by the time cleanup runs the dismiss animation has already
-            // re-materialised the button visually.
+            // Snap the source back to fully visible — by the time cleanup
+            // runs the dismiss animation has already faded the source-effect
+            // view to invisible, so popping the original button to alpha 1
+            // is invisible to the user.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            sourceView?.transform = .identity
             sourceView?.alpha = 1.0
             CATransaction.commit()
             dim?.removeFromSuperview()
@@ -265,38 +245,27 @@ public final class ContextMenuController {
             }
         }
 
-        // Reverse the source's morph: spring its transform back to identity
-        // and fade alpha 0 → 1 in sync with the lens shrinking back to the
-        // source rect. Same duration as the lens animateOut so they finish
-        // together.
+        // Fade the source back in over the morph-out so the button visibly
+        // re-materialises in sync with the menu shrinking. Total morph-out is
+        // ~0.32s; ramp source.alpha 0→1 over the tail of it.
         if let sourceView {
             UIView.animate(
-                withDuration: 0.32, delay: 0,
-                usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .allowUserInteraction],
-                animations: {
-                    sourceView.transform = .identity
-                    sourceView.alpha = 1.0
-                },
+                withDuration: 0.22, delay: 0.05,
+                options: [.curveEaseInOut, .beginFromCurrentState],
+                animations: { sourceView.alpha = 1.0 },
                 completion: nil
             )
         }
 
         guard animated, let lens, let sourceView else { cleanup(); return }
 
-        // Drive the lens out: a fresh source effect view (with the current
-        // source snapshot) is what the lens animates toward. Source is
-        // currently at alpha 0 AND scaled-up to menu size — temporarily
-        // restore both so snapshotView captures the real button at its real
-        // size. The user won't see the brief identity state because we
-        // immediately re-animate the transform back to identity anyway.
+        // Drive the lens out: a fresh source effect view (with the current source
+        // snapshot) is what the lens animates toward. Source is currently at
+        // alpha 0 — temporarily restore it so snapshotView captures real pixels.
         let savedAlpha = sourceView.alpha
-        let savedTransform = sourceView.transform
         sourceView.alpha = 1.0
-        sourceView.transform = .identity
         let sourceSnapshotView = makeSourceSnapshot(source: sourceView)
         sourceView.alpha = savedAlpha
-        sourceView.transform = savedTransform
         let sourceEffectView = LensEffectView(contentView: sourceSnapshotView)
         sourceEffectView.updateAppearance(isDark: sourceView.traitCollection.userInterfaceStyle == .dark)
 
