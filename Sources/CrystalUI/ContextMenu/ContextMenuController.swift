@@ -18,15 +18,15 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.55
-    private static let morphDamping: CGFloat = 0.48  // very elastic overshoot (was 0.55)
-    private static let dismissDuration: TimeInterval = 0.46
-    private static let dismissDamping: CGFloat = 0.62
+    private static let morphDuration: TimeInterval = 0.72
+    private static let morphDamping: CGFloat = 0.52  // slightly more damped to keep the slower morph clean
+    private static let dismissDuration: TimeInterval = 0.6
+    private static let dismissDamping: CGFloat = 0.68
     /// Peak gaussian-blur radius applied to the SNAPSHOT view (not the
     /// glass host) during the morph. Smears the button visual as it
     /// dissolves into the menu — sells the lens transition.
     private static let snapshotBlurPeak: CGFloat = 22.0
-    private static let snapshotBlurDuration: TimeInterval = 0.34
+    private static let snapshotBlurDuration: TimeInterval = 0.44
     private static let dimAlpha: CGFloat = 0.12
     private static let menuCornerRadius: CGFloat = 27.0
 
@@ -596,8 +596,8 @@ public final class ContextMenuController {
 
     // MARK: - Inline submenu (Yandex-Music-style overlay)
 
-    private static let submenuTransitionDuration: TimeInterval = 0.32
-    private static let submenuTransitionDamping: CGFloat = 0.82
+    private static let submenuTransitionDuration: TimeInterval = 0.42
+    private static let submenuTransitionDamping: CGFloat = 0.85
     /// Alpha applied to the parent actions view while a submenu card is open.
     /// The dimmed parent stays visible so the user has visual context, but
     /// becomes secondary to the popped-out submenu.
