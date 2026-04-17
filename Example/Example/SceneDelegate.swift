@@ -62,9 +62,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let settings = makeTab(
             SettingsExampleController(),
             tabBarItem: UITabBarItem(
-                title: "Настройки",
-                image: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "gearshape.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+                title: "Menu",
+                image: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
+                selectedImage: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
             )
         )
 
