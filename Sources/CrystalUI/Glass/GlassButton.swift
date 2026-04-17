@@ -95,7 +95,12 @@ public final class GlassButton: UIControl {
         self.glassBackground = GlassBackgroundView(style: .regular)
         super.init(frame: .zero)
 
-        glassBackground.isUserInteractionEnabled = false
+        // Keep glass interaction ENABLED so iOS 26's `UIGlassEffect.isInteractive`
+        // can register finger position and drive the elastic stretch
+        // deformation. Touches still reach this button for action handling
+        // because `hitTest` below always claims points inside `bounds` for
+        // `self` (UIControl receiver) — the glass only influences rendering.
+        glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
         contentContainer.isUserInteractionEnabled = false
@@ -112,6 +117,21 @@ public final class GlassButton: UIControl {
     }
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // MARK: - Hit testing
+    //
+    // Every touch inside `bounds` is claimed by `self` so UIControl's
+    // target-action fires. The nested glass view has `userInteractionEnabled = true`
+    // (needed for `UIGlassEffect.isInteractive` to register touches at the
+    // window-level observer level), but its own hitTest would otherwise try
+    // to return its `UIVisualEffectView` as the target — which has no
+    // actions and would swallow taps. Bypassing here keeps glass rendering
+    // interactive while routing action dispatch to the control.
+
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
+        return bounds.contains(point) ? self : nil
+    }
 
     // MARK: - Touch feedback
     //
