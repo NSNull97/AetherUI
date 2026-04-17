@@ -43,6 +43,13 @@ final class ContextMenuActionsView: UIView {
 
     private var trackedTouch: UITouch?
     private var highlightedIndex: Int?
+    /// Rubber-band stretch metrics. The menu translates a small fraction of
+    /// the finger's offset from the menu center so it visibly "leans" toward
+    /// the touch — the same trick `UIGlassEffect` does for navbar buttons on
+    /// iOS 26. On touch-up everything springs back to identity.
+    private static let stretchFollow: CGFloat = 0.06   // translation factor
+    private static let pressScale: CGFloat = 1.012     // scale-up on touch-down
+    private var initialTouchInBounds: CGPoint?
 
     // MARK: - Init
 
@@ -124,17 +131,24 @@ final class ContextMenuActionsView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard trackedTouch == nil, let touch = touches.first else { return }
         trackedTouch = touch
-        moveHighlight(to: touch.location(in: self), animated: false)
+        let point = touch.location(in: self)
+        initialTouchInBounds = point
+        applyStretch(towards: point, animated: true)
+        moveHighlight(to: point, animated: false)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
-        moveHighlight(to: tracked.location(in: self), animated: true)
+        let point = tracked.location(in: self)
+        applyStretch(towards: point, animated: false)
+        moveHighlight(to: point, animated: true)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
         trackedTouch = nil
+        initialTouchInBounds = nil
+        releaseStretch()
         commitTouch(at: tracked.location(in: self))
     }
 
@@ -142,7 +156,45 @@ final class ContextMenuActionsView: UIView {
         if let tracked = trackedTouch, touches.contains(tracked) {
             trackedTouch = nil
         }
+        initialTouchInBounds = nil
+        releaseStretch()
         clearHighlight(animated: true)
+    }
+
+    // MARK: - Rubber-band stretch
+
+    private func applyStretch(towards point: CGPoint, animated: Bool) {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        let target = CGAffineTransform(
+            translationX: delta.x * ContextMenuActionsView.stretchFollow,
+            y: delta.y * ContextMenuActionsView.stretchFollow
+        ).scaledBy(x: ContextMenuActionsView.pressScale, y: ContextMenuActionsView.pressScale)
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.28, delay: 0,
+                usingSpringWithDamping: 0.78, initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: { self.transform = target },
+                completion: nil
+            )
+        } else {
+            // During an active drag the transform follows the finger directly
+            // so it feels physical, without the spring resampling on every
+            // touch event.
+            self.transform = target
+        }
+    }
+
+    private func releaseStretch() {
+        UIView.animate(
+            withDuration: 0.42, delay: 0,
+            usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: { self.transform = .identity },
+            completion: nil
+        )
     }
 
     // MARK: - Highlight tracking
