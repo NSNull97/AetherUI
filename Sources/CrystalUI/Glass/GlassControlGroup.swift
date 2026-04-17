@@ -69,7 +69,19 @@ public final class GlassControlGroup: UIView {
             applyForegroundColorToItems()
         }
     }
-    public var isDarkAppearance: Bool = false
+    /// Theme pin for the underlying glass. When set (including by
+    /// `update(isDark:)` internally) the value forwards to
+    /// `backgroundView.isDarkOverride`, so the glass re-renders with the
+    /// override regardless of the next layout pass or trait-change event.
+    /// Default `false`; assign externally before/after `update` to pin the
+    /// glass tint to a specific theme (e.g. when hosted on a dark hero
+    /// image while the system is in light mode).
+    public var isDarkAppearance: Bool = false {
+        didSet {
+            if isDarkAppearance == oldValue { return }
+            backgroundView.isDarkOverride = isDarkAppearance
+        }
+    }
 
     public var minWidth: CGFloat = 44.0
 
@@ -387,7 +399,15 @@ public final class GlassControlPanel: UIView {
     private var rightItem: PanelItem?
     private var centerAlignmentIfPossible: Bool = false
     private var preferClearGlass: Bool = false
-    private var isDarkAppearance: Bool = false
+    /// Forwards into the underlying `GlassBackgroundContainerView` on
+    /// change so the container's shared glass effect picks up the theme
+    /// override without requiring a fresh `update(...)` call.
+    private var isDarkAppearance: Bool = false {
+        didSet {
+            if isDarkAppearance == oldValue { return }
+            glassContainerView.isDarkOverride = isDarkAppearance
+        }
+    }
 
     public override init(frame: CGRect) {
         self.glassContainerView = GlassBackgroundContainerView(spacing: 7.0)

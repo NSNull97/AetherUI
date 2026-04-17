@@ -47,6 +47,19 @@ public final class GlassBarButtonView: UIControl {
         }
     }
 
+    /// Override for the `isDark` flag passed to the glass background.
+    /// `nil` (default) → derived from `traitCollection.userInterfaceStyle`
+    /// on every layout pass. Forwarded to `GlassBackgroundView.isDarkOverride`
+    /// so the glass also picks up the override on its own auto-layout /
+    /// trait-change paths. Use when the button sits on a custom dark
+    /// background while the system is in light mode (or vice versa).
+    public var isDarkAppearance: Bool? {
+        didSet {
+            glassBackground.isDarkOverride = isDarkAppearance
+            setNeedsLayout()
+        }
+    }
+
     /// Touch feedback. Two flavours:
     ///   - `.glass` / `.tintedGlass`: subtle elastic press — scale 0.97 + a
     ///     small alpha dip 1.0→0.92, sprung. The native UIGlassEffect's
@@ -124,8 +137,9 @@ public final class GlassBarButtonView: UIControl {
     override public func layoutSubviews() {
         super.layoutSubviews()
 
+        let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
         glassBackground.frame = bounds
-        glassBackground.update(size: bounds.size, cornerRadius: bounds.height / 2.0, isDark: traitCollection.userInterfaceStyle == .dark, tintColor: .init(kind: .panel), isInteractive: displayState == .glass || displayState == .tintedGlass, isVisible: true, transition: .immediate)
+        glassBackground.update(size: bounds.size, cornerRadius: bounds.height / 2.0, isDark: resolvedDark, tintColor: .init(kind: .panel), isInteractive: displayState == .glass || displayState == .tintedGlass, isVisible: true, transition: .immediate)
         contentContainer.frame = bounds
 
         if let iconView = iconView, titleLabel == nil {

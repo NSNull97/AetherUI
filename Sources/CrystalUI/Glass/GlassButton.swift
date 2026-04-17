@@ -3,15 +3,18 @@ import UIKit
 // MARK: - GlassButton
 
 /// Generic glass-styled `UIControl` — a rounded-rect button with an
-/// optional title, optional leading icon, and a glass background. Designed
-/// to be dropped anywhere (card bottoms, toolbars, free-standing actions),
-/// not tied to nav bar sizing like `GlassBarButtonView`.
+/// optional title, optional leading icon, a glass background, and a
+/// spring press-in feedback on touch. Designed to be dropped anywhere
+/// (card bottoms, toolbars, free-standing actions), not tied to nav bar
+/// sizing like `GlassBarButtonView`.
 ///
-/// Press feedback is delegated entirely to the native
-/// `UIGlassEffect.isInteractive` deformation: the content (icon / label) is
-/// parented into the effect view's own `contentView`, so when iOS warps the
-/// glass toward the finger the content warps with it as a single liquid
-/// surface. No manual scale / alpha animation is layered on top.
+/// Press feedback mirrors `GlassBarButtonView` (the navbar back button
+/// pattern the user picked as the canonical feel): a manual
+/// `UIView.animate` spring — scale 0.97 + alpha 0.92 with damping 0.7 —
+/// drives the whole control. On iOS 26 hardware `UIGlassEffect.isInteractive`
+/// additionally warps the glass toward the finger, stacking on top of the
+/// manual scale without fighting it. On simulator / older iOS only the
+/// manual spring shows, which is still clearly visible feedback.
 ///
 /// Sizing contract:
 ///   - If only `image` is set, renders square-ish sized to `intrinsicContentSize`
@@ -105,22 +108,19 @@ public final class GlassButton: UIControl {
         self.glassBackground = GlassBackgroundView(style: .regular)
         super.init(frame: .zero)
 
-        // Keep glass interaction ENABLED so iOS 26's `UIGlassEffect.isInteractive`
-        // can register finger position and drive the elastic stretch
-        // deformation. Touches still reach this button for action handling
-        // because `hitTest` below always claims points inside `bounds` for
-        // `self` (UIControl receiver) — the glass only influences rendering.
-        glassBackground.isUserInteractionEnabled = true
+        // Match the `GlassBarButtonView` layout: glass is a pure visual
+        // layer (interaction disabled), content sits next to it on `self`,
+        // and the UIControl on `self` drives target/action + press
+        // animation. Parenting content inside `glassBackground.contentView`
+        // sounds tidy but in practice the native interactive-glass warp
+        // (only on real iOS 26 hardware) is too subtle to read as a press
+        // on its own — the old approach ended up looking like "no
+        // feedback" on simulator, which is the common dev environment.
+        glassBackground.isUserInteractionEnabled = false
         addSubview(glassBackground)
 
-        // Content sits INSIDE the glass's own content view so it's hosted by
-        // the UIVisualEffectView that runs the interactive deformation. When
-        // the user presses, `UIGlassEffect.isInteractive` warps the whole
-        // visual-effect stack — glass surface AND content (icon/label) move
-        // as one, which is what real iOS 26 liquid-glass buttons do. Nothing
-        // we have to animate manually.
         contentContainer.isUserInteractionEnabled = false
-        glassBackground.contentView.addSubview(contentContainer)
+        addSubview(contentContainer)
 
         self.title = title
         self.image = image
@@ -134,32 +134,27 @@ public final class GlassButton: UIControl {
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    // MARK: - Hit testing
-    //
-    // Every touch inside `bounds` is claimed by `self` so UIControl's
-    // target-action fires. The nested glass view has `userInteractionEnabled = true`
-    // (needed for `UIGlassEffect.isInteractive` to register touches at the
-    // window-level observer level), but its own hitTest would otherwise try
-    // to return its `UIVisualEffectView` as the target — which has no
-    // actions and would swallow taps. Bypassing here keeps glass rendering
-    // interactive while routing action dispatch to the control.
-
-    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
-        return bounds.contains(point) ? self : nil
-    }
-
     // MARK: - Touch feedback
-    //
-    // No manual press animation. Content lives inside
-    // `glassBackground.contentView` (the UIVisualEffectView's own content
-    // host), and the glass effect is configured with
-    // `UIGlassEffect.isInteractive = true` during layout. iOS 26's runtime
-    // warps the visual-effect stack toward the finger on touch, deforming
-    // glass + content in lockstep. On non-iOS 26 targets there's no
-    // deformation — that's the explicit trade-off of this design: a
-    // physically accurate liquid-glass press on capable hardware, plain
-    // hit-testing everywhere else.
+
+    public override var isHighlighted: Bool {
+        didSet {
+            guard isHighlighted != oldValue else { return }
+            let pressed = isHighlighted
+            UIView.animate(
+                withDuration: pressed ? 0.12 : 0.32,
+                delay: 0,
+                usingSpringWithDamping: 0.7,
+                initialSpringVelocity: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState],
+                animations: {
+                    self.transform = pressed
+                        ? CGAffineTransform(scaleX: 0.97, y: 0.97)
+                        : .identity
+                    self.alpha = pressed ? 0.92 : 1.0
+                }
+            )
+        }
+    }
 
     // MARK: - Layout
 
