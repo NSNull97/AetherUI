@@ -226,9 +226,29 @@ public class GlassBackgroundView: UIView {
     /// trait changes (e.g. a forced-dark glass on a blue custom background).
     public var tracksTraitCollection: Bool = true
 
+    /// Corner radius used by `layoutSubviews`-driven auto-update. `nil`
+    /// means "pill" (`bounds.height / 2`). Set via property or via
+    /// `update(...)`; the latter also writes this through so subsequent
+    /// layout passes respect the explicit value.
+    public var glassCornerRadius: CGFloat? {
+        didSet { setNeedsLayout() }
+    }
+
+    /// Tint color used by `layoutSubviews`-driven auto-update.
+    public var glassTintColor: TintColor = .init(kind: .panel) {
+        didSet { setNeedsLayout() }
+    }
+
+    /// Interactive glass flag used by `layoutSubviews`-driven auto-update.
+    /// When true, `UIGlassEffect.isInteractive` is set on iOS 26+ so the
+    /// glass shows native elastic deformation on touch.
+    public var glassIsInteractive: Bool = false {
+        didSet { setNeedsLayout() }
+    }
+
     /// Remembers the last `cornerRadius`, `tintColor`, `isInteractive`,
-    /// `isVisible` the caller passed to `update(...)`. Only referenced by
-    /// `traitCollectionDidChange` to rebuild params with a fresh isDark.
+    /// `isVisible` the caller passed to `update(...)`. Referenced by
+    /// `traitCollectionDidChange` and `layoutSubviews` to rebuild params.
     private struct UpdateMemo {
         let size: CGSize
         let cornerRadius: CGFloat
@@ -359,6 +379,24 @@ public class GlassBackgroundView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // MARK: Auto-layout
+    //
+    // GlassBackgroundView can be used two ways:
+    //
+    //   1. **Explicit** — caller drives everything via `update(...)`. The
+    //      memo stored there is what `layoutSubviews` re-applies when
+    //      bounds change.
+    //
+    //   2. **Property-based** — caller sets `glassCornerRadius` /
+    //      `glassTintColor` / `glassIsInteractive` on the view (or leaves
+    //      them at defaults) and lets the normal UIView layout cycle do
+    //      the rest. `layoutSubviews` picks up the current bounds and
+    //      re-renders. No explicit `update(...)` call required.
+    //
+    // Both work side-by-side; an explicit `update(...)` wins over the
+    // property defaults (it writes its values into the memo which
+    // `layoutSubviews` consults first).
+
     // MARK: Trait tracking
 
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -398,6 +436,28 @@ public class GlassBackgroundView: UIView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
+
+        // Auto-apply on layout if the caller hasn't driven it explicitly via
+        // `update(...)` yet, OR the bounds changed since the last update.
+        // Lets clients use GlassBackgroundView as a plain auto-layout view
+        // without having to manually call `update(size:cornerRadius:...)`
+        // on each layout pass.
+        let size = bounds.size
+        if size.width > 0, size.height > 0, lastUpdateMemo?.size != size {
+            let corner = glassCornerRadius ?? lastUpdateMemo?.cornerRadius ?? (size.height / 2.0)
+            let tint = lastUpdateMemo?.tintColor ?? glassTintColor
+            let interactive = lastUpdateMemo?.isInteractive ?? glassIsInteractive
+            let visible = lastUpdateMemo?.isVisible ?? true
+            update(
+                size: size,
+                cornerRadius: corner,
+                isDark: traitCollection.userInterfaceStyle == .dark,
+                tintColor: tint,
+                isInteractive: interactive,
+                isVisible: visible,
+                transition: .immediate
+            )
+        }
 
         if let params {
             switch params.shape {
