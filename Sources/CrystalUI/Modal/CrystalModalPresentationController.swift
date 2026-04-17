@@ -92,13 +92,15 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private func frame(for detent: CrystalModalController.Detent, in bounds: CGRect) -> CGRect {
         let cfg = modalController?.config ?? .init()
         let safeArea = containerView?.safeAreaInsets ?? presentingViewController.view.safeAreaInsets
+        // Bottom edge is pinned in both detents — the sheet never translates
+        // while switching between them, only its top/side insets change.
+        let bottom = bounds.height - cfg.bottomInset
         switch detent {
         case .stage1:
-            let bottomAvailable = bounds.height - cfg.bottomInsetStage1
             let configuredTop = safeArea.top + cfg.topInsetStage1
             let minimumHeight = bounds.height * 0.5
-            let height = max(bottomAvailable - configuredTop, minimumHeight)
-            let top = bottomAvailable - height
+            let height = max(bottom - configuredTop, minimumHeight)
+            let top = bottom - height
             return CGRect(
                 x: cfg.sideInset,
                 y: top,
@@ -111,7 +113,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
                 x: 0.0,
                 y: top,
                 width: bounds.width,
-                height: max(0.0, bounds.height - top)
+                height: max(0.0, bottom - top)
             )
         }
     }

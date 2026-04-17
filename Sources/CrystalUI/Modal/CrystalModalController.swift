@@ -8,7 +8,10 @@ public final class CrystalModalController: UIViewController {
 
     public struct Config: Equatable {
         public var sideInset: CGFloat
-        public var bottomInsetStage1: CGFloat
+        /// Inset from the screen bottom. Applied in both detents — the
+        /// sheet's bottom edge stays pinned at this distance from the
+        /// screen bottom regardless of detent.
+        public var bottomInset: CGFloat
         public var topInsetStage1: CGFloat
         public var topInsetStage2: CGFloat
         public var topCornerRadius: CGFloat
@@ -16,14 +19,14 @@ public final class CrystalModalController: UIViewController {
 
         public init(
             sideInset: CGFloat = 8.0,
-            bottomInsetStage1: CGFloat = 16.0,
+            bottomInset: CGFloat = 8.0,
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
             topCornerRadius: CGFloat = 38.0,
             dimAlphaStage2: CGFloat = 0.25
         ) {
             self.sideInset = sideInset
-            self.bottomInsetStage1 = bottomInsetStage1
+            self.bottomInset = bottomInset
             self.topInsetStage1 = topInsetStage1
             self.topInsetStage2 = topInsetStage2
             self.topCornerRadius = topCornerRadius
