@@ -131,6 +131,29 @@ public extension UIView {
     }
 }
 
+// MARK: - UIView.animationDurationFactor (port of UIKitUtils.m)
+
+#if targetEnvironment(simulator)
+// `UIAnimationDragCoefficient()` lives inside UIKit and returns a multiplier
+// the simulator slow-mo overlay applies to all animations. Production builds
+// always return 1.0.
+@_silgen_name("UIAnimationDragCoefficient") private func _UIAnimationDragCoefficient() -> Float
+#endif
+
+public extension UIView {
+    /// Multiplier callers should apply to animation durations so the simulator
+    /// slow-motion debug toggle (`Debug ▸ Slow Animations`) still affects them.
+    /// Required for parity with Telegram's `LensTransitionContainer` keyframe
+    /// timings; on device this always returns `1.0`.
+    static func animationDurationFactor() -> Double {
+        #if targetEnvironment(simulator)
+        return Double(_UIAnimationDragCoefficient())
+        #else
+        return 1.0
+        #endif
+    }
+}
+
 // MARK: - EffectSettingsContainerView (port of UIViewController+Navigation.m)
 
 /// Host container that carries `lumaMin` / `lumaMax` knobs for nested glass effects.
