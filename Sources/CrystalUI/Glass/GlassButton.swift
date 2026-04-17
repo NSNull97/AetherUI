@@ -3,10 +3,15 @@ import UIKit
 // MARK: - GlassButton
 
 /// Generic glass-styled `UIControl` — a rounded-rect button with an
-/// optional title, optional leading icon, a glass background, and a
-/// spring press-in feedback on touch. Designed to be dropped anywhere
-/// (card bottoms, toolbars, free-standing actions), not tied to nav bar
-/// sizing like `GlassBarButtonView`.
+/// optional title, optional leading icon, and a glass background. Designed
+/// to be dropped anywhere (card bottoms, toolbars, free-standing actions),
+/// not tied to nav bar sizing like `GlassBarButtonView`.
+///
+/// Press feedback is delegated entirely to the native
+/// `UIGlassEffect.isInteractive` deformation: the content (icon / label) is
+/// parented into the effect view's own `contentView`, so when iOS warps the
+/// glass toward the finger the content warps with it as a single liquid
+/// surface. No manual scale / alpha animation is layered on top.
 ///
 /// Sizing contract:
 ///   - If only `image` is set, renders square-ish sized to `intrinsicContentSize`
@@ -103,8 +108,14 @@ public final class GlassButton: UIControl {
         glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
+        // Content sits INSIDE the glass's own content view so it's hosted by
+        // the UIVisualEffectView that runs the interactive deformation. When
+        // the user presses, `UIGlassEffect.isInteractive` warps the whole
+        // visual-effect stack — glass surface AND content (icon/label) move
+        // as one, which is what real iOS 26 liquid-glass buttons do. Nothing
+        // we have to animate manually.
         contentContainer.isUserInteractionEnabled = false
-        addSubview(contentContainer)
+        glassBackground.contentView.addSubview(contentContainer)
 
         self.title = title
         self.image = image
@@ -135,40 +146,15 @@ public final class GlassButton: UIControl {
 
     // MARK: - Touch feedback
     //
-    // Two layers of feedback on press:
-    //   1. **Native glass stretch** from `UIGlassEffect.isInteractive = true`
-    //      (enabled at glass layout time). On iOS 26 hardware the glass
-    //      surface visibly deforms toward the finger; on simulator + older
-    //      iOS it's a no-op.
-    //   2. **Manual scale + alpha spring** as a cross-platform fallback so
-    //      pressing the button reads as "pressed" everywhere, not just on
-    //      iOS 26 devices. The scale is deliberately subtle (0.965) so on
-    //      real iOS 26 hardware it stacks under the native stretch without
-    //      fighting it. Alpha dips only slightly (to 0.88) to avoid
-    //      looking faded.
-
-    public override var isHighlighted: Bool {
-        didSet {
-            guard isHighlighted != oldValue else { return }
-            applyPressAnimation(pressed: isHighlighted)
-        }
-    }
-
-    private func applyPressAnimation(pressed: Bool) {
-        UIView.animate(
-            withDuration: pressed ? 0.14 : 0.32,
-            delay: 0,
-            usingSpringWithDamping: 0.72,
-            initialSpringVelocity: 0,
-            options: [.allowUserInteraction, .beginFromCurrentState],
-            animations: {
-                self.transform = pressed
-                    ? CGAffineTransform(scaleX: 0.965, y: 0.965)
-                    : .identity
-                self.alpha = pressed ? 0.88 : 1.0
-            }
-        )
-    }
+    // No manual press animation. Content lives inside
+    // `glassBackground.contentView` (the UIVisualEffectView's own content
+    // host), and the glass effect is configured with
+    // `UIGlassEffect.isInteractive = true` during layout. iOS 26's runtime
+    // warps the visual-effect stack toward the finger on touch, deforming
+    // glass + content in lockstep. On non-iOS 26 targets there's no
+    // deformation — that's the explicit trade-off of this design: a
+    // physically accurate liquid-glass press on capable hardware, plain
+    // hit-testing everywhere else.
 
     // MARK: - Layout
 
