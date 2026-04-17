@@ -69,6 +69,11 @@ final class SettingsExampleController: ViewController {
     private let topAnchoredButton = GlassBarButtonView(title: "Top anchored")
     private let bottomAnchoredButton = GlassBarButtonView(title: "Bottom anchored")
     private let submenuPill = GlassBarButtonView(title: "Settings ›")
+    /// Decorated card view for the long-press-preview demo (Phase 2). Plain
+    /// UIView with rounded corners + colored background + label so the lifted
+    /// snapshot is visible. Has its own long-press recognizer that calls
+    /// `ContextMenuController.present(... presentationStyle: .preview)`.
+    private let previewCard = UIView()
 
     private let statusLabel = UILabel()
 
@@ -176,10 +181,19 @@ final class SettingsExampleController: ViewController {
         submenuPill.contextMenuTrigger = .tap
         submenuPill.contextMenuItemsProvider = { [weak self] in self?.submenuRootItems() ?? [] }
         stack.addArrangedSubview(section(
-            title: "6. Submenus (push / pop)",
-            description: "Tap a row with a chevron to push a submenu page; the back-row at the top pops back. Container resizes to fit each page.",
+            title: "6. Submenus (inline expand)",
+            description: "Tap a row with a chevron to pop a submenu card OUT of that row; the parent menu dims behind it. Tap the down-chevron OR the dimmed parent area to collapse. Tap outside to dismiss the whole menu.",
             content: submenuPill,
             contentHeight: 36.0
+        ))
+
+        // 7. Long-press preview (Telegram chat-row style).
+        configurePreviewCard()
+        stack.addArrangedSubview(section(
+            title: "7. Long-press preview",
+            description: "Long-press the card below — it lifts as a snapshot (with shadow) and the menu appears beneath it instead of morphing out of it. Tap outside to release.",
+            content: previewCard,
+            contentHeight: 80.0
         ))
 
         // 4. Top-anchored source — menu should open below.
@@ -215,6 +229,70 @@ final class SettingsExampleController: ViewController {
         statusLabel.textColor = .tertiaryLabel
         statusLabel.textAlignment = .center
         stack.addArrangedSubview(statusLabel)
+    }
+
+    /// Build the colored card that shows the long-press preview demo (Phase 2).
+    /// Plain rounded UIView with a label inside; long-press triggers the
+    /// preview-style context menu where the card lifts as a snapshot.
+    private func configurePreviewCard() {
+        previewCard.backgroundColor = .systemIndigo
+        previewCard.layer.cornerRadius = 16.0
+        if #available(iOS 13.0, *) {
+            previewCard.layer.cornerCurve = .continuous
+        }
+
+        let label = UILabel()
+        label.text = "Long-press me"
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 18.0, weight: .semibold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        previewCard.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
+        ])
+
+        previewCard.translatesAutoresizingMaskIntoConstraints = false
+        // Width is layout-constrained by the section row; height is a fixed
+        // 80pt (passed via contentHeight in the section() call).
+        previewCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        let long = UILongPressGestureRecognizer(target: self, action: #selector(handleCardLongPress(_:)))
+        long.minimumPressDuration = 0.35
+        previewCard.addGestureRecognizer(long)
+        previewCard.isUserInteractionEnabled = true
+    }
+
+    @objc private func handleCardLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        ContextMenuController.present(
+            source: previewCard,
+            cornerRadius: previewCard.layer.cornerRadius,
+            items: cardActionItems(),
+            presentationStyle: .preview()
+        )
+    }
+
+    private func cardActionItems() -> [ContextMenuItem] {
+        return [
+            .action(ContextMenuActionItem(
+                id: "preview-share", title: "Share",
+                icon: UIImage(systemName: "square.and.arrow.up"), iconSide: .leading,
+                action: { [weak self] _, h in self?.report("Card: Share"); h.dismiss() }
+            )),
+            .action(ContextMenuActionItem(
+                id: "preview-copy", title: "Copy",
+                icon: UIImage(systemName: "doc.on.doc"), iconSide: .leading,
+                action: { [weak self] _, h in self?.report("Card: Copy"); h.dismiss() }
+            )),
+            .separator,
+            .action(ContextMenuActionItem(
+                id: "preview-delete", title: "Delete",
+                icon: UIImage(systemName: "trash"), iconSide: .leading,
+                textColor: .destructive,
+                action: { [weak self] _, h in self?.report("Card: Delete"); h.dismiss() }
+            ))
+        ]
     }
 
     private func section(title: String, description: String, content: UIView, contentHeight: CGFloat) -> UIStackView {

@@ -51,10 +51,23 @@ public final class ContextMenuController {
         }
     }
 
+    /// Two presentation flavours.
+    ///   - `.morph` (default): the source view fades and the menu morphs
+    ///     out of its rect — ideal for nav-bar buttons and pills (Phase 1).
+    ///   - `.preview`: the source view stays as a "lifted" snapshot (a
+    ///     scaled-up copy with shadow) and the menu appears beneath it —
+    ///     ideal for long-press on cards / list rows where the user wants
+    ///     a peek of the source content while choosing an action.
+    public enum PresentationStyle {
+        case morph
+        case preview(verticalSpacing: CGFloat = 12.0, lift: CGFloat = 1.04)
+    }
+
     // MARK: - State
 
     private let source: Source
     private let items: [ContextMenuItem]
+    private let presentationStyle: PresentationStyle
     private let onDismiss: (() -> Void)?
 
     private weak var hostView: UIView?
@@ -80,6 +93,11 @@ public final class ContextMenuController {
     /// of dismissing the entire menu.
     private var submenuCollapseHitView: UIView?
 
+    /// Lifted snapshot of the source view, only created in `.preview` style.
+    /// Lives in `host` next to `dim` and `sdfHost`; positioned at the source's
+    /// screen rect, scaled by `PresentationStyle.preview.lift`.
+    private var previewView: UIView?
+
     private var menuFrameInHost: CGRect = .zero
     private var sourceRectInHost: CGRect = .zero
     private var sourceCornerRadius: CGFloat = 0
@@ -89,9 +107,15 @@ public final class ContextMenuController {
 
     // MARK: - Init
 
-    public init(source: Source, items: [ContextMenuItem], onDismiss: (() -> Void)? = nil) {
+    public init(
+        source: Source,
+        items: [ContextMenuItem],
+        presentationStyle: PresentationStyle = .morph,
+        onDismiss: (() -> Void)? = nil
+    ) {
         self.source = source
         self.items = items
+        self.presentationStyle = presentationStyle
         self.onDismiss = onDismiss
     }
 
@@ -128,18 +152,20 @@ public final class ContextMenuController {
         self.sourceRectInHost = sourceRectInHost
         self.sourceCornerRadius = sourceCornerRadius
 
-        // Two-layer wrapper. `sdfHost` is the morphing entity that owns the
-        // SDF lens distortion filter on iOS 26+ — its layer is what
-        // CASDFGlassDisplacementEffect rewrites pixel positions on. The
-        // visible glass (UIVisualEffectView) lives inside, auto-resizing to
-        // fill the wrapper. Filters apply transitively to the rendered
-        // glass + content.
-        //
-        // The wrapper carries the cornerRadius + clipping (the menuContainer
-        // inside has its own corner-clipping disabled to avoid a double-clip
-        // mismatch as cornerRadius animates).
-        let sdfHost = UIView(frame: sourceRectInHost)
-        sdfHost.layer.cornerRadius = sourceCornerRadius
+        // sdfHost: the morphing entity. Initial frame depends on style:
+        //   .morph    — starts at source rect, lens-morphs to menu rect
+        //   .preview  — already at menu rect; spring scale-in only
+        let isPreview: Bool
+        switch presentationStyle {
+        case .morph: isPreview = false
+        case .preview: isPreview = true
+        }
+
+        let initialHostFrame = isPreview ? menuFrame : sourceRectInHost
+        let initialCornerRadius = isPreview ? ContextMenuActionsView.cornerRadius : sourceCornerRadius
+
+        let sdfHost = UIView(frame: initialHostFrame)
+        sdfHost.layer.cornerRadius = initialCornerRadius
         sdfHost.layer.masksToBounds = true
         if #available(iOS 13.0, *) {
             sdfHost.layer.cornerCurve = .continuous
@@ -155,36 +181,55 @@ public final class ContextMenuController {
         sdfHost.addSubview(menuContainer)
         self.menuContainer = menuContainer
 
-        // Install SDF lens filter (iOS 26+). On older systems we fall back to
-        // a non-distorted morph — the cornerRadius + frame spring still gives
-        // a clean "glass expanding" feel; the SDF just adds the wobbly bulge.
-        if #available(iOS 26.0, *), let filter = LensSDFFilter() {
+        // Install SDF lens filter (iOS 26+). Only meaningful for .morph —
+        // .preview doesn't morph the host, just scales it.
+        if !isPreview, #available(iOS 26.0, *), let filter = LensSDFFilter() {
             filter.install(on: sdfHost.layer, size: sourceRectInHost.size, cornerRadius: sourceCornerRadius)
             self.sdfFilter = filter
         }
 
-        // Capture the source button's pixels BEFORE we hide it. The snapshot
-        // sits at top-left of the container at source size — at t=0 it
-        // perfectly overlaps the source's screen position so the user sees
-        // "the button" inside the morphing container even though the original
-        // is alpha 0. As the container grows, the snapshot stays at top-left
-        // (= same screen position as the original button) and cross-fades to
-        // the menu content.
+        // Snapshot of the source view. Placement depends on style:
+        //   .morph    — inside menuContainer.contentView at top-left, source
+        //               size. Cross-fades into actionsView during morph.
+        //   .preview  — wrapped in a previewView added directly to host at
+        //               sourceRect. Springs up by `lift` factor, stays
+        //               visible above the menu the whole time it's open.
         let snapshot = makeSourceSnapshot(source: source)
-        snapshot.frame = CGRect(origin: .zero, size: sourceRectInHost.size)
-        snapshot.autoresizingMask = []
-        menuContainer.contentView.addSubview(snapshot)
-        self.snapshotView = snapshot
+        switch presentationStyle {
+        case .morph:
+            snapshot.frame = CGRect(origin: .zero, size: sourceRectInHost.size)
+            snapshot.autoresizingMask = []
+            menuContainer.contentView.addSubview(snapshot)
+            self.snapshotView = snapshot
+        case .preview:
+            let preview = UIView(frame: sourceRectInHost)
+            snapshot.frame = preview.bounds
+            snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            preview.addSubview(snapshot)
+            // Soft drop-shadow to sell the lift.
+            preview.layer.shadowColor = UIColor.black.cgColor
+            preview.layer.shadowOpacity = 0.18
+            preview.layer.shadowRadius = 18.0
+            preview.layer.shadowOffset = CGSize(width: 0, height: 8)
+            host.addSubview(preview)
+            self.previewView = preview
+            self.snapshotView = snapshot
+        }
 
-        // Actions view sized to the FINAL menu rect, also at top-left.
-        // Initially clipped (container is still source-sized) and alpha 0
-        // so only the snapshot is visible. As the container grows, more of
-        // the actions becomes visible behind the fading snapshot.
+        // Actions view layout depends on style:
+        //   .morph   — sized to MENU at top-left, alpha 0 (cross-faded in)
+        //   .preview — sized to MENU at top-left, alpha 1 from start
         actionsView.frame = CGRect(origin: .zero, size: menuFrame.size)
         actionsView.autoresizingMask = []
-        actionsView.alpha = 0.0
+        actionsView.alpha = isPreview ? 1.0 : 0.0
         menuContainer.contentView.addSubview(actionsView)
         self.actionsView = actionsView
+
+        if isPreview {
+            // Pre-stage sdfHost for spring-in.
+            sdfHost.alpha = 0.0
+            sdfHost.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        }
 
         // Tap-outside to dismiss.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
@@ -251,6 +296,7 @@ public final class ContextMenuController {
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
             snapshot?.removeFromSuperview()
+            self?.previewView?.removeFromSuperview()
             host?.removeFromSuperview()
             self?.hostView = nil
             self?.dimView = nil
@@ -258,6 +304,7 @@ public final class ContextMenuController {
             self?.sdfFilter = nil
             self?.menuContainer = nil
             self?.snapshotView = nil
+            self?.previewView = nil
             self?.actionsView = nil
             self?.submenuCard?.removeFromSuperview()
             self?.submenuCard = nil
@@ -272,9 +319,35 @@ public final class ContextMenuController {
 
         guard animated, let sdfHost else { cleanup(); return }
 
-        // Reverse morph on sdfHost (= the morphing entity carrying the SDF
-        // filter). The internal menuContainer auto-resizes, snapshot stays at
-        // top-left source size, actionsView fades out.
+        switch presentationStyle {
+        case .morph:
+            animateOutMorph(
+                sdfHost: sdfHost, sourceRect: sourceRect,
+                dim: dim, snapshot: snapshot, actionsView: actionsView
+            )
+        case .preview:
+            animateOutPreview(
+                sdfHost: sdfHost,
+                dim: dim, preview: previewView
+            )
+        }
+
+        // Cleanup at the end of the dismiss animation. Both .morph and
+        // .preview reverse paths above run for `dismissDuration`. The
+        // reentrancy-guard inside `cleanup` makes the +0.2 safety timer
+        // a no-op if the primary fire happens first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + ContextMenuController.dismissDuration) { cleanup() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + ContextMenuController.dismissDuration + 0.2) { cleanup() }
+    }
+
+    /// Reverse the .morph presentation: lens shrinks back to source rect.
+    private func animateOutMorph(
+        sdfHost: UIView,
+        sourceRect: CGRect,
+        dim: UIView?,
+        snapshot: UIView?,
+        actionsView: ContextMenuActionsView?
+    ) {
         let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
         radiusAnim.fromValue = sdfHost.layer.cornerRadius
         radiusAnim.toValue = sourceCornerRadius
@@ -297,10 +370,9 @@ public final class ContextMenuController {
                     filter.updateLayout(size: sourceRect.size, cornerRadius: self.sourceCornerRadius)
                 }
             },
-            completion: { _ in cleanup() }
+            completion: nil
         )
 
-        // Re-apply the SDF wobble for the morph-out (strong → none).
         if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
             let minSide = min(sourceRect.width, sourceRect.height)
             filter.animateDisplacement(
@@ -310,9 +382,6 @@ public final class ContextMenuController {
             filter.animateBlur(duration: ContextMenuController.dismissDuration)
         }
 
-        // Same lens-feel overlay as animateIn but in reverse: scale wobble
-        // contracts back, snapshot blur ramps UP to peak so the button
-        // re-emerges with a "lens settle" instead of just popping back in.
         applyLensFeelOverlay(
             host: sdfHost,
             snapshot: snapshot,
@@ -334,9 +403,29 @@ public final class ContextMenuController {
             animations: { snapshot?.alpha = 1.0 },
             completion: nil
         )
+    }
 
-        // Defensive cleanup timer.
-        DispatchQueue.main.asyncAfter(deadline: .now() + ContextMenuController.dismissDuration + 0.2) { cleanup() }
+    /// Reverse the .preview presentation: lifted preview drops back to
+    /// identity scale; menu chrome scales/fades out.
+    private func animateOutPreview(
+        sdfHost: UIView,
+        dim: UIView?,
+        preview: UIView?
+    ) {
+        UIView.animate(
+            withDuration: ContextMenuController.dismissDuration,
+            delay: 0,
+            usingSpringWithDamping: ContextMenuController.dismissDamping,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: {
+                sdfHost.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+                sdfHost.alpha = 0.0
+                preview?.transform = .identity
+                dim?.alpha = 0.0
+            },
+            completion: nil
+        )
     }
 
     // MARK: - Animate in
@@ -348,15 +437,26 @@ public final class ContextMenuController {
         actionsView: ContextMenuActionsView,
         sourceMinSide: CGFloat
     ) {
-        // 1) Dim fades in.
+        // Dim fades in either way.
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut], animations: {
             dim.alpha = 1.0
         })
 
-        // 2) sdfHost (= the morphing entity) morphs from source rect → menu
-        // rect with spring. CornerRadius animates via CABasicAnimation, and
-        // the SDF filter (if installed) is given matching keyframed
-        // displacement + blur ramps so the lens wobble follows the morph.
+        switch presentationStyle {
+        case .morph:
+            animateInMorph(sdfHost: sdfHost, snapshot: snapshot, actionsView: actionsView, sourceMinSide: sourceMinSide)
+        case let .preview(_, lift):
+            animateInPreview(sdfHost: sdfHost, lift: lift)
+        }
+    }
+
+    /// Source rect → menu rect lens morph with cross-fading snapshot.
+    private func animateInMorph(
+        sdfHost: UIView,
+        snapshot: UIView,
+        actionsView: ContextMenuActionsView,
+        sourceMinSide: CGFloat
+    ) {
         let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
         radiusAnim.fromValue = sourceCornerRadius
         radiusAnim.toValue = ContextMenuActionsView.cornerRadius
@@ -383,10 +483,7 @@ public final class ContextMenuController {
             completion: nil
         )
 
-        // SDF wobble (iOS 26 only): hardware-accelerated displacement-map
-        // distortion that gives the actual lens bulge. May silently no-op
-        // on simulators where the private CASDFLayer / displacementMap
-        // filter isn't supported.
+        // SDF wobble (iOS 26 only).
         if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
             filter.animateDisplacement(
                 fromHeight: sourceMinSide * 0.25, toHeight: 0.001,
@@ -395,9 +492,8 @@ public final class ContextMenuController {
             filter.animateBlur(duration: ContextMenuController.morphDuration)
         }
 
-        // Lens FEEL augmentation: scale wobble on the host + gaussian smear
-        // on the snapshot. Works on every platform and doesn't touch
-        // frame/bounds (autoresizing + hit-testing keep working).
+        // Lens-feel overlay: scale wobble on the host + gaussian smear on
+        // the snapshot.
         applyLensFeelOverlay(
             host: sdfHost,
             snapshot: snapshot,
@@ -405,10 +501,7 @@ public final class ContextMenuController {
             reversed: false
         )
 
-        // 3) Cross-fade snapshot → actions view.
-        // Snapshot fades out fast (most of it gone in the first ~30% of morph)
-        // so by the time the container is large enough to look "menu-like",
-        // the actions content has taken over.
+        // Cross-fade snapshot → actions view.
         UIView.animate(
             withDuration: ContextMenuController.morphDuration * 0.35,
             delay: 0,
@@ -423,6 +516,42 @@ public final class ContextMenuController {
             animations: { actionsView.alpha = 1.0 },
             completion: nil
         )
+    }
+
+    /// Lifted preview + below-source menu spring-in (no morph).
+    private func animateInPreview(sdfHost: UIView, lift: CGFloat) {
+        // sdfHost was pre-staged at scale 0.9 + alpha 0; spring it to
+        // identity. Menu chrome reads as "appearing fresh below the lifted
+        // preview".
+        UIView.animate(
+            withDuration: ContextMenuController.morphDuration,
+            delay: 0,
+            usingSpringWithDamping: ContextMenuController.morphDamping,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: {
+                sdfHost.transform = .identity
+                sdfHost.alpha = 1.0
+            },
+            completion: nil
+        )
+
+        // Lifted preview: scale up by `lift` from identity, with the same
+        // spring so it lands in sync with the menu.
+        if let preview = previewView {
+            preview.transform = .identity
+            UIView.animate(
+                withDuration: ContextMenuController.morphDuration,
+                delay: 0,
+                usingSpringWithDamping: ContextMenuController.morphDamping,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: {
+                    preview.transform = CGAffineTransform(scaleX: lift, y: lift)
+                },
+                completion: nil
+            )
+        }
     }
 
     // MARK: - Effect builder
@@ -521,9 +650,12 @@ public final class ContextMenuController {
 
     // MARK: - Menu placement
 
-    /// Top-anchored: menu's top edge = source's top edge so the morph
-    /// visibly grows downward + outward FROM the button rather than
-    /// appearing below it with a gap.
+    /// Two layouts depending on `presentationStyle`:
+    ///   - `.morph`: menu top-anchored to source.top — the lens visibly
+    ///     grows downward + outward FROM the button.
+    ///   - `.preview`: menu placed BELOW the source rect with a gap so the
+    ///     lifted preview snapshot has room to show. Falls back to placing
+    ///     menu above if there's not enough room below.
     private func computeMenuFrame(sourceRect: CGRect, menuSize: CGSize, hostBounds: CGRect) -> CGRect {
         let sideInset: CGFloat = 12.0
         let window = source.view?.window
@@ -536,9 +668,17 @@ public final class ContextMenuController {
         }
         x = max(sideInset, x)
 
-        var y = sourceRect.minY
+        let initialY: CGFloat
+        switch presentationStyle {
+        case .morph:
+            initialY = sourceRect.minY
+        case let .preview(spacing, _):
+            initialY = sourceRect.maxY + spacing
+        }
+
+        var y = initialY
         if y + menuSize.height > hostBounds.maxY - safeBottom {
-            let upward = sourceRect.maxY - menuSize.height
+            let upward = sourceRect.minY - (menuSize.height + (initialY - sourceRect.maxY).magnitude)
             if upward >= safeTop {
                 y = upward
             } else {
@@ -804,11 +944,13 @@ public extension ContextMenuController {
         source: UIView,
         cornerRadius: CGFloat? = nil,
         items: [ContextMenuItem],
+        presentationStyle: PresentationStyle = .morph,
         onDismiss: (() -> Void)? = nil
     ) -> ContextMenuController {
         let controller = ContextMenuController(
             source: Source(view: source, cornerRadius: cornerRadius),
             items: items,
+            presentationStyle: presentationStyle,
             onDismiss: onDismiss
         )
         controller.present()

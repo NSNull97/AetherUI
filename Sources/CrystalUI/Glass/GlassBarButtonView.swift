@@ -31,6 +31,11 @@ public final class GlassBarButtonView: UIControl {
     /// `.tap` overrides `action` and presents on tap-up.
     public enum ContextMenuTrigger { case longPress, tap }
     public var contextMenuTrigger: ContextMenuTrigger = .longPress
+    /// Layout flavour passed to the underlying `ContextMenuController`.
+    /// Defaults to `.morph` (button glass expands into menu). Set to
+    /// `.preview(...)` to use the long-press card style (button lifts as a
+    /// preview snapshot, menu appears below).
+    public var contextMenuPresentationStyle: ContextMenuController.PresentationStyle = .morph
     private weak var currentContextController: ContextMenuController?
     private var longPressRecognizer: UILongPressGestureRecognizer?
 
@@ -179,6 +184,7 @@ public final class GlassBarButtonView: UIControl {
             source: self,
             cornerRadius: bounds.height / 2.0,
             items: items,
+            presentationStyle: contextMenuPresentationStyle,
             onDismiss: { [weak self] in
                 self?.currentContextController = nil
             }
