@@ -39,11 +39,13 @@ final class ContextMenuActionsView: UIView {
     /// transparent background.
     private let contentContainer = UIView()
     /// Glass selection lens — the same `LiquidLensView` the tab bar uses
-    /// for its sliding selected indicator. Covers the whole content area
-    /// and positions its visible lens at the selected row via
-    /// `update(selectionOrigin:selectionSize:...)`. Rendered BELOW the row
-    /// views so text + icons stay readable on top of the lens glass.
-    private let highlightLens = LiquidLensView(kind: .builtinContainer)
+    /// for its sliding selected indicator. `.noContainer` so only the
+    /// lens "blob" itself renders (no surrounding GlassBackgroundContainer
+    /// strip — the menu's outer UIVisualEffectView already provides the
+    /// background). Covers the whole content area and positions its visible
+    /// lens at the selected row via `update(selectionOrigin:selectionSize:...)`.
+    /// Rendered BELOW the row views so text + icons stay readable on top.
+    private let highlightLens = LiquidLensView(kind: .noContainer)
     private var rowViews: [RowEntry] = []
 
     // MARK: - State
