@@ -269,31 +269,58 @@ public final class ContextMenuController {
 
         guard animated, let sdfHost else { cleanup(); return }
 
-        // Reverse morph on sdfHost (= the morphing entity carrying the SDF
-        // filter). The internal menuContainer auto-resizes, snapshot stays at
-        // top-left source size, actionsView fades out.
-        let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
-        radiusAnim.fromValue = sdfHost.layer.cornerRadius
-        radiusAnim.toValue = sourceCornerRadius
-        radiusAnim.duration = ContextMenuController.dismissDuration
-        radiusAnim.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        // Reverse keyframed morph: sdfHost shrinks back to source via the
+        // same lens easing curves used in animateIn (just from = menu →
+        // to = source). menuContainer auto-resizes, snapshot/actions
+        // cross-fade in reverse.
+        let keyframes = ContextMenuController.computeMorphKeyframes(
+            from: menuFrameInHost,
+            to: sourceRect,
+            fromCornerRadius: ContextMenuActionsView.cornerRadius,
+            toCornerRadius: sourceCornerRadius
+        )
+
+        sdfHost.transform = .identity
+        sdfHost.layer.bounds = CGRect(origin: .zero, size: sourceRect.size)
+        sdfHost.layer.position = CGPoint(x: sourceRect.midX, y: sourceRect.midY)
         sdfHost.layer.cornerRadius = sourceCornerRadius
+
+        let scaleFactor = UIView.animationDurationFactor()
+        let durationScaled = ContextMenuController.dismissDuration * scaleFactor
+
+        let sizeAnim = CAKeyframeAnimation(keyPath: "bounds.size")
+        sizeAnim.duration = durationScaled
+        sizeAnim.values = keyframes.sizes.map { NSValue(cgSize: $0) }
+        sizeAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        sizeAnim.isRemovedOnCompletion = true
+        sizeAnim.fillMode = .both
+        sdfHost.layer.add(sizeAnim, forKey: "bounds.size")
+
+        let posAnim = CAKeyframeAnimation(keyPath: "position")
+        posAnim.duration = durationScaled
+        posAnim.values = keyframes.positions.map { NSValue(cgPoint: $0) }
+        posAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        posAnim.isRemovedOnCompletion = true
+        posAnim.fillMode = .both
+        sdfHost.layer.add(posAnim, forKey: "position")
+
+        let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius")
+        radiusAnim.duration = durationScaled
+        radiusAnim.values = keyframes.radii.map { $0 as NSNumber }
+        radiusAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        radiusAnim.isRemovedOnCompletion = true
+        radiusAnim.fillMode = .both
         sdfHost.layer.add(radiusAnim, forKey: "cornerRadius")
+
+        if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
+            filter.updateLayout(size: sourceRect.size, cornerRadius: self.sourceCornerRadius)
+        }
 
         UIView.animate(
             withDuration: ContextMenuController.dismissDuration,
             delay: 0,
-            usingSpringWithDamping: ContextMenuController.dismissDamping,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: {
-                sdfHost.frame = sourceRect
-                sdfHost.transform = .identity
-                dim?.alpha = 0.0
-                if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
-                    filter.updateLayout(size: sourceRect.size, cornerRadius: self.sourceCornerRadius)
-                }
-            },
+            options: [.curveEaseInOut, .beginFromCurrentState],
+            animations: { dim?.alpha = 0.0 },
             completion: { _ in cleanup() }
         )
 
@@ -340,35 +367,61 @@ public final class ContextMenuController {
             dim.alpha = 1.0
         })
 
-        // 2) sdfHost (= the morphing entity) morphs from source rect → menu
-        // rect with spring. CornerRadius animates via CABasicAnimation, and
-        // the SDF filter (if installed) is given matching keyframed
-        // displacement + blur ramps so the lens wobble follows the morph.
-        let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
-        radiusAnim.fromValue = sourceCornerRadius
-        radiusAnim.toValue = ContextMenuActionsView.cornerRadius
-        radiusAnim.duration = ContextMenuController.morphDuration
-        radiusAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.4, 1.0)
+        // 2) sdfHost morphs source rect → menu rect via 30-sample
+        // CAKeyframeAnimation using Telegram's lens easing curves
+        // (springProgress for position with overshoot, sideFractionEase
+        // for size, radiusFractionEase for cornerRadius). This is what
+        // gives the morph its distinctive multi-stage "lens" feel — a plain
+        // UIView spring is too smooth to read as the lens animation.
+        let keyframes = ContextMenuController.computeMorphKeyframes(
+            from: sourceRectInHost,
+            to: menuFrameInHost,
+            fromCornerRadius: sourceCornerRadius,
+            toCornerRadius: ContextMenuActionsView.cornerRadius
+        )
+
+        // Settle model values to the END state so the keyframed presentation
+        // returns there cleanly when the animations are removed.
+        sdfHost.layer.bounds = CGRect(origin: .zero, size: menuFrameInHost.size)
+        sdfHost.layer.position = CGPoint(x: menuFrameInHost.midX, y: menuFrameInHost.midY)
         sdfHost.layer.cornerRadius = ContextMenuActionsView.cornerRadius
+
+        let scale = UIView.animationDurationFactor()
+        let durationScaled = ContextMenuController.morphDuration * scale
+
+        let sizeAnim = CAKeyframeAnimation(keyPath: "bounds.size")
+        sizeAnim.duration = durationScaled
+        sizeAnim.values = keyframes.sizes.map { NSValue(cgSize: $0) }
+        sizeAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        sizeAnim.isRemovedOnCompletion = true
+        sizeAnim.fillMode = .both
+        sdfHost.layer.add(sizeAnim, forKey: "bounds.size")
+
+        let posAnim = CAKeyframeAnimation(keyPath: "position")
+        posAnim.duration = durationScaled
+        posAnim.values = keyframes.positions.map { NSValue(cgPoint: $0) }
+        posAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        posAnim.isRemovedOnCompletion = true
+        posAnim.fillMode = .both
+        sdfHost.layer.add(posAnim, forKey: "position")
+
+        let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius")
+        radiusAnim.duration = durationScaled
+        radiusAnim.values = keyframes.radii.map { $0 as NSNumber }
+        radiusAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        radiusAnim.isRemovedOnCompletion = true
+        radiusAnim.fillMode = .both
         sdfHost.layer.add(radiusAnim, forKey: "cornerRadius")
 
-        UIView.animate(
-            withDuration: ContextMenuController.morphDuration,
-            delay: 0,
-            usingSpringWithDamping: ContextMenuController.morphDamping,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: {
-                sdfHost.frame = self.menuFrameInHost
-                if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
-                    filter.updateLayout(
-                        size: self.menuFrameInHost.size,
-                        cornerRadius: ContextMenuActionsView.cornerRadius
-                    )
-                }
-            },
-            completion: nil
-        )
+        // Update SDF layout to the final menu state — its bounds + corner
+        // radius animate alongside via implicit CATransaction (the surrounding
+        // CAKeyframeAnimations are scheduled in the same runloop tick).
+        if #available(iOS 26.0, *), let filter = self.sdfFilter as? LensSDFFilter {
+            filter.updateLayout(
+                size: menuFrameInHost.size,
+                cornerRadius: ContextMenuActionsView.cornerRadius
+            )
+        }
 
         // SDF wobble: strong displacement at t=0 decaying to none, and a
         // matching blur ramp. The displacement amount is rooted in the
@@ -409,6 +462,54 @@ public final class ContextMenuController {
             return UIGlassEffect(style: .regular)
         }
         return UIBlurEffect(style: isDark ? .systemMaterialDark : .systemMaterialLight)
+    }
+
+    // MARK: - Morph keyframes
+
+    /// 30-sample bake of the lens-style morph from `from` rect → `to` rect.
+    /// Uses Telegram's lens easing curves so the animation reads as the lens
+    /// even on systems where the SDF displacement filter isn't available
+    /// (simulator, iOS < 26): position uses `springProgress` (under-damped
+    /// spring with subtle overshoot); size uses `sideFractionEase` (critically
+    /// damped); cornerRadius uses `radiusFractionEase`.
+    private static func computeMorphKeyframes(
+        from: CGRect,
+        to: CGRect,
+        fromCornerRadius: CGFloat,
+        toCornerRadius: CGFloat
+    ) -> (sizes: [CGSize], positions: [CGPoint], radii: [CGFloat]) {
+        let sampleCount = 30
+        let endIdx = CGFloat(sampleCount - 1)
+        let fromCenter = CGPoint(x: from.midX, y: from.midY)
+        let toCenter = CGPoint(x: to.midX, y: to.midY)
+
+        var sizes: [CGSize] = []
+        var positions: [CGPoint] = []
+        var radii: [CGFloat] = []
+        sizes.reserveCapacity(sampleCount)
+        positions.reserveCapacity(sampleCount)
+        radii.reserveCapacity(sampleCount)
+
+        for i in 0 ..< sampleCount {
+            let t = endIdx > 0 ? CGFloat(i) / endIdx : 1.0
+
+            let posF = CGFloat(springProgress(Double(t)))
+            positions.append(CGPoint(
+                x: (1.0 - posF) * fromCenter.x + posF * toCenter.x,
+                y: (1.0 - posF) * fromCenter.y + posF * toCenter.y
+            ))
+
+            let sizeF = CGFloat(max(0.0, min(1.0, sideFractionEase(Double(t)))))
+            sizes.append(CGSize(
+                width: (1.0 - sizeF) * from.width + sizeF * to.width,
+                height: (1.0 - sizeF) * from.height + sizeF * to.height
+            ))
+
+            let radiusF = CGFloat(max(0.0, min(1.0, radiusFractionEase(Double(t)))))
+            radii.append((1.0 - radiusF) * fromCornerRadius + radiusF * toCornerRadius)
+        }
+
+        return (sizes, positions, radii)
     }
 
     // MARK: - Source snapshot
