@@ -174,22 +174,24 @@ public final class ContextMenuController {
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Capture the source snapshot BEFORE making the source invisible —
-        // otherwise `snapshotView(afterScreenUpdates:)` returns a blank ghost
-        // and the morph appears to grow out of nothing.
+        // Capture the source snapshot while it's still visible.
         let sourceSnapshot = makeSourceSnapshot(source: source)
 
-        // Make the source invisible WITHOUT removing it from layout. Setting
-        // `isHidden = true` would collapse the source's slot in its parent's
-        // collection (e.g. a navbar's GlassControlGroup) and shift its
-        // siblings; using `alpha = 0` keeps the slot but turns the pixels
-        // transparent. Wrap in a CATransaction with implicit actions disabled
-        // so the change applies in this run-loop tick (no fade, no leak).
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        source.alpha = 0.0
-        CATransaction.commit()
-        CATransaction.flush()
+        // Smoothly fade the source button instead of snapping it invisible.
+        // Sync timing with the lens's source-effect-view fade (which runs its
+        // own 0.2s setTransitionFraction inside animateIn) so the original
+        // button and the lens's snapshot fade as a single unit — visually the
+        // button "unfolds" into the morphing menu instead of disappearing
+        // before the morph starts.
+        // Important: we still keep the source in layout — only `alpha`
+        // changes, never `isHidden`, so the navbar's GlassControlGroup (or
+        // whichever collection the source lives in) doesn't reflow.
+        UIView.animate(
+            withDuration: 0.2, delay: 0,
+            options: [.curveEaseOut, .beginFromCurrentState],
+            animations: { source.alpha = 0.0 },
+            completion: nil
+        )
 
         animateIn(
             host: host,
@@ -220,8 +222,10 @@ public final class ContextMenuController {
         let cleanup: () -> Void = { [weak self] in
             if didClean { return }
             didClean = true
-            // Restore the source's visibility — alpha-only since we never set
-            // isHidden during present.
+            // Snap the source back to fully visible — by the time cleanup
+            // runs the dismiss animation has already faded the source-effect
+            // view to invisible, so popping the original button to alpha 1
+            // is invisible to the user.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             sourceView?.alpha = 1.0
@@ -239,6 +243,18 @@ public final class ContextMenuController {
             if let strongSelf = self {
                 ContextMenuController.presentedControllers.remove(strongSelf.retainBox)
             }
+        }
+
+        // Fade the source back in over the morph-out so the button visibly
+        // re-materialises in sync with the menu shrinking. Total morph-out is
+        // ~0.32s; ramp source.alpha 0→1 over the tail of it.
+        if let sourceView {
+            UIView.animate(
+                withDuration: 0.22, delay: 0.05,
+                options: [.curveEaseInOut, .beginFromCurrentState],
+                animations: { sourceView.alpha = 1.0 },
+                completion: nil
+            )
         }
 
         guard animated, let lens, let sourceView else { cleanup(); return }

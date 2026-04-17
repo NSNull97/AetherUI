@@ -26,7 +26,13 @@ final class ContextMenuActionsView: UIView {
 
     // MARK: - Subviews
 
-    private let glassBackground: GlassBackgroundView
+    /// Direct `UIVisualEffectView` (UIGlassEffect on iOS 26+, UIBlurEffect
+    /// fallback) instead of `GlassBackgroundView` — the latter is correct in
+    /// isolation but disappears once placed inside `LensTransitionContainer`'s
+    /// keyframe-driven contentsView (the lens sublayerTransform / clipping
+    /// interactions hide its native pipeline). A plain `UIVisualEffectView`
+    /// renders reliably regardless of where it's placed.
+    private let glassView: UIVisualEffectView
     private let contentContainer = UIView()
     private let highlightView = UIView()
     private var rowViews: [RowEntry] = []
@@ -55,12 +61,23 @@ final class ContextMenuActionsView: UIView {
 
     init(items: [ContextMenuItem]) {
         self.items = items
-        self.glassBackground = GlassBackgroundView(style: .regular)
+        let blur = UIVisualEffectView()
+        if #available(iOS 26.0, *) {
+            blur.effect = UIGlassEffect(style: .regular)
+        } else {
+            blur.effect = UIBlurEffect(style: .systemMaterial)
+        }
+        blur.layer.cornerRadius = ContextMenuActionsView.cornerRadius
+        blur.layer.masksToBounds = true
+        if #available(iOS 13.0, *) {
+            blur.layer.cornerCurve = .continuous
+        }
+        blur.isUserInteractionEnabled = false
+        self.glassView = blur
 
         super.init(frame: .zero)
 
-        glassBackground.isUserInteractionEnabled = false
-        addSubview(glassBackground)
+        addSubview(glassView)
 
         contentContainer.clipsToBounds = true
         contentContainer.layer.cornerRadius = ContextMenuActionsView.cornerRadius
@@ -101,16 +118,7 @@ final class ContextMenuActionsView: UIView {
         super.layoutSubviews()
 
         let frame = CGRect(origin: .zero, size: bounds.size)
-        glassBackground.frame = frame
-        glassBackground.update(
-            size: bounds.size,
-            cornerRadius: ContextMenuActionsView.cornerRadius,
-            isDark: traitCollection.userInterfaceStyle == .dark,
-            tintColor: .init(kind: .panel),
-            isInteractive: false,
-            isVisible: true,
-            transition: .immediate
-        )
+        glassView.frame = frame
         contentContainer.frame = frame
 
         var y: CGFloat = 0.0
