@@ -38,11 +38,12 @@ final class ContextMenuActionsView: UIView {
     /// with UIGlassEffect / UIBlurEffect) — this view is just rows on
     /// transparent background.
     private let contentContainer = UIView()
-    /// Glass selection pill (like the tab bar's `LiquidLensView`). Sits
-    /// on top of the rows and slides between them via spring animation.
-    /// On iOS 26+ uses native UIGlassEffect (so it visibly refracts the
-    /// content underneath); falls back to a tinted backdrop blur otherwise.
-    private let highlightView: GlassBackgroundView
+    /// Glass selection lens — the same `LiquidLensView` the tab bar uses
+    /// for its sliding selected indicator. Covers the whole content area
+    /// and positions its visible lens at the selected row via
+    /// `update(selectionOrigin:selectionSize:...)`. Rendered BELOW the row
+    /// views so text + icons stay readable on top of the lens glass.
+    private let highlightLens = LiquidLensView(kind: .builtinContainer)
     private var rowViews: [RowEntry] = []
 
     // MARK: - State
@@ -97,7 +98,6 @@ final class ContextMenuActionsView: UIView {
     init(items: [ContextMenuItem], headerStyle: HeaderStyle = .none) {
         self.items = items
         self.headerStyle = headerStyle
-        self.highlightView = GlassBackgroundView(style: .regular)
 
         super.init(frame: .zero)
 
@@ -106,13 +106,12 @@ final class ContextMenuActionsView: UIView {
         contentContainer.clipsToBounds = false
         addSubview(contentContainer)
 
-        highlightView.layer.cornerRadius = ContextMenuActionsView.highlightCornerRadius
-        if #available(iOS 13.0, *) {
-            highlightView.layer.cornerCurve = .continuous
-        }
-        highlightView.alpha = 0
-        highlightView.isUserInteractionEnabled = false
-        contentContainer.addSubview(highlightView)
+        // Lens sits BENEATH the rows so text + icons stay readable on top
+        // of the lens glass. Its alpha controls visibility (0 = hidden,
+        // 1 = visible at the highlighted row).
+        highlightLens.alpha = 0
+        highlightLens.isUserInteractionEnabled = false
+        contentContainer.addSubview(highlightLens)
 
         buildRowViews()
     }
@@ -168,17 +167,21 @@ final class ContextMenuActionsView: UIView {
             y += h
         }
 
-        // Reposition the highlight if it's currently anchored on a row.
+        // Lens covers the whole content area so its `selectionOrigin` /
+        // `selectionSize` can address any row. Update happens immediately
+        // here; `moveHighlight` re-runs `update(...)` with an animated
+        // transition when the user changes which row is highlighted.
+        highlightLens.frame = contentContainer.bounds
         if let highlightedIndex {
             let frame = highlightFrame(forRowAt: highlightedIndex)
-            highlightView.frame = frame
-            highlightView.update(
-                size: frame.size,
+            highlightLens.update(
+                size: contentContainer.bounds.size,
                 cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+                selectionOrigin: frame.origin,
+                selectionSize: frame.size,
+                inset: 0,
                 isDark: traitCollection.userInterfaceStyle == .dark,
-                tintColor: .init(kind: .panel),
-                isInteractive: false,
-                isVisible: true,
+                isLifted: true,
                 transition: .immediate
             )
         }
@@ -225,67 +228,37 @@ final class ContextMenuActionsView: UIView {
         }
 
         let targetFrame = highlightFrame(forRowAt: index)
-        let isFirstShow = (highlightView.alpha < 0.01)
+        let isFirstShow = (highlightLens.alpha < 0.01)
 
         highlightedIndex = index
 
         let isDark = traitCollection.userInterfaceStyle == .dark
+        let lensTransition: ContainedViewLayoutTransition = (animated && !isFirstShow)
+            ? .animated(duration: 0.32, curve: .customSpring(damping: 0.85, initialVelocity: 0))
+            : .immediate
+
+        // Lens covers the whole content area; `selectionOrigin/Size` move
+        // the visible lens to the highlighted row. The lens animates
+        // internally via its own update transition (matches the tab bar's
+        // lens motion).
+        highlightLens.frame = contentContainer.bounds
+        highlightLens.update(
+            size: contentContainer.bounds.size,
+            cornerRadius: ContextMenuActionsView.highlightCornerRadius,
+            selectionOrigin: targetFrame.origin,
+            selectionSize: targetFrame.size,
+            inset: 0,
+            isDark: isDark,
+            isLifted: true,
+            transition: lensTransition
+        )
 
         if isFirstShow {
-            // First show: jump to position with no slide, only fade in.
-            highlightView.frame = targetFrame
-            highlightView.update(
-                size: targetFrame.size,
-                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
-                isDark: isDark,
-                tintColor: .init(kind: .panel),
-                isInteractive: false,
-                isVisible: true,
-                transition: .immediate
-            )
             UIView.animate(
                 withDuration: 0.15, delay: 0,
                 options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
-                animations: { self.highlightView.alpha = 1.0 },
+                animations: { self.highlightLens.alpha = 1.0 },
                 completion: nil
-            )
-            return
-        }
-
-        // Subsequent moves: slide via spring (matches the tab bar's lens
-        // motion). `glassBackground.update(...)` is also given the same
-        // animated transition so its internal sizing tracks the spring.
-        if animated {
-            let glassTransition: ContainedViewLayoutTransition = .animated(
-                duration: 0.32,
-                curve: .customSpring(damping: 0.85, initialVelocity: 0)
-            )
-            UIView.animate(
-                withDuration: 0.32, delay: 0,
-                usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .allowUserInteraction],
-                animations: { self.highlightView.frame = targetFrame },
-                completion: nil
-            )
-            highlightView.update(
-                size: targetFrame.size,
-                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
-                isDark: isDark,
-                tintColor: .init(kind: .panel),
-                isInteractive: false,
-                isVisible: true,
-                transition: glassTransition
-            )
-        } else {
-            highlightView.frame = targetFrame
-            highlightView.update(
-                size: targetFrame.size,
-                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
-                isDark: isDark,
-                tintColor: .init(kind: .panel),
-                isInteractive: false,
-                isVisible: true,
-                transition: .immediate
             )
         }
     }
@@ -296,11 +269,11 @@ final class ContextMenuActionsView: UIView {
             UIView.animate(
                 withDuration: 0.18, delay: 0,
                 options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
-                animations: { self.highlightView.alpha = 0.0 },
+                animations: { self.highlightLens.alpha = 0.0 },
                 completion: nil
             )
         } else {
-            highlightView.alpha = 0.0
+            highlightLens.alpha = 0.0
         }
     }
 
@@ -423,7 +396,8 @@ final class ContextMenuActionsView: UIView {
             }
         }
         // Keep the highlight on top of rows so it visually sits above content.
-        contentContainer.bringSubviewToFront(highlightView)
+        // Keep the lens UNDER the rows — text + icons need to read on top.
+        contentContainer.sendSubviewToBack(highlightLens)
     }
 
     /// Header row used at the top of pushed submenu pages (chevron.left)
