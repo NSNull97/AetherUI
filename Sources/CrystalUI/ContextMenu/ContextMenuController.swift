@@ -2,30 +2,41 @@ import UIKit
 
 // MARK: - ContextMenuController
 
-/// Presents a `ContextMenuActionsView` with a Telegram / iOS 26 native style
-/// morph-in animation rooted at a source view.
+/// Presents a `ContextMenuActionsView` with a Telegram-style morph-in
+/// animation rooted at a source view.
 ///
-/// **Architecture (v3, post‑lens experiment).** The earlier lens-based path
-/// (`LensTransitionContainer` driving `CASDFGlassDisplacementEffect` keyframes)
-/// looked broken in practice because the lens animates internal layers that
-/// the menu content never actually rendered into — so the user saw a series
-/// of scaled, semi-transparent ghosts and no glass at all. This version
-/// drops the lens for the morph and uses a single `UIVisualEffectView`
-/// (`UIGlassEffect` on iOS 26+, `UIBlurEffect` fallback) as the visible
-/// menu container. The container is sized to the source rect at t=0 and
-/// spring-animated to the final menu rect; the actions view fills it via
-/// autoresizing so the rows visibly grow with the glass.
+/// The morph itself is handled by `LensTransitionContainer` — a port of
+/// Telegram's iOS-26 SDF lens container that drives the actual
+/// `CASDFGlassDisplacementEffect` filter chain. On older systems the lens
+/// degrades to a no-op container and the menu animates in with a
+/// straightforward spring scale + alpha; the interaction model stays
+/// identical.
+///
+/// The controller presents itself as a transparent, full-screen overlay
+/// view attached to the source window so it covers navigation bars and the
+/// status bar without needing a separate window.
 public final class ContextMenuController {
-    // MARK: - Animation constants
+    // MARK: - Animation constants (mirror ContextControllerExtractedPresentationNode)
 
-    private static let morphDuration: TimeInterval = 0.5
-    private static let morphDamping: CGFloat = 0.78
+    private static let lensDuration: TimeInterval = 0.5
     private static let dimAlpha: CGFloat = 0.12
     private static let menuSpacing: CGFloat = 10.0
     private static let menuCornerRadius: CGFloat = 27.0
 
-    // MARK: - Self-retention
+    /// Rubber-band stretch metrics for the WHOLE menu container (the lens),
+    /// not just the inner rows. The lens leans toward the touch point with a
+    /// fraction of the touch's offset from menu center, plus a small press
+    /// scale-up — the same trick `UIGlassEffect` does for navbar buttons.
+    private static let stretchFollow: CGFloat = 0.06
+    private static let pressScale: CGFloat = 1.012
 
+    // MARK: - Self-retention
+    //
+    // Callers store the returned `ContextMenuController` in a `weak` ivar by
+    // convention (it doesn't make sense to keep a context menu around longer
+    // than its presentation lifetime). To survive long enough to handle
+    // dismissal taps, the controller adds itself to this set on `present()`
+    // and removes itself once `dismiss()` has finished cleanup.
     private static var presentedControllers: Set<ContextMenuControllerBox> = []
     private lazy var retainBox = ContextMenuControllerBox(controller: self)
 
@@ -51,10 +62,7 @@ public final class ContextMenuController {
 
     private weak var hostView: UIView?
     private var dimView: UIView?
-    /// Outer glass container that morphs from sourceRect to menuRect. Holds
-    /// `actionsView` inside its `contentView`, so corner clipping naturally
-    /// applies to the rows too.
-    private var menuContainer: UIVisualEffectView?
+    private var lensContainer: LensTransitionContainer?
     private var actionsView: ContextMenuActionsView?
     private var tapRecognizer: UITapGestureRecognizer?
 
@@ -86,10 +94,10 @@ public final class ContextMenuController {
         window.addSubview(host)
         self.hostView = host
 
-        // Dim layer — sits under everything else AND owns the tap-to-dismiss
-        // recognizer. Touches that hit the menu container go to the menu first
-        // (it's z-above), so anything that lands on dim is by definition
-        // outside the menu.
+        // Dim layer — sits under everything else, AND owns the tap-to-dismiss
+        // handler. Anything inside the lens (= the menu) intercepts touches
+        // before they reach dim, so a tap on dim by definition lives outside
+        // the menu rect.
         let dim = UIView(frame: host.bounds)
         dim.backgroundColor = UIColor.black.withAlphaComponent(ContextMenuController.dimAlpha)
         dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -98,40 +106,45 @@ public final class ContextMenuController {
         host.addSubview(dim)
         self.dimView = dim
 
-        // Build the actions view to know its preferred size before sizing the
-        // glass container.
+        // Build the actions view to know its preferred size before placing the lens.
         let actionsView = ContextMenuActionsView(items: items)
         let maxWidth = min(host.bounds.width - 24.0, ContextMenuActionsView.preferredWidth)
         let menuSize = actionsView.preferredSize(maxWidth: maxWidth)
 
         let sourceRectInHost = source.convert(source.bounds, to: host)
         let menuFrame = computeMenuFrame(sourceRect: sourceRectInHost, menuSize: menuSize, hostBounds: host.bounds)
-        let sourceCornerRadius = self.source.cornerRadius ?? source.layer.cornerRadius
         self.menuFrameInHost = menuFrame
         self.sourceRectInHost = sourceRectInHost
-        self.sourceCornerRadius = sourceCornerRadius
+        self.sourceCornerRadius = self.source.cornerRadius ?? source.layer.cornerRadius
 
-        // Glass menu container — UIVisualEffectView with UIGlassEffect on
-        // iOS 26+, otherwise systemMaterial UIBlurEffect. The container starts
-        // sized + cornered like the source button so the morph reads as
-        // "button expands into menu".
-        let menuContainer = UIVisualEffectView(effect: ContextMenuController.makeMenuEffect(isDark: source.traitCollection.userInterfaceStyle == .dark))
-        menuContainer.frame = sourceRectInHost
-        menuContainer.layer.cornerRadius = sourceCornerRadius
-        menuContainer.layer.masksToBounds = true
-        if #available(iOS 13.0, *) {
-            menuContainer.layer.cornerCurve = .continuous
-        }
-        host.addSubview(menuContainer)
-        self.menuContainer = menuContainer
+        // Lens container is sized to the final menu rect — that's what Telegram
+        // does so the SDF keyframes work in lens-local coords. The lens does
+        // not clip, so the morphing blob can extend beyond the menu rect (e.g.
+        // up to the source button) without being cut off.
+        let lensEffectView = LensEffectView(contentView: nil)
+        lensEffectView.updateAppearance(isDark: source.traitCollection.userInterfaceStyle == .dark)
+        let lens = LensTransitionContainer(effectView: lensEffectView)
+        lens.frame = menuFrame
+        host.addSubview(lens)
+        self.lensContainer = lens
 
-        // Actions fill the container; auto-resize as the container morphs.
-        actionsView.frame = menuContainer.bounds
-        actionsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        menuContainer.contentView.addSubview(actionsView)
+        // Lens internal layout — model values that the keyframes settle back to.
+        lens.update(
+            size: menuFrame.size,
+            cornerRadius: ContextMenuActionsView.cornerRadius,
+            isDark: source.traitCollection.userInterfaceStyle == .dark,
+            transition: .immediate
+        )
+
+        // Place the actions inside the lens contentsView in local coords.
+        actionsView.frame = CGRect(origin: .zero, size: menuFrame.size)
+        lens.contentsView.addSubview(actionsView)
         self.actionsView = actionsView
 
-        // Tap-outside to dismiss.
+        // Tap-outside to dismiss — attached to dim so it only fires when the
+        // touch missed the lens. (Touches inside the lens are intercepted by
+        // the lens / actions view earlier in the hit-test chain and never
+        // reach dim.)
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
         dim.addGestureRecognizer(tap)
         self.tapRecognizer = tap
@@ -146,17 +159,46 @@ public final class ContextMenuController {
             if shouldAutoDismiss { self.dismiss(animated: true) }
         }
 
+        // Stretch the WHOLE lens container (= the entire menu chrome including
+        // its glass surface) toward the active touch. The actionsView reports
+        // the touch in its own coords; we apply the transform on the lens.
+        actionsView.onStretchUpdate = { [weak self, weak lens, weak actionsView] point in
+            guard let self, let lens, let actionsView else { return }
+            self.applyStretch(toLens: lens, touchInActions: point, actionsBounds: actionsView.bounds, animated: false)
+        }
+        actionsView.onStretchRelease = { [weak self, weak lens] in
+            guard let self, let lens else { return }
+            self.releaseStretch(onLens: lens)
+        }
+
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // IMPORTANT: do NOT hide the source view. It lives inside the navbar
-        // (or another collection) where hiding it would collapse the layout
-        // and shift its siblings. Instead, the menu container starts at the
-        // source's exact rect and corner radius, perfectly overlapping the
-        // source. To the user this reads as the button itself "expanding"
-        // into the menu — no disappear, no layout shift.
+        // Capture the source snapshot BEFORE making the source invisible —
+        // otherwise `snapshotView(afterScreenUpdates:)` returns a blank ghost
+        // and the morph appears to grow out of nothing.
+        let sourceSnapshot = makeSourceSnapshot(source: source)
 
-        animateIn(host: host, dim: dim, menuContainer: menuContainer, actionsView: actionsView)
+        // Make the source invisible WITHOUT removing it from layout. Setting
+        // `isHidden = true` would collapse the source's slot in its parent's
+        // collection (e.g. a navbar's GlassControlGroup) and shift its
+        // siblings; using `alpha = 0` keeps the slot but turns the pixels
+        // transparent. Wrap in a CATransaction with implicit actions disabled
+        // so the change applies in this run-loop tick (no fade, no leak).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        source.alpha = 0.0
+        CATransaction.commit()
+        CATransaction.flush()
+
+        animateIn(
+            host: host,
+            dim: dim,
+            lens: lens,
+            actionsView: actionsView,
+            source: source,
+            sourceSnapshot: sourceSnapshot
+        )
     }
 
     public func dismiss(animated: Bool = true) {
@@ -165,27 +207,32 @@ public final class ContextMenuController {
 
         let host = hostView
         let dim = dimView
-        let menuContainer = self.menuContainer
+        let lens = lensContainer
         let actionsView = self.actionsView
         let sourceView = source.view
         let sourceRect: CGRect
-        if let sourceView, let host {
-            sourceRect = sourceView.convert(sourceView.bounds, to: host)
-        } else {
-            sourceRect = self.sourceRectInHost
-        }
+        if let sourceView, let host { sourceRect = sourceView.convert(sourceView.bounds, to: host) }
+        else { sourceRect = self.sourceRectInHost }
 
+        // `cleanup` is reentrancy-guarded with a token so the timeout fallback
+        // and the UIView.animate completion can't both run it.
         var didClean = false
         let cleanup: () -> Void = { [weak self] in
             if didClean { return }
             didClean = true
+            // Restore the source's visibility — alpha-only since we never set
+            // isHidden during present.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            sourceView?.alpha = 1.0
+            CATransaction.commit()
             dim?.removeFromSuperview()
-            menuContainer?.removeFromSuperview()
+            lens?.removeFromSuperview()
             actionsView?.removeFromSuperview()
             host?.removeFromSuperview()
             self?.hostView = nil
             self?.dimView = nil
-            self?.menuContainer = nil
+            self?.lensContainer = nil
             self?.actionsView = nil
             self?.onDismiss?()
             // Drop the self-retain — last reference, controller deallocates next.
@@ -194,35 +241,38 @@ public final class ContextMenuController {
             }
         }
 
-        guard animated, let menuContainer else { cleanup(); return }
+        guard animated, let lens, let sourceView else { cleanup(); return }
 
-        // Reverse morph: spring container back to source rect with shrinking
-        // corner radius + alpha decay. Dim fades in parallel.
-        let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
-        radiusAnim.fromValue = menuContainer.layer.cornerRadius
-        radiusAnim.toValue = sourceCornerRadius
-        radiusAnim.duration = ContextMenuController.morphDuration * 0.6
-        radiusAnim.timingFunction = CAMediaTimingFunction(name: .easeIn)
-        menuContainer.layer.cornerRadius = sourceCornerRadius
-        menuContainer.layer.add(radiusAnim, forKey: "cornerRadius")
+        // Drive the lens out: a fresh source effect view (with the current source
+        // snapshot) is what the lens animates toward. Source is currently at
+        // alpha 0 — temporarily restore it so snapshotView captures real pixels.
+        let savedAlpha = sourceView.alpha
+        sourceView.alpha = 1.0
+        let sourceSnapshotView = makeSourceSnapshot(source: sourceView)
+        sourceView.alpha = savedAlpha
+        let sourceEffectView = LensEffectView(contentView: sourceSnapshotView)
+        sourceEffectView.updateAppearance(isDark: sourceView.traitCollection.userInterfaceStyle == .dark)
 
-        UIView.animate(
-            withDuration: ContextMenuController.morphDuration * 0.6,
-            delay: 0,
-            usingSpringWithDamping: 0.95,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: {
-                menuContainer.frame = sourceRect
-                menuContainer.alpha = 0.0
-                dim?.alpha = 0.0
-                actionsView?.alpha = 0.0
-            },
-            completion: { _ in cleanup() }
+        let fromRectInLens = CGRect(origin: .zero, size: menuFrameInHost.size)
+        let toRectInLens = sourceRect.offsetBy(dx: -menuFrameInHost.minX, dy: -menuFrameInHost.minY)
+        lens.animateOut(
+            fromRect: fromRectInLens,
+            toRect: toRectInLens,
+            fromCornerRadius: ContextMenuActionsView.cornerRadius,
+            toCornerRadius: sourceCornerRadius,
+            isDark: sourceView.traitCollection.userInterfaceStyle == .dark,
+            sourceEffectView: sourceEffectView
         )
 
-        // Defensive timer in case the animation completion is starved.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { cleanup() }
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn], animations: {
+            dim?.alpha = 0.0
+            actionsView?.alpha = 0.0
+        }, completion: { _ in cleanup() })
+
+        // Defensive timer: even if the alpha animation's completion is starved
+        // (interrupted by a higher-priority animation, app backgrounded, etc.),
+        // the menu still tears down.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { cleanup() }
     }
 
     // MARK: - Animate in
@@ -230,51 +280,70 @@ public final class ContextMenuController {
     private func animateIn(
         host: UIView,
         dim: UIView,
-        menuContainer: UIVisualEffectView,
-        actionsView: ContextMenuActionsView
+        lens: LensTransitionContainer,
+        actionsView: ContextMenuActionsView,
+        source: UIView,
+        sourceSnapshot: UIView
     ) {
         // 1) Dim fades in quickly.
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut], animations: {
             dim.alpha = 1.0
         })
 
-        // 2) Spring the menu container from source rect → menu rect, plus
-        // cornerRadius from sourceCornerRadius → menuCornerRadius. This is
-        // the visible morph: the glass surface grows out of the source button.
-        let radiusAnim = CABasicAnimation(keyPath: "cornerRadius")
-        radiusAnim.fromValue = sourceCornerRadius
-        radiusAnim.toValue = ContextMenuActionsView.cornerRadius
-        radiusAnim.duration = ContextMenuController.morphDuration
-        radiusAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.4, 1.0)
-        menuContainer.layer.cornerRadius = ContextMenuActionsView.cornerRadius
-        menuContainer.layer.add(radiusAnim, forKey: "cornerRadius")
+        // 2) Wrap the pre-captured snapshot in a lens effect view; the lens
+        // internally positions / sizes / blurs this view via baked SDF keyframes.
+        let sourceEffectView = LensEffectView(contentView: sourceSnapshot)
+        sourceEffectView.updateAppearance(isDark: source.traitCollection.userInterfaceStyle == .dark)
 
-        UIView.animate(
-            withDuration: ContextMenuController.morphDuration,
-            delay: 0,
-            usingSpringWithDamping: ContextMenuController.morphDamping,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: {
-                menuContainer.frame = self.menuFrameInHost
-            },
-            completion: nil
+        // 3) Hand off to the lens. fromRect / toRect must be in the lens
+        // container's own coordinate space — Telegram does this by offsetting
+        // the source rect by `-actionsContainerNode.frame.minX/.minY`.
+        let fromRectInLens = sourceRectInHost.offsetBy(dx: -menuFrameInHost.minX, dy: -menuFrameInHost.minY)
+        let toRectInLens = CGRect(origin: .zero, size: menuFrameInHost.size)
+        lens.animateIn(
+            fromRect: fromRectInLens,
+            toRect: toRectInLens,
+            fromCornerRadius: sourceCornerRadius,
+            toCornerRadius: ContextMenuActionsView.cornerRadius,
+            isDark: source.traitCollection.userInterfaceStyle == .dark,
+            sourceEffectView: sourceEffectView
         )
+
+        // 4) The lens already animates its `contentsView.layer` alpha 0→1 over
+        // 0.15s on the iOS-26 path (and the fallback impl drives the glass
+        // alpha for us too). DO NOT gate the actions view with a separate
+        // alpha — that used to leave the morph completely transparent until
+        // 0.16s, hiding the lens-glass effect entirely.
+        actionsView.alpha = 1.0
     }
 
-    // MARK: - Effect builder
+    // MARK: - Source snapshot
 
-    private static func makeMenuEffect(isDark: Bool) -> UIVisualEffect {
-        if #available(iOS 26.0, *) {
-            return UIGlassEffect(style: .regular)
+    /// Captures the source view as a UIView (snapshotView preferred for live
+    /// content; falls back to a rasterised image if snapshotting fails — e.g.
+    /// for views containing UIVisualEffectView pipelines that can't snapshot
+    /// natively).
+    private func makeSourceSnapshot(source: UIView) -> UIView {
+        if let snap = source.snapshotView(afterScreenUpdates: false) {
+            snap.frame = CGRect(origin: .zero, size: source.bounds.size)
+            return snap
         }
-        return UIBlurEffect(style: isDark ? .systemMaterialDark : .systemMaterialLight)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(bounds: source.bounds, format: format).image { _ in
+            source.drawHierarchy(in: source.bounds, afterScreenUpdates: true)
+        }
+        let view = UIImageView(image: image)
+        view.frame = CGRect(origin: .zero, size: source.bounds.size)
+        return view
     }
 
     // MARK: - Menu placement
 
     private func computeMenuFrame(sourceRect: CGRect, menuSize: CGSize, hostBounds: CGRect) -> CGRect {
         let sideInset: CGFloat = 12.0
+        // Prefer the hosting window's insets — the freshly-attached host view
+        // hasn't been laid out yet so its safeAreaInsets are still zero.
         let window = source.view?.window
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
@@ -301,13 +370,53 @@ public final class ContextMenuController {
     // MARK: - Gestures
 
     @objc private func handleBackgroundTap(_ recognizer: UITapGestureRecognizer) {
+        // Recognizer lives on the dim view, which only receives touches that
+        // missed the lens. Therefore any fired tap is always outside the menu.
         dismiss()
+    }
+
+    // MARK: - Rubber-band stretch (applied to the whole lens container)
+
+    private func applyStretch(toLens lens: LensTransitionContainer, touchInActions point: CGPoint, actionsBounds: CGRect, animated: Bool) {
+        let center = CGPoint(x: actionsBounds.midX, y: actionsBounds.midY)
+        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        let target = CGAffineTransform(
+            translationX: delta.x * ContextMenuController.stretchFollow,
+            y: delta.y * ContextMenuController.stretchFollow
+        ).scaledBy(x: ContextMenuController.pressScale, y: ContextMenuController.pressScale)
+
+        if animated {
+            UIView.animate(
+                withDuration: 0.28, delay: 0,
+                usingSpringWithDamping: 0.78, initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: { lens.transform = target },
+                completion: nil
+            )
+        } else {
+            // During an active drag, follow the finger directly so it feels
+            // physical — spring resampling on every move event would feel laggy.
+            lens.transform = target
+        }
+    }
+
+    private func releaseStretch(onLens lens: LensTransitionContainer) {
+        UIView.animate(
+            withDuration: 0.42, delay: 0,
+            usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction],
+            animations: { lens.transform = .identity },
+            completion: nil
+        )
     }
 }
 
 // MARK: - Presentation convenience
 
 public extension ContextMenuController {
+    /// Convenience entry point: present a menu out of `source`, wiring in the
+    /// standard lifecycle. Returns the controller so callers can dismiss it
+    /// programmatically if needed.
     @discardableResult
     static func present(
         source: UIView,
@@ -327,6 +436,9 @@ public extension ContextMenuController {
 
 // MARK: - Self-retain box
 
+/// Wrapper that gives a `ContextMenuController` value-style identity inside a
+/// `Set` while strongly retaining it. Equality / hashing are reference-based
+/// so two boxes for the same controller collapse to a single entry.
 private final class ContextMenuControllerBox: Hashable {
     let controller: ContextMenuController
 

@@ -26,10 +26,7 @@ final class ContextMenuActionsView: UIView {
 
     // MARK: - Subviews
 
-    /// `contentContainer` clips rows to a rounded shape. The glass surface is
-    /// owned by the outer `ContextMenuController.menuContainer`
-    /// (`UIVisualEffectView` with `UIGlassEffect`) — this view is just rows +
-    /// highlight on a transparent background.
+    private let glassBackground: GlassBackgroundView
     private let contentContainer = UIView()
     private let highlightView = UIView()
     private var rowViews: [RowEntry] = []
@@ -46,25 +43,30 @@ final class ContextMenuActionsView: UIView {
 
     private var trackedTouch: UITouch?
     private var highlightedIndex: Int?
-    /// Rubber-band stretch metrics. The menu translates a small fraction of
-    /// the finger's offset from the menu center so it visibly "leans" toward
-    /// the touch — the same trick `UIGlassEffect` does for navbar buttons on
-    /// iOS 26. On touch-up everything springs back to identity.
-    private static let stretchFollow: CGFloat = 0.06   // translation factor
-    private static let pressScale: CGFloat = 1.012     // scale-up on touch-down
-    private var initialTouchInBounds: CGPoint?
+
+    /// Hooks the controller can use to apply the rubber-band stretch on the
+    /// outer container (the whole menu chrome, not just the rows). Reporting
+    /// the touch in the actionsView's own coords; the controller is
+    /// responsible for converting / applying the transform on its own host.
+    var onStretchUpdate: ((CGPoint) -> Void)?
+    var onStretchRelease: (() -> Void)?
 
     // MARK: - Init
 
     init(items: [ContextMenuItem]) {
         self.items = items
+        self.glassBackground = GlassBackgroundView(style: .regular)
 
         super.init(frame: .zero)
 
-        // No internal glass — the outer container owns it.
-        backgroundColor = .clear
+        glassBackground.isUserInteractionEnabled = false
+        addSubview(glassBackground)
 
-        contentContainer.clipsToBounds = false
+        contentContainer.clipsToBounds = true
+        contentContainer.layer.cornerRadius = ContextMenuActionsView.cornerRadius
+        if #available(iOS 13.0, *) {
+            contentContainer.layer.cornerCurve = .continuous
+        }
         addSubview(contentContainer)
 
         highlightView.backgroundColor = UIColor.label.withAlphaComponent(0.08)
@@ -99,6 +101,16 @@ final class ContextMenuActionsView: UIView {
         super.layoutSubviews()
 
         let frame = CGRect(origin: .zero, size: bounds.size)
+        glassBackground.frame = frame
+        glassBackground.update(
+            size: bounds.size,
+            cornerRadius: ContextMenuActionsView.cornerRadius,
+            isDark: traitCollection.userInterfaceStyle == .dark,
+            tintColor: .init(kind: .panel),
+            isInteractive: false,
+            isVisible: true,
+            transition: .immediate
+        )
         contentContainer.frame = frame
 
         var y: CGFloat = 0.0
@@ -120,23 +132,21 @@ final class ContextMenuActionsView: UIView {
         guard trackedTouch == nil, let touch = touches.first else { return }
         trackedTouch = touch
         let point = touch.location(in: self)
-        initialTouchInBounds = point
-        applyStretch(towards: point, animated: true)
+        onStretchUpdate?(point)
         moveHighlight(to: point, animated: false)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
         let point = tracked.location(in: self)
-        applyStretch(towards: point, animated: false)
+        onStretchUpdate?(point)
         moveHighlight(to: point, animated: true)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
         trackedTouch = nil
-        initialTouchInBounds = nil
-        releaseStretch()
+        onStretchRelease?()
         commitTouch(at: tracked.location(in: self))
     }
 
@@ -144,45 +154,8 @@ final class ContextMenuActionsView: UIView {
         if let tracked = trackedTouch, touches.contains(tracked) {
             trackedTouch = nil
         }
-        initialTouchInBounds = nil
-        releaseStretch()
+        onStretchRelease?()
         clearHighlight(animated: true)
-    }
-
-    // MARK: - Rubber-band stretch
-
-    private func applyStretch(towards point: CGPoint, animated: Bool) {
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
-        let target = CGAffineTransform(
-            translationX: delta.x * ContextMenuActionsView.stretchFollow,
-            y: delta.y * ContextMenuActionsView.stretchFollow
-        ).scaledBy(x: ContextMenuActionsView.pressScale, y: ContextMenuActionsView.pressScale)
-
-        if animated {
-            UIView.animate(
-                withDuration: 0.28, delay: 0,
-                usingSpringWithDamping: 0.78, initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .allowUserInteraction],
-                animations: { self.transform = target },
-                completion: nil
-            )
-        } else {
-            // During an active drag the transform follows the finger directly
-            // so it feels physical, without the spring resampling on every
-            // touch event.
-            self.transform = target
-        }
-    }
-
-    private func releaseStretch() {
-        UIView.animate(
-            withDuration: 0.42, delay: 0,
-            usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
-            options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: { self.transform = .identity },
-            completion: nil
-        )
     }
 
     // MARK: - Highlight tracking
