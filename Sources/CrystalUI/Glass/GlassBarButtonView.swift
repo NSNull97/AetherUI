@@ -22,6 +22,18 @@ public final class GlassBarButtonView: UIControl {
 
     private var displayState: DisplayState = .glass
     public var action: ((UIView) -> Void)?
+
+    /// Provider for a long-press context menu. When this returns a non-empty
+    /// list, the button attaches a long-press gesture that presents a
+    /// `ContextMenuController` anchored at the button.
+    public var contextMenuItemsProvider: (() -> [ContextMenuItem])?
+    /// Haptic + presentation flavour: `.longPress` uses UILongPressGestureRecognizer,
+    /// `.tap` overrides `action` and presents on tap-up.
+    public enum ContextMenuTrigger { case longPress, tap }
+    public var contextMenuTrigger: ContextMenuTrigger = .longPress
+    private weak var currentContextController: ContextMenuController?
+    private var longPressRecognizer: UILongPressGestureRecognizer?
+
     public var contentTintColor: UIColor = .white {
         didSet {
             iconView?.tintColor = contentTintColor
@@ -82,6 +94,12 @@ public final class GlassBarButtonView: UIControl {
         }
 
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+
+        let long = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        long.minimumPressDuration = 0.35
+        long.cancelsTouchesInView = false
+        addGestureRecognizer(long)
+        self.longPressRecognizer = long
     }
 
     required init?(coder: NSCoder) {
@@ -137,6 +155,34 @@ public final class GlassBarButtonView: UIControl {
     }
 
     @objc private func tapped() {
+        // `tap` trigger takes precedence over `action` so callers can easily turn
+        // a button into a menu host without replumbing their action pipelines.
+        if contextMenuTrigger == .tap, let items = contextMenuItemsProvider?(), !items.isEmpty {
+            presentContextMenu(items: items)
+            return
+        }
         action?(self)
+    }
+
+    @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard contextMenuTrigger == .longPress, recognizer.state == .began else { return }
+        guard let items = contextMenuItemsProvider?(), !items.isEmpty else { return }
+        // Suppress the accompanying touch-up action so a single long-press only
+        // opens the menu instead of firing the regular tap handler afterwards.
+        isHighlighted = false
+        cancelTracking(with: nil)
+        presentContextMenu(items: items)
+    }
+
+    private func presentContextMenu(items: [ContextMenuItem]) {
+        let controller = ContextMenuController.present(
+            source: self,
+            cornerRadius: bounds.height / 2.0,
+            items: items,
+            onDismiss: { [weak self] in
+                self?.currentContextController = nil
+            }
+        )
+        currentContextController = controller
     }
 }
