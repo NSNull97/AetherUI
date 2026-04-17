@@ -71,8 +71,13 @@ public final class GlassButton: UIControl {
 
     /// Override for the `isDark` flag passed to the glass background.
     /// `nil` (default) → derived from `traitCollection.userInterfaceStyle`.
+    /// Forwarded to `GlassBackgroundView.isDarkOverride` so the glass also
+    /// picks up the override on its own auto-layout / trait-change paths.
     public var isDarkAppearance: Bool? {
-        didSet { setNeedsLayout() }
+        didSet {
+            glassBackground.isDarkOverride = isDarkAppearance
+            setNeedsLayout()
+        }
     }
 
     public var title: String? {

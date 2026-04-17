@@ -226,6 +226,45 @@ public class GlassBackgroundView: UIView {
     /// trait changes (e.g. a forced-dark glass on a blue custom background).
     public var tracksTraitCollection: Bool = true
 
+    /// Explicit override for the resolved `isDark` value. When non-`nil`
+    /// it wins over the trait-collection auto-derivation on every path
+    /// that computes dark/light implicitly — the short-form `update(...)`,
+    /// `layoutSubviews`-driven auto-update, and `traitCollectionDidChange`.
+    /// Leave at `nil` to let the glass follow the system theme.
+    ///
+    /// Typical use: a glass surface sitting on top of a custom dark
+    /// artwork/image, where the system is in light mode but the glass
+    /// still needs to render with dark-mode tinting so it reads against
+    /// the background. Set once and forget — unlike the `isDark:`
+    /// parameter on the full-form `update(...)`, this survives trait
+    /// changes.
+    public var isDarkOverride: Bool? {
+        didSet {
+            if isDarkOverride == oldValue { return }
+            // Re-apply immediately so an explicit override takes effect
+            // without waiting for the next layout pass or trait change.
+            guard let memo = lastUpdateMemo else {
+                setNeedsLayout()
+                return
+            }
+            update(
+                size: memo.size,
+                cornerRadius: memo.cornerRadius,
+                isDark: resolvedIsDark,
+                tintColor: memo.tintColor,
+                isInteractive: memo.isInteractive,
+                isVisible: memo.isVisible,
+                transition: .immediate
+            )
+        }
+    }
+
+    /// `isDarkOverride` if set, otherwise the trait-collection derivation.
+    /// Single source of truth for every implicit dark/light computation.
+    private var resolvedIsDark: Bool {
+        isDarkOverride ?? (traitCollection.userInterfaceStyle == .dark)
+    }
+
     /// Corner radius used by `layoutSubviews`-driven auto-update. `nil`
     /// means "pill" (`bounds.height / 2`). Set via property or via
     /// `update(...)`; the latter also writes this through so subsequent
@@ -272,25 +311,21 @@ public class GlassBackgroundView: UIView {
     public init(style: Style = .regular) {
         self.style = style
 
-        // Three-way path selection:
-        //  1. `useNative` — iOS 26+ with liquid design enabled → `UIGlassEffect`
-        //  2. `useSimpleBlur` — iOS 26+ in compat mode OR iOS < 26 (but >= 15)
-        //     → plain `UIBlurEffect` on `UIVisualEffectView`. Fast, reliable,
-        //     no private APIs. This is the "regular blur" fallback the user
-        //     asked for when `UIDesignRequiresCompatibility = YES` is set.
-        //  3. `legacy` — CABackdropLayer + manual foreground. Used only if
-        //     `useCustomGlassImpl = true` is forced (debug/testing).
+        // Two-way path selection:
+        //  1. `useNative` — iOS 26+ with liquid design enabled → `UIGlassEffect`.
+        //  2. `legacy`    — otherwise: `CABackdropLayer` + generated foreground.
+        //     Used on iOS < 26 OR whenever `UIDesignRequiresCompatibility = YES`
+        //     OR when `useCustomGlassImpl = true` is forced (debug).
+        // A previous intermediate `UIBlurEffect` fallback was dropped — the
+        // legacy backdrop renders the same shape across every non-liquid OS
+        // and keeps theme/tint handling in one code path.
         let useNative: Bool
-        let useSimpleBlur: Bool
         if GlassBackgroundView.useCustomGlassImpl {
             useNative = false
-            useSimpleBlur = false
         } else if GlassCompatibility.isLiquidDesignAvailable {
             useNative = true
-            useSimpleBlur = false
         } else {
             useNative = false
-            useSimpleBlur = true
         }
 
         if useNative, #available(iOS 26.0, *) {
@@ -302,22 +337,6 @@ public class GlassBackgroundView: UIView {
             let params = EffectSettingsContainerView(frame: .zero)
             self.nativeParamsView = params
             params.addSubview(nativeView)
-
-            self.legacyView = nil
-            self.legacyHighlightContainerView = nil
-            self.foregroundView = nil
-            self.shadowView = nil
-        } else if useSimpleBlur {
-            // Plain blur fallback — use a UIVisualEffectView in place of the
-            // native `UIGlassEffect`. Routed through `nativeView` so the rest
-            // of the layout code can stay style-agnostic.
-            let effect = UIBlurEffect(style: .systemMaterial)
-            let blurView = UIVisualEffectView(effect: effect)
-            self.nativeView = blurView
-
-            let params = EffectSettingsContainerView(frame: .zero)
-            self.nativeParamsView = params
-            params.addSubview(blurView)
 
             self.legacyView = nil
             self.legacyHighlightContainerView = nil
@@ -402,6 +421,9 @@ public class GlassBackgroundView: UIView {
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         guard tracksTraitCollection, let memo = lastUpdateMemo else { return }
+        // Skip when `isDarkOverride` is pinned — trait changes don't matter
+        // then, the override is the source of truth.
+        if isDarkOverride != nil { return }
         // Only re-apply if the resolved dark/light style actually changed —
         // avoids unnecessary redraws on e.g. content size category changes.
         let previousStyle = previousTraitCollection?.userInterfaceStyle
@@ -409,7 +431,7 @@ public class GlassBackgroundView: UIView {
         update(
             size: memo.size,
             cornerRadius: memo.cornerRadius,
-            isDark: traitCollection.userInterfaceStyle == .dark,
+            isDark: resolvedIsDark,
             tintColor: memo.tintColor,
             isInteractive: memo.isInteractive,
             isVisible: memo.isVisible,
@@ -451,7 +473,7 @@ public class GlassBackgroundView: UIView {
             update(
                 size: size,
                 cornerRadius: corner,
-                isDark: traitCollection.userInterfaceStyle == .dark,
+                isDark: resolvedIsDark,
                 tintColor: tint,
                 isInteractive: interactive,
                 isVisible: visible,
@@ -469,17 +491,18 @@ public class GlassBackgroundView: UIView {
 
     // MARK: Update
 
-    /// Convenience wrapper. `isDark` is auto-derived from the view's current
-    /// `traitCollection` so callers that share one `GlassBackgroundView(style: .regular)`
-    /// configuration across multiple places get visually consistent glass —
-    /// the previous `isDark: false` hard-code produced inconsistent tints
-    /// when some call sites passed explicit `true` and others went through
-    /// this short form.
+    /// Convenience wrapper. `isDark` is auto-derived — `isDarkOverride` wins
+    /// when set, otherwise we fall back to `traitCollection.userInterfaceStyle`.
+    /// Callers that share one `GlassBackgroundView(style: .regular)` config
+    /// across multiple places get visually consistent glass this way; the
+    /// previous `isDark: false` hard-code produced inconsistent tints when
+    /// some call sites passed explicit `true` and others went through this
+    /// short form.
     public func update(size: CGSize, cornerRadius: CGFloat, transition: ContainedViewLayoutTransition) {
         update(
             size: size,
             cornerRadius: cornerRadius,
-            isDark: traitCollection.userInterfaceStyle == .dark,
+            isDark: resolvedIsDark,
             tintColor: .init(kind: .panel),
             isInteractive: false,
             isVisible: true,
@@ -663,83 +686,77 @@ public class GlassBackgroundView: UIView {
                     fillColor: fillColor
                 )
                 transition.setAlpha(view: foregroundView, alpha: isVisible ? 1.0 : 0.0)
-            } else if let nativeParamsView, let nativeView {
+            } else if let nativeParamsView, let nativeView, #available(iOS 26.0, *) {
                 // Native iOS 26 liquid-glass path: set up a proper UIGlassEffect
-                // with tint / interactive flag. Skipped when the compat fallback
-                // is active (then `nativeView` hosts a plain UIBlurEffect that
-                // needs no per-frame updates).
-                if GlassCompatibility.isLiquidDesignAvailable, #available(iOS 26.0, *) {
-                    var glassEffect: UIGlassEffect?
+                // with tint / interactive flag. `nativeView` is only allocated
+                // on this path (legacy takes over when liquid design is off),
+                // so no inner OS-gate is needed below.
+                var glassEffect: UIGlassEffect?
 
-                    if isVisible {
-                        let value: UIGlassEffect
-                        switch tintColor.kind {
-                        case .panel:
+                if isVisible {
+                    let value: UIGlassEffect
+                    switch tintColor.kind {
+                    case .panel:
+                        value = UIGlassEffect(style: .regular)
+                        // Slightly weaker tint so UIGlassEffect's own
+                        // material specular stays the dominant effect
+                        // and the surface doesn't look painted-on.
+                        value.tintColor = isDark
+                            ? UIColor(white: 1.0, alpha: 0.015)
+                            : UIColor(white: 1.0, alpha: 0.06)
+                    case let .custom(style, color):
+                        switch style {
+                        case .default:
                             value = UIGlassEffect(style: .regular)
-                            // Slightly weaker tint so UIGlassEffect's own
-                            // material specular stays the dominant effect
-                            // and the surface doesn't look painted-on.
-                            value.tintColor = isDark
-                                ? UIColor(white: 1.0, alpha: 0.015)
-                                : UIColor(white: 1.0, alpha: 0.06)
-                        case let .custom(style, color):
-                            switch style {
-                            case .default:
-                                value = UIGlassEffect(style: .regular)
-                                value.tintColor = color
-                            case .clear:
-                                value = UIGlassEffect(style: .clear)
-                                value.tintColor = color
-                            }
+                            value.tintColor = color
                         case .clear:
                             value = UIGlassEffect(style: .clear)
-                            value.tintColor = isDark ? UIColor(white: 0.0, alpha: 0.18) : nil
+                            value.tintColor = color
                         }
-                        value.isInteractive = params.isInteractive
-                        glassEffect = value
+                    case .clear:
+                        value = UIGlassEffect(style: .clear)
+                        value.tintColor = isDark ? UIColor(white: 0.0, alpha: 0.18) : nil
                     }
+                    value.isInteractive = params.isInteractive
+                    glassEffect = value
+                }
 
-                    if glassEffect == nil {
-                        if nativeView.effect is UIGlassEffect {
-                            if #available(iOS 26.1, *) {
-                                if transition.isAnimated {
-                                    transition.animateView({ nativeView.effect = nil })
-                                } else {
-                                    nativeView.effect = nil
-                                }
+                if glassEffect == nil {
+                    if nativeView.effect is UIGlassEffect {
+                        if #available(iOS 26.1, *) {
+                            if transition.isAnimated {
+                                transition.animateView({ nativeView.effect = nil })
                             } else {
-                                if transition.isAnimated {
-                                    transition.animateView({ nativeView.effect = UIVisualEffect() })
-                                } else {
-                                    nativeView.effect = UIVisualEffect()
-                                }
-                            }
-                        }
-                    } else if let desired = glassEffect {
-                        if transition.isAnimated {
-                            if let current = nativeView.effect as? UIGlassEffect,
-                               current.tintColor == desired.tintColor,
-                               current.isInteractive == desired.isInteractive {
-                                // No change to animate.
-                            } else {
-                                transition.animateView({ nativeView.effect = desired })
+                                nativeView.effect = nil
                             }
                         } else {
-                            nativeView.effect = desired
+                            if transition.isAnimated {
+                                transition.animateView({ nativeView.effect = UIVisualEffect() })
+                            } else {
+                                nativeView.effect = UIVisualEffect()
+                            }
                         }
                     }
-
-                    if isDark {
-                        nativeParamsView.lumaMin = 0.0
-                        nativeParamsView.lumaMax = 0.15
+                } else if let desired = glassEffect {
+                    if transition.isAnimated {
+                        if let current = nativeView.effect as? UIGlassEffect,
+                           current.tintColor == desired.tintColor,
+                           current.isInteractive == desired.isInteractive {
+                            // No change to animate.
+                        } else {
+                            transition.animateView({ nativeView.effect = desired })
+                        }
                     } else {
-                        nativeParamsView.lumaMin = 0.8
-                        nativeParamsView.lumaMax = 0.801
+                        nativeView.effect = desired
                     }
+                }
+
+                if isDark {
+                    nativeParamsView.lumaMin = 0.0
+                    nativeParamsView.lumaMax = 0.15
                 } else {
-                    // Simple-blur compat path — the UIBlurEffect was set once
-                    // in init. Just toggle visibility here.
-                    nativeView.alpha = isVisible ? 1.0 : 0.0
+                    nativeParamsView.lumaMin = 0.8
+                    nativeParamsView.lumaMax = 0.801
                 }
             }
         }
