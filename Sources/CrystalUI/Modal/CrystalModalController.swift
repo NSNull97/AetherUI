@@ -113,7 +113,17 @@ public final class CrystalModalController: UIViewController {
 
     private func layoutGlassAndContent() {
         glassBackground.frame = view.bounds
-        glassBackground.update(size: view.bounds.size, cornerRadius: 0.0, transition: .immediate)
+        // Forward the surrounding UIView animation (if any) into the glass
+        // component. Without this, glass internals (UIVisualEffectView on
+        // iOS 26+, legacy backdrop + corner/shadow artwork otherwise) skip
+        // the animation block and snap to the new size, while the root view
+        // animates — producing a visible "size jumps, position slides"
+        // asymmetry during D2→D1 collapse.
+        let duration = UIView.inheritedAnimationDuration
+        let glassTransition: ContainedViewLayoutTransition = duration > 0
+            ? .animated(duration: duration, curve: .spring)
+            : .immediate
+        glassBackground.update(size: view.bounds.size, cornerRadius: 0.0, transition: glassTransition)
         tintOverlay.frame = view.bounds
         contentContainer.frame = view.bounds
         content.view.frame = contentContainer.bounds
@@ -123,14 +133,30 @@ public final class CrystalModalController: UIViewController {
         let bounds = view.bounds
         let topRadius = config.topCornerRadius
         let bottomRadius = deviceCornerRadius()
-        maskLayer.frame = bounds
-        maskLayer.path = Self.roundedRectPath(
+        let newPath = Self.roundedRectPath(
             in: bounds,
             topLeftRadius: topRadius,
             topRightRadius: topRadius,
             bottomLeftRadius: bottomRadius,
             bottomRightRadius: bottomRadius
         ).cgPath
+
+        // Animate the mask alongside the root frame. CAShapeLayer.path only
+        // animates implicitly inside an explicit CA transaction — inside
+        // UIView.animate it usually works, but we add a matching CABasicAnimation
+        // explicitly for reliability (and so the corner mask keeps pace with
+        // the glass/spring timing).
+        let duration = UIView.inheritedAnimationDuration
+        if duration > 0, let oldPath = maskLayer.path, oldPath != newPath {
+            let animation = CABasicAnimation(keyPath: "path")
+            animation.fromValue = oldPath
+            animation.toValue = newPath
+            animation.duration = duration
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            maskLayer.add(animation, forKey: "path")
+        }
+        maskLayer.frame = bounds
+        maskLayer.path = newPath
     }
 
     /// Root view for the presented modal. UIKit propagates the window's
