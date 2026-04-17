@@ -546,10 +546,10 @@ public class GlassBackgroundView: UIView {
             // Setting it on every update made the glass briefly flicker
             // between styles during rapid layout passes (tab switches in
             // dark mode looked like a black\u2194white flash).
-            let targetStyle: UIUserInterfaceStyle = isDark ? .dark : .light
-            if nativeView.overrideUserInterfaceStyle != targetStyle {
-                nativeView.overrideUserInterfaceStyle = targetStyle
-            }
+//            let targetStyle: UIUserInterfaceStyle = isDark ? .dark : .light
+//            if nativeView.overrideUserInterfaceStyle != targetStyle {
+//                nativeView.overrideUserInterfaceStyle = targetStyle
+//            }
         }
 
         // Legacy backdrop-blur pipeline

@@ -183,7 +183,7 @@ final class ChatListExampleController: ViewController {
             let search = CrystalSearchController()
             search.placeholder = "Поиск"
             search.delegate = self
-            self.crystalSearchController = search
+//            self.crystalSearchController = search
             self.navigationBarContent = self.filterBar
         }
     }

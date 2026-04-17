@@ -96,6 +96,8 @@ public func generateStretchableFilledCircleImage(diameter: CGFloat, color: UICol
 }
 
 public let UIScreenPixel: CGFloat = 1.0 / UIScreen.main.scale
+public let UIScreenWidth: CGFloat = UIScreen.main.bounds.size.width
+public let UIScreenHeight: CGFloat = UIScreen.main.bounds.size.height
 
 public func drawSvgPath(_ context: CGContext, path: String) throws {
     var index = path.startIndex
