@@ -38,18 +38,24 @@ final class ContextMenuActionsView: UIView {
 
     // MARK: - State
 
+    /// How the optional header-row at the top of the page renders.
+    ///   - `.none`: no header row (root menu).
+    ///   - `.back(title)`: leading `chevron.left` + title — used by push/pop
+    ///     submenu pages, fires `onHeaderTapped` to pop.
+    ///   - `.disclosure(title)`: leading `chevron.down` + title — used by
+    ///     inline-expand submenu cards (Yandex Music style), fires
+    ///     `onHeaderTapped` to collapse the card.
+    enum HeaderStyle {
+        case none
+        case back(title: String)
+        case disclosure(title: String)
+    }
+
     private let items: [ContextMenuItem]
-    /// Title used for the back-row at the top of the page. When non-nil, a
-    /// "‹ <title>" row is prepended that pops the submenu via `onBackTapped`.
-    private let backTitle: String?
+    private let headerStyle: HeaderStyle
     var onActionSelected: ((ContextMenuActionItem) -> Void)?
-    /// Invoked when the user taps a row whose `submenu != nil`. The
-    /// controller is responsible for pushing the submenu page; the actions
-    /// view doesn't manage the page stack itself.
     var onSubmenuRequested: ((ContextMenuActionItem) -> Void)?
-    /// Invoked when the user taps the back row. Only relevant for submenu
-    /// pages (i.e. when `backTitle != nil`).
-    var onBackTapped: (() -> Void)?
+    var onHeaderTapped: (() -> Void)?
 
     private var trackedTouch: UITouch?
     private var highlightedIndex: Int?
@@ -66,22 +72,22 @@ final class ContextMenuActionsView: UIView {
     private struct RowEntry {
         let view: UIView
         /// Concrete action item if this row is tappable. Headers / separators
-        /// have nil; the back row has nil too (special-cased via `isBackRow`).
+        /// have nil; the header row has nil too (special-cased via `isHeaderRow`).
         let actionItem: ContextMenuActionItem?
-        let isBackRow: Bool
+        let isHeaderRow: Bool
 
-        init(view: UIView, actionItem: ContextMenuActionItem?, isBackRow: Bool = false) {
+        init(view: UIView, actionItem: ContextMenuActionItem?, isHeaderRow: Bool = false) {
             self.view = view
             self.actionItem = actionItem
-            self.isBackRow = isBackRow
+            self.isHeaderRow = isHeaderRow
         }
     }
 
     // MARK: - Init
 
-    init(items: [ContextMenuItem], backTitle: String? = nil) {
+    init(items: [ContextMenuItem], headerStyle: HeaderStyle = .none) {
         self.items = items
-        self.backTitle = backTitle
+        self.headerStyle = headerStyle
 
         super.init(frame: .zero)
 
@@ -107,15 +113,20 @@ final class ContextMenuActionsView: UIView {
     // MARK: - Public
 
     /// Intrinsic size for a given width — sums the heights of the items
-    /// (plus the back row when this is a submenu page).
+    /// (plus the header row when one is configured).
     func preferredSize(maxWidth: CGFloat) -> CGSize {
         let width = min(maxWidth, ContextMenuActionsView.preferredWidth)
         var height: CGFloat = 0.0
-        if backTitle != nil { height += ContextMenuActionsView.backRowHeight }
+        if hasHeader { height += ContextMenuActionsView.backRowHeight }
         for item in items {
             height += heightForItem(item)
         }
         return CGSize(width: width, height: height)
+    }
+
+    private var hasHeader: Bool {
+        if case .none = headerStyle { return false }
+        return true
     }
 
     // MARK: - Layout
@@ -127,8 +138,8 @@ final class ContextMenuActionsView: UIView {
         contentContainer.frame = frame
 
         var y: CGFloat = 0.0
-        // When backTitle != nil, the first rowView is the back row.
-        let itemsStart = (backTitle != nil) ? 1 : 0
+        // When a header is configured the first rowView is the header row.
+        let itemsStart = hasHeader ? 1 : 0
         if itemsStart > 0 {
             rowViews[0].view.frame = CGRect(
                 x: 0, y: y, width: bounds.width,
@@ -239,8 +250,8 @@ final class ContextMenuActionsView: UIView {
             return
         }
         let entry = rowViews[index]
-        if entry.isBackRow {
-            onBackTapped?()
+        if entry.isHeaderRow {
+            onHeaderTapped?()
             return
         }
         guard let actionItem = entry.actionItem else {
@@ -256,13 +267,13 @@ final class ContextMenuActionsView: UIView {
         }
     }
 
-    /// Returns the index of the enabled tappable row (action OR back row)
+    /// Returns the index of the enabled tappable row (action OR header row)
     /// whose frame contains `point`. Headers / separators / disabled rows
     /// return nil.
     private func enabledRowIndex(at point: CGPoint) -> Int? {
         for (index, entry) in rowViews.enumerated() {
             guard entry.view.frame.contains(point) else { continue }
-            if entry.isBackRow { return index }
+            if entry.isHeaderRow { return index }
             guard let actionItem = entry.actionItem, actionItem.isEnabled else { return nil }
             return index
         }
@@ -291,10 +302,17 @@ final class ContextMenuActionsView: UIView {
     }
 
     private func buildRowViews() {
-        if let backTitle {
-            let backRow = makeBackRow(title: backTitle)
-            contentContainer.addSubview(backRow)
-            rowViews.append(RowEntry(view: backRow, actionItem: nil, isBackRow: true))
+        switch headerStyle {
+        case .none:
+            break
+        case let .back(title):
+            let row = makeHeaderRow(title: title, chevronSymbol: "chevron.left")
+            contentContainer.addSubview(row)
+            rowViews.append(RowEntry(view: row, actionItem: nil, isHeaderRow: true))
+        case let .disclosure(title):
+            let row = makeHeaderRow(title: title, chevronSymbol: "chevron.down")
+            contentContainer.addSubview(row)
+            rowViews.append(RowEntry(view: row, actionItem: nil, isHeaderRow: true))
         }
         for item in items {
             switch item {
@@ -339,10 +357,10 @@ final class ContextMenuActionsView: UIView {
         contentContainer.bringSubviewToFront(highlightView)
     }
 
-    /// Back row used at the top of submenu pages. Renders a leading
-    /// chevron-left + the parent submenu's title in the same font as a
-    /// regular action row.
-    private func makeBackRow(title: String) -> UIView {
+    /// Header row used at the top of pushed submenu pages (chevron.left)
+    /// or inline-expand submenu cards (chevron.down). Renders the parent
+    /// submenu's title in semibold so the row reads as a header.
+    private func makeHeaderRow(title: String, chevronSymbol: String) -> UIView {
         let container = UIView()
         container.isUserInteractionEnabled = false
 
@@ -351,7 +369,7 @@ final class ContextMenuActionsView: UIView {
         chevron.tintColor = .label
         if #available(iOS 13.0, *) {
             let config = UIImage.SymbolConfiguration(pointSize: 14.0, weight: .semibold)
-            chevron.image = UIImage(systemName: "chevron.left", withConfiguration: config)?
+            chevron.image = UIImage(systemName: chevronSymbol, withConfiguration: config)?
                 .withRenderingMode(.alwaysTemplate)
         }
         container.addSubview(chevron)
