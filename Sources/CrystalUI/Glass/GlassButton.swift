@@ -135,14 +135,17 @@ public final class GlassButton: UIControl {
 
     // MARK: - Touch feedback
     //
-    // Port of the navbar back-button press animation (from
-    // `NavigationBackButtonView.applyPressAnimation` / `HighlightTrackingButton`):
-    // a `CASpringAnimation` on `transform.scale` with stiffness / damping
-    // tuned for iOS-26 glass, plus a small alpha dip. The spring's from / to
-    // stay at 1.0 by design — the visible deformation comes from
-    // `UIGlassEffect.isInteractive = true` which the glass background
-    // activates in `layoutSubviews`. On platforms without a real
-    // interactive glass effect the alpha dip gives a minimum acknowledgement.
+    // Two layers of feedback on press:
+    //   1. **Native glass stretch** from `UIGlassEffect.isInteractive = true`
+    //      (enabled at glass layout time). On iOS 26 hardware the glass
+    //      surface visibly deforms toward the finger; on simulator + older
+    //      iOS it's a no-op.
+    //   2. **Manual scale + alpha spring** as a cross-platform fallback so
+    //      pressing the button reads as "pressed" everywhere, not just on
+    //      iOS 26 devices. The scale is deliberately subtle (0.965) so on
+    //      real iOS 26 hardware it stacks under the native stretch without
+    //      fighting it. Alpha dips only slightly (to 0.88) to avoid
+    //      looking faded.
 
     public override var isHighlighted: Bool {
         didSet {
@@ -152,28 +155,19 @@ public final class GlassButton: UIControl {
     }
 
     private func applyPressAnimation(pressed: Bool) {
-        let scaleKey = "transform.scale"
-        layer.removeAnimation(forKey: scaleKey)
-
-        let fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)?.floatValue ?? 1.0
-        let toValue: Float = 1.0
-
-        let spring = CASpringAnimation(keyPath: scaleKey)
-        spring.fromValue = fromValue
-        spring.toValue = toValue
-        spring.mass = 1.0
-        spring.stiffness = pressed ? 520.0 : 480.0
-        spring.damping = pressed ? 34.0 : 22.0
-        spring.initialVelocity = 0.0
-        spring.duration = spring.settlingDuration
-        spring.fillMode = .forwards
-        spring.isRemovedOnCompletion = false
-        layer.add(spring, forKey: scaleKey)
-        layer.setValue(toValue, forKeyPath: scaleKey)
-
-        UIView.animate(withDuration: pressed ? 0.1 : 0.25, animations: {
-            self.alpha = pressed ? 0.7 : 1.0
-        })
+        UIView.animate(
+            withDuration: pressed ? 0.14 : 0.32,
+            delay: 0,
+            usingSpringWithDamping: 0.72,
+            initialSpringVelocity: 0,
+            options: [.allowUserInteraction, .beginFromCurrentState],
+            animations: {
+                self.transform = pressed
+                    ? CGAffineTransform(scaleX: 0.965, y: 0.965)
+                    : .identity
+                self.alpha = pressed ? 0.88 : 1.0
+            }
+        )
     }
 
     // MARK: - Layout
