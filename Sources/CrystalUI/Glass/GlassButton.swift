@@ -2,50 +2,52 @@ import UIKit
 
 // MARK: - GlassButton
 
-/// Generic glass-styled `UIControl` — a rounded-rect button with an
-/// optional title, optional leading icon, a glass background, and a
-/// spring press-in feedback on touch. Designed to be dropped anywhere
-/// (card bottoms, toolbars, free-standing actions), not tied to nav bar
-/// sizing like `GlassBarButtonView`.
+/// Generic glass-styled tap target — a rounded-rect view with an optional
+/// title, optional leading icon, and a glass background. Designed to be
+/// dropped anywhere (card bottoms, toolbars, free-standing actions), not
+/// tied to nav bar sizing like `GlassBarButtonView`.
 ///
-/// Press feedback is two layers:
-///   1. **Native glass warp** via `UIGlassEffect.isInteractive = true` on
-///      iOS 26 hardware. For the warp to actually fire, the
-///      `GlassBackgroundView` underneath has to be hit-testable — a
-///      UIControl that swallows touches first (typical `isUserInteractionEnabled = false`
-///      on the glass child) suppresses it. We keep glass interaction ENABLED
-///      and override `hitTest` to still route action dispatch to `self`,
-///      so both UIGlassEffect observer and UIControl's target-action fire.
-///   2. **Manual spring** (scale 0.97 + alpha 0.92, damping 0.7) for
-///      simulator / older iOS where the native warp is a no-op, and as a
-///      subtle stacking effect on top of the warp on real iOS 26 hardware.
+/// **Press feedback**
+/// Deliberately NOT a `UIControl` and NOT animated manually. Touches flow
+/// straight into the `GlassBackgroundView` subview (its
+/// `isUserInteractionEnabled` stays `true`), which lets iOS 26's native
+/// `UIGlassEffect.isInteractive` observer run the liquid-warp deformation
+/// exactly like a standalone `GlassBackgroundView` would. A layered
+/// UIControl + manual scale/alpha spring approach was tried and consistently
+/// interfered with the native warp — either the UIControl swallowed the
+/// touch before UIGlassEffect could observe it, or our `self.transform`
+/// scale fought the warp's coordinate math. Letting the glass own the
+/// touch gives the real "стеклянная" feel with zero custom code.
 ///
-/// Sizing contract:
-///   - If only `image` is set, renders square-ish sized to `intrinsicContentSize`
-///     (36×36 default, configurable via `minimumSize` / explicit frame).
-///   - If only `title` is set, renders pill-sized with horizontal padding
-///     around the label.
-///   - If both are set, icon sits leading + label trailing inside the pill.
+/// Tap dispatch goes through a plain `UITapGestureRecognizer` on the
+/// button; `action` fires on a completed tap. No highlight state to track.
 ///
-/// Glass:
+/// **Sizing contract**
+///   - Only `image` → square-ish sized by `intrinsicContentSize` (36×36
+///     default, configurable via `minimumSize` / explicit frame).
+///   - Only `title` → pill-sized with horizontal padding around the label.
+///   - Both → icon leading + label trailing inside the pill.
+///
+/// **Glass**
 ///   - Uses `GlassBackgroundView(style: .regular)` internally.
 ///   - `isDark` auto-derives from the view's trait collection (overrideable
 ///     via `isDarkAppearance` property if the surface sits on a custom dark
 ///     background while the system is in light mode).
 ///   - Corner radius defaults to `bounds.height / 2` (pill) — override via
 ///     `cornerRadius` if a specific rect shape is needed.
-public final class GlassButton: UIControl {
+public final class GlassButton: UIView {
     // MARK: - Subviews
 
     private let glassBackground: GlassBackgroundView
     private let contentContainer = UIView()
     private var iconView: UIImageView?
     private var titleLabel: UILabel?
+    private var tapRecognizer: UITapGestureRecognizer?
 
     // MARK: - Properties
 
-    /// Tap handler. Fires on `touchUpInside` after the press animation
-    /// starts to settle. `sender` is the button itself.
+    /// Tap handler. Fires on a completed tap (finger down + up within the
+    /// button's bounds, short duration). `sender` is the button itself.
     public var action: ((GlassButton) -> Void)?
 
     /// Minimum content size used when the image/title don't provide their own.
@@ -106,19 +108,28 @@ public final class GlassButton: UIControl {
         }
     }
 
+    /// Whether the button accepts taps. Disabled buttons dim to 0.4 and
+    /// don't fire `action`. Mirrors the old UIControl-era property name
+    /// for familiarity but is just a UIView with interaction gated.
+    public var isEnabled: Bool = true {
+        didSet {
+            if isEnabled == oldValue { return }
+            alpha = isEnabled ? 1.0 : 0.4
+            tapRecognizer?.isEnabled = isEnabled
+        }
+    }
+
     // MARK: - Init
 
     public init(title: String? = nil, image: UIImage? = nil) {
         self.glassBackground = GlassBackgroundView(style: .regular)
         super.init(frame: .zero)
 
-        // Interaction stays ENABLED on the glass so iOS 26's
-        // `UIGlassEffect.isInteractive` window-level observer registers
-        // finger position inside the glass bounds and runs the native
-        // liquid warp. `hitTest` below rewrites the returned target to
-        // `self` so UIControl still owns action dispatch (otherwise the
-        // glass's inner `UIVisualEffectView` would claim the hit and
-        // swallow the tap).
+        // Glass stays fully interactive — this is the whole point of the
+        // UIView (not UIControl) design. Touches reach the
+        // UIVisualEffectView under the glass, UIGlassEffect's
+        // `isInteractive` observer picks up finger position, and the
+        // native liquid warp runs with zero involvement from us.
         glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
@@ -132,46 +143,19 @@ public final class GlassButton: UIControl {
         titleLabel?.text = title
         iconView?.image = image?.withRenderingMode(.alwaysTemplate)
 
-        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        // Gesture recognizers sit above UIResponder's delivery path — they
+        // observe the touch stream but don't consume it during the press
+        // phase, which is exactly what we need: glass gets to warp, tap
+        // still fires on release. `cancelsTouchesInView` is left at its
+        // default `true`; on recognition (tap-up) the remaining touch is
+        // cancelled in the subview, but by then the warp has already done
+        // its work and the press is over anyway.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        addGestureRecognizer(tap)
+        self.tapRecognizer = tap
     }
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    // MARK: - Hit testing
-    //
-    // Every in-bounds touch resolves to `self` so UIControl's tracking /
-    // target-action dispatch fires. The glass sibling's own subtree still
-    // exists in the view hierarchy (interaction enabled), so the
-    // UIGlassEffect.isInteractive observer sees the touch coordinates and
-    // runs its native warp — we just don't want the UIVisualEffectView
-    // returned as the delivery target.
-
-    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
-        return bounds.contains(point) ? self : nil
-    }
-
-    // MARK: - Touch feedback
-
-    public override var isHighlighted: Bool {
-        didSet {
-            guard isHighlighted != oldValue else { return }
-            let pressed = isHighlighted
-            UIView.animate(
-                withDuration: pressed ? 0.12 : 0.32,
-                delay: 0,
-                usingSpringWithDamping: 0.7,
-                initialSpringVelocity: 0,
-                options: [.allowUserInteraction, .beginFromCurrentState],
-                animations: {
-                    self.transform = pressed
-                        ? CGAffineTransform(scaleX: 0.97, y: 0.97)
-                        : .identity
-                    self.alpha = pressed ? 0.92 : 1.0
-                }
-            )
-        }
-    }
 
     // MARK: - Layout
 
@@ -274,7 +258,8 @@ public final class GlassButton: UIControl {
 
     // MARK: - Actions
 
-    @objc private func tapped() {
+    @objc private func handleTap() {
+        guard isEnabled else { return }
         action?(self)
     }
 }
