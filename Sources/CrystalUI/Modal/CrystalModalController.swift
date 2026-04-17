@@ -83,10 +83,34 @@ public final class CrystalModalController: UIViewController {
         view = root
     }
 
+    public override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        compensatePhantomSafeArea()
+    }
+
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         layoutGlassAndContent()
         updateMaskPath()
+    }
+
+    /// UIKit propagates the window's full status-bar-sized top safe area
+    /// into the presented view even when the sheet sits below the status
+    /// bar, so content anchored to `view.safeAreaLayoutGuide.topAnchor`
+    /// gets a phantom gap. Compensate by pushing a matching negative
+    /// `additionalSafeAreaInsets.top` so the effective inset matches the
+    /// actual overlap with the window safe area.
+    private func compensatePhantomSafeArea() {
+        guard let window = view.window else { return }
+        let topInWindow = view.convert(CGPoint.zero, to: nil).y
+        let windowSafeTop = window.safeAreaInsets.top
+        let realOverlap = max(0.0, windowSafeTop - topInWindow)
+
+        let inherited = view.safeAreaInsets.top - additionalSafeAreaInsets.top
+        let desired = realOverlap - inherited
+        if abs(additionalSafeAreaInsets.top - desired) > 0.5 {
+            additionalSafeAreaInsets.top = desired
+        }
     }
 
     public func setDetent(_ detent: Detent, animated: Bool) {

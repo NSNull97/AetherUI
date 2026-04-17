@@ -170,9 +170,11 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         switch dragStartDetent {
         case .stage1:
             if draggingUp {
+                // Grow toward stage2 with the bottom edge pinned — the sheet
+                // doesn't translate, only its top/sides expand outward.
                 let distance = transitionDistance(from: stage1, to: stage2)
                 let t = max(0.0, min(1.0, -translation.y / distance))
-                newFrame = interpolate(from: stage1, to: stage2, t: t)
+                newFrame = expandFrame(from: stage1, to: stage2, t: t)
                 progress = t
             } else {
                 // Dismiss from the compact state while keeping its size.
@@ -402,6 +404,24 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let x = expanded.minX + (compact.minX - expanded.minX) * horizontalT
         let width = expanded.width + (compact.width - expanded.width) * horizontalT
         let bottom = expanded.maxY
+        return CGRect(
+            x: x,
+            y: y,
+            width: width,
+            height: max(0.0, bottom - y)
+        )
+    }
+
+    private func expandFrame(from compact: CGRect, to expanded: CGRect, t: CGFloat) -> CGRect {
+        let verticalT = t
+        let horizontalT = t * t
+        let y = compact.minY + (expanded.minY - compact.minY) * verticalT
+        let x = compact.minX + (expanded.minX - compact.minX) * horizontalT
+        let width = compact.width + (expanded.width - compact.width) * horizontalT
+        // Bottom pinned at compact.maxY — the sheet grows upward/sideways
+        // but its bottom edge stays put. On release, animateTo settles the
+        // bottom to the target detent's position.
+        let bottom = compact.maxY
         return CGRect(
             x: x,
             y: y,
