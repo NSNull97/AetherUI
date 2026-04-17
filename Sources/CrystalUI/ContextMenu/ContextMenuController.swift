@@ -176,21 +176,20 @@ public final class ContextMenuController {
         // Capture the source snapshot while it's still visible.
         let sourceSnapshot = makeSourceSnapshot(source: source)
 
-        // Smoothly fade the source button instead of snapping it invisible.
-        // Sync timing with the lens's source-effect-view fade (which runs its
-        // own 0.2s setTransitionFraction inside animateIn) so the original
-        // button and the lens's snapshot fade as a single unit — visually the
-        // button "unfolds" into the morphing menu instead of disappearing
-        // before the morph starts.
-        // Important: we still keep the source in layout — only `alpha`
-        // changes, never `isHidden`, so the navbar's GlassControlGroup (or
-        // whichever collection the source lives in) doesn't reflow.
-        UIView.animate(
-            withDuration: 0.2, delay: 0,
-            options: [.curveEaseOut, .beginFromCurrentState],
-            animations: { source.alpha = 0.0 },
-            completion: nil
-        )
+        // Hide the original source INSTANTLY (no fade, no implicit animation).
+        // The lens immediately puts a glass-wrapped snapshot of the source at
+        // the same screen position with the same shape — so visually the
+        // button doesn't disappear, it's "replaced" by the lens's morphing
+        // entity in the same frame. Fading source.alpha over 0.2s used to
+        // make the original button + the lens snapshot stack on top of each
+        // other for the first 0.2s, producing a thicker double-glass that
+        // read as "button is still there during morph". Instant hide cleanly
+        // hands off the visual to the lens.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        source.alpha = 0.0
+        CATransaction.commit()
+        CATransaction.flush()
 
         animateIn(
             host: host,
@@ -279,15 +278,27 @@ public final class ContextMenuController {
             sourceEffectView: sourceEffectView
         )
 
-        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn], animations: {
-            dim?.alpha = 0.0
-            actionsView?.alpha = 0.0
-        }, completion: { _ in cleanup() })
+        // Fade dim + actions alongside the lens. Match the lens's animateOut
+        // duration (0.5s) so the cleanup fires AFTER the lens has fully
+        // morphed back to the source rect — otherwise we'd cut the morph off
+        // mid-flight by removing the lens at 0.22s. The lens's
+        // sourceEffectView reaches full visibility at the end of its
+        // animateOut (it ramps `setTransitionFraction` 0 → 1 over 0.2s of
+        // the morph), so when cleanup unhides the source button at t=0.5,
+        // the snapshot was at the source location with full alpha — handoff
+        // is seamless.
+        UIView.animate(
+            withDuration: 0.5, delay: 0,
+            options: [.curveEaseIn],
+            animations: {
+                dim?.alpha = 0.0
+                actionsView?.alpha = 0.0
+            },
+            completion: { _ in cleanup() }
+        )
 
-        // Defensive timer: even if the alpha animation's completion is starved
-        // (interrupted by a higher-priority animation, app backgrounded, etc.),
-        // the menu still tears down.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { cleanup() }
+        // Defensive timer in case the alpha animation completion is starved.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { cleanup() }
     }
 
     // MARK: - Animate in
