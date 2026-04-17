@@ -139,18 +139,15 @@ public final class CrystalModalController: UIViewController {
     }
 
     private func layoutGlassAndContent() {
+        // `.immediate` inside an outer UIView.animate is the right call:
+        // it just sets frames/cornerRadius directly, and those direct sets
+        // are captured by the enclosing CA transaction — so they inherit
+        // the outer spring timing. A non-immediate transition here would
+        // spawn a nested UIView.animate with its own damping (500 for
+        // `.spring`), which doesn't match the caller's curve and makes
+        // the glass race ahead of (or lag behind) the root frame.
         glassBackground.frame = view.bounds
-        // Forward the surrounding UIView animation (if any) into the glass
-        // component. Without this, glass internals (UIVisualEffectView on
-        // iOS 26+, legacy backdrop + corner/shadow artwork otherwise) skip
-        // the animation block and snap to the new size, while the root view
-        // animates — producing a visible "size jumps, position slides"
-        // asymmetry during D2→D1 collapse.
-        let duration = UIView.inheritedAnimationDuration
-        let glassTransition: ContainedViewLayoutTransition = duration > 0
-            ? .animated(duration: duration, curve: .spring)
-            : .immediate
-        glassBackground.update(size: view.bounds.size, cornerRadius: 0.0, transition: glassTransition)
+        glassBackground.update(size: view.bounds.size, cornerRadius: 0.0, transition: .immediate)
         tintOverlay.frame = view.bounds
         contentContainer.frame = view.bounds
         content.view.frame = contentContainer.bounds
@@ -159,7 +156,12 @@ public final class CrystalModalController: UIViewController {
     private func updateMaskPath() {
         let bounds = view.bounds
         let topRadius = config.topCornerRadius
-        let bottomRadius = deviceCornerRadius()
+        // Concentric bottom: subtract the distance from the sheet's bottom
+        // edge to the screen bottom (= bottomInset) so the sheet's bottom
+        // corners nest into the device chamfer when drawn — otherwise the
+        // same device radius at a higher Y looks visibly rounder than the
+        // actual device corner.
+        let bottomRadius = max(0.0, deviceCornerRadius() - config.bottomInset)
         let newPath = Self.roundedRectPath(
             in: bounds,
             topLeftRadius: topRadius,
@@ -168,22 +170,13 @@ public final class CrystalModalController: UIViewController {
             bottomRightRadius: bottomRadius
         ).cgPath
 
-        // Animate the mask alongside the root frame. CAShapeLayer.path only
-        // animates implicitly inside an explicit CA transaction — inside
-        // UIView.animate it usually works, but we add a matching CABasicAnimation
-        // explicitly for reliability (and so the corner mask keeps pace with
-        // the glass/spring timing).
-        let duration = UIView.inheritedAnimationDuration
-        if duration > 0, let oldPath = maskLayer.path, oldPath != newPath {
-            let animation = CABasicAnimation(keyPath: "path")
-            animation.fromValue = oldPath
-            animation.toValue = newPath
-            animation.duration = duration
-            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            maskLayer.add(animation, forKey: "path")
-        }
+        let oldPath = maskLayer.path
         maskLayer.frame = bounds
         maskLayer.path = newPath
+
+        if UIView.inheritedAnimationDuration <= 0, oldPath != newPath {
+            maskLayer.removeAnimation(forKey: "path")
+        }
     }
 
     /// Root view for the presented modal. UIKit propagates the window's

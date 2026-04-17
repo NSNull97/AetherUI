@@ -12,6 +12,20 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private var dragDriving: Bool = false
     private var settleAnimating: Bool = false
 
+    // Settle animation state — driven manually via CADisplayLink so every
+    // glass/tint/mask update happens in the same run-loop tick as the root
+    // frame change. UIView.animate spawned a nested animation context for
+    // the glass internals that desynced against the outer spring.
+    private var settleLink: CADisplayLink?
+    private var settleStartTime: CFTimeInterval = 0
+    private var settleDuration: CFTimeInterval = 0
+    private var settleStartFrame: CGRect = .zero
+    private var settleTargetFrame: CGRect = .zero
+    private var settleStartProgress: CGFloat = 0
+    private var settleTargetProgress: CGFloat = 0
+    private var settleStartDim: CGFloat = 0
+    private var settleTargetDim: CGFloat = 0
+
     lazy var deviceCornerRadius: CGFloat = {
         if let window = presentingViewController.view.window,
            let value = window.screen.value(forKey: "_displayCornerRadius") as? CGFloat,
@@ -256,17 +270,11 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
             return
         }
 
-        let currentFrame =
-            presentedView?.layer.presentation()?.frame ??
-            presentedView?.frame ??
-            frame(for: detent, in: container.bounds)
-        let currentProgress = progress(for: currentFrame, in: container.bounds)
-        let currentDimAlpha =
-            CGFloat(dimView.layer.presentation()?.opacity ?? Float(dimView.alpha))
+        stopSettleLink()
 
-        if animated {
-            settleAnimating = true
-        }
+        let currentFrame = presentedView?.frame ?? frame(for: detent, in: container.bounds)
+        let currentProgress = progress(for: currentFrame, in: container.bounds)
+        let currentDimAlpha = dimView.alpha
 
         self.detent = targetDetent
         modalController?.applyCurrentDetent(targetDetent)
@@ -274,61 +282,73 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let targetFrame = frame(for: targetDetent, in: container.bounds)
         let targetProgress: CGFloat = targetDetent == .stage2 ? 1.0 : 0.0
         let targetDim = (modalController?.config.dimAlphaStage2 ?? 0.25) * targetProgress
-        let distance = max(1.0, abs(targetFrame.minY - currentFrame.minY))
+
+        if !animated {
+            presentedView?.frame = targetFrame
+            modalController?.applyDetentProgress(targetProgress)
+            dimView.alpha = targetDim
+            return
+        }
+
         let isCollapsingTowardStage1 = targetDetent == .stage1 && currentFrame.minY < targetFrame.minY
-        let velocityLimit: CGFloat = isCollapsingTowardStage1 ? 2.5 : 8.0
-        let normalizedVelocity = max(-velocityLimit, min(velocityLimit, initialVelocityY / distance))
-        let damping: CGFloat = isCollapsingTowardStage1 ? 0.96 : 0.9
-        let duration: TimeInterval = isCollapsingTowardStage1 ? 0.38 : 0.42
+        let baseDuration: CFTimeInterval = isCollapsingTowardStage1 ? 0.38 : 0.42
+        // Scale down when the distance remaining is small — keep brief
+        // corrections crisp rather than padding them out to the full
+        // duration.
+        let distance = abs(targetFrame.minY - currentFrame.minY)
+        let fullDistance = abs(frame(for: .stage2, in: container.bounds).minY - frame(for: .stage1, in: container.bounds).minY)
+        let durationScale = fullDistance > 0 ? max(0.5, min(1.0, distance / fullDistance)) : 1.0
 
-        // Keep the sheet at the exact interactive frame while switching the logical
-        // detent, otherwise UIKit may briefly resolve the compact geometry first.
-        presentedView?.frame = currentFrame
-        presentedView?.layoutIfNeeded()
-        modalController?.applyDetentProgress(currentProgress)
-        dimView.alpha = currentDimAlpha
+        settleStartFrame = currentFrame
+        settleTargetFrame = targetFrame
+        settleStartProgress = currentProgress
+        settleTargetProgress = targetProgress
+        settleStartDim = currentDimAlpha
+        settleTargetDim = targetDim
+        settleDuration = baseDuration * durationScale
+        settleStartTime = CACurrentMediaTime()
+        settleAnimating = true
 
-        let animations = { [weak self] in
-            guard let self = self else { return }
-            self.presentedView?.frame = targetFrame
-            // Force subview + mask-layer layout inside the animation block so
-            // glass/tint/content/corner-mask animate in lockstep with the root
-            // frame. Without this, the outer frame animates but inner layout
-            // snaps to the new size on the next runloop → size "jumps", then
-            // position slides.
-            self.presentedView?.layoutIfNeeded()
-            self.modalController?.applyDetentProgress(targetProgress)
-            self.dimView.alpha = targetDim
+        let link = CADisplayLink(target: self, selector: #selector(tickSettleLink))
+        link.add(to: .main, forMode: .common)
+        settleLink = link
+    }
+
+    @objc private func tickSettleLink() {
+        guard settleAnimating else {
+            stopSettleLink()
+            return
         }
+        let elapsed = CACurrentMediaTime() - settleStartTime
+        let raw: CGFloat = settleDuration > 0 ? max(0.0, min(1.0, CGFloat(elapsed / settleDuration))) : 1.0
+        let t = Self.easeOutCubic(raw)
 
-        if animated {
-            let completion: (Bool) -> Void = { [weak self] _ in
-                guard let self else { return }
-                self.settleAnimating = false
-            }
+        let f = CGRect(
+            x: settleStartFrame.origin.x + (settleTargetFrame.origin.x - settleStartFrame.origin.x) * t,
+            y: settleStartFrame.origin.y + (settleTargetFrame.origin.y - settleStartFrame.origin.y) * t,
+            width: settleStartFrame.size.width + (settleTargetFrame.size.width - settleStartFrame.size.width) * t,
+            height: settleStartFrame.size.height + (settleTargetFrame.size.height - settleStartFrame.size.height) * t
+        )
+        presentedView?.frame = f
 
-            if isCollapsingTowardStage1 {
-                UIView.animate(
-                    withDuration: 0.34,
-                    delay: 0.0,
-                    options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState],
-                    animations: animations,
-                    completion: completion
-                )
-            } else {
-                UIView.animate(
-                    withDuration: duration,
-                    delay: 0.0,
-                    usingSpringWithDamping: damping,
-                    initialSpringVelocity: normalizedVelocity,
-                    options: [.allowUserInteraction, .beginFromCurrentState],
-                    animations: animations,
-                    completion: completion
-                )
-            }
-        } else {
-            animations()
+        let prog = settleStartProgress + (settleTargetProgress - settleStartProgress) * t
+        modalController?.applyDetentProgress(prog)
+        dimView.alpha = settleStartDim + (settleTargetDim - settleStartDim) * t
+
+        if raw >= 1.0 {
+            stopSettleLink()
         }
+    }
+
+    private func stopSettleLink() {
+        settleLink?.invalidate()
+        settleLink = nil
+        settleAnimating = false
+    }
+
+    private static func easeOutCubic(_ t: CGFloat) -> CGFloat {
+        let u = 1.0 - t
+        return 1.0 - u * u * u
     }
 
     private func animateDismiss() {
@@ -338,9 +358,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private func cancelSettleAnimationIfNeeded(container: UIView) {
         guard settleAnimating else { return }
 
-        presentedView?.layer.removeAllAnimations()
-        dimView.layer.removeAllAnimations()
-        settleAnimating = false
+        stopSettleLink()
 
         guard let currentFrame = presentedView?.frame else { return }
         let snappedDetent = nearestDetent(to: currentFrame, in: container.bounds)
