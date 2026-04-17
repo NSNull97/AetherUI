@@ -8,13 +8,17 @@ import UIKit
 /// (card bottoms, toolbars, free-standing actions), not tied to nav bar
 /// sizing like `GlassBarButtonView`.
 ///
-/// Press feedback mirrors `GlassBarButtonView` (the navbar back button
-/// pattern the user picked as the canonical feel): a manual
-/// `UIView.animate` spring — scale 0.97 + alpha 0.92 with damping 0.7 —
-/// drives the whole control. On iOS 26 hardware `UIGlassEffect.isInteractive`
-/// additionally warps the glass toward the finger, stacking on top of the
-/// manual scale without fighting it. On simulator / older iOS only the
-/// manual spring shows, which is still clearly visible feedback.
+/// Press feedback is two layers:
+///   1. **Native glass warp** via `UIGlassEffect.isInteractive = true` on
+///      iOS 26 hardware. For the warp to actually fire, the
+///      `GlassBackgroundView` underneath has to be hit-testable — a
+///      UIControl that swallows touches first (typical `isUserInteractionEnabled = false`
+///      on the glass child) suppresses it. We keep glass interaction ENABLED
+///      and override `hitTest` to still route action dispatch to `self`,
+///      so both UIGlassEffect observer and UIControl's target-action fire.
+///   2. **Manual spring** (scale 0.97 + alpha 0.92, damping 0.7) for
+///      simulator / older iOS where the native warp is a no-op, and as a
+///      subtle stacking effect on top of the warp on real iOS 26 hardware.
 ///
 /// Sizing contract:
 ///   - If only `image` is set, renders square-ish sized to `intrinsicContentSize`
@@ -108,15 +112,14 @@ public final class GlassButton: UIControl {
         self.glassBackground = GlassBackgroundView(style: .regular)
         super.init(frame: .zero)
 
-        // Match the `GlassBarButtonView` layout: glass is a pure visual
-        // layer (interaction disabled), content sits next to it on `self`,
-        // and the UIControl on `self` drives target/action + press
-        // animation. Parenting content inside `glassBackground.contentView`
-        // sounds tidy but in practice the native interactive-glass warp
-        // (only on real iOS 26 hardware) is too subtle to read as a press
-        // on its own — the old approach ended up looking like "no
-        // feedback" on simulator, which is the common dev environment.
-        glassBackground.isUserInteractionEnabled = false
+        // Interaction stays ENABLED on the glass so iOS 26's
+        // `UIGlassEffect.isInteractive` window-level observer registers
+        // finger position inside the glass bounds and runs the native
+        // liquid warp. `hitTest` below rewrites the returned target to
+        // `self` so UIControl still owns action dispatch (otherwise the
+        // glass's inner `UIVisualEffectView` would claim the hit and
+        // swallow the tap).
+        glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
         contentContainer.isUserInteractionEnabled = false
@@ -133,6 +136,20 @@ public final class GlassButton: UIControl {
     }
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // MARK: - Hit testing
+    //
+    // Every in-bounds touch resolves to `self` so UIControl's tracking /
+    // target-action dispatch fires. The glass sibling's own subtree still
+    // exists in the view hierarchy (interaction enabled), so the
+    // UIGlassEffect.isInteractive observer sees the touch coordinates and
+    // runs its native warp — we just don't want the UIVisualEffectView
+    // returned as the delivery target.
+
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
+        return bounds.contains(point) ? self : nil
+    }
 
     // MARK: - Touch feedback
 
