@@ -94,10 +94,11 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let safeArea = containerView?.safeAreaInsets ?? presentingViewController.view.safeAreaInsets
         switch detent {
         case .stage1:
+            let bottomAvailable = bounds.height - cfg.bottomInsetStage1
             let configuredTop = safeArea.top + cfg.topInsetStage1
             let minimumHeight = bounds.height * 0.5
-            let height = max(bounds.height - configuredTop, minimumHeight)
-            let top = bounds.height - height
+            let height = max(bottomAvailable - configuredTop, minimumHeight)
+            let top = bottomAvailable - height
             return CGRect(
                 x: cfg.sideInset,
                 y: top,
@@ -279,12 +280,19 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         // Keep the sheet at the exact interactive frame while switching the logical
         // detent, otherwise UIKit may briefly resolve the compact geometry first.
         presentedView?.frame = currentFrame
+        presentedView?.layoutIfNeeded()
         modalController?.applyDetentProgress(currentProgress)
         dimView.alpha = currentDimAlpha
 
         let animations = { [weak self] in
             guard let self = self else { return }
             self.presentedView?.frame = targetFrame
+            // Force subview + mask-layer layout inside the animation block so
+            // glass/tint/content/corner-mask animate in lockstep with the root
+            // frame. Without this, the outer frame animates but inner layout
+            // snaps to the new size on the next runloop → size "jumps", then
+            // position slides.
+            self.presentedView?.layoutIfNeeded()
             self.modalController?.applyDetentProgress(targetProgress)
             self.dimView.alpha = targetDim
         }

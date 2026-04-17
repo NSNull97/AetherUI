@@ -38,6 +38,7 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
 
         toView.frame = finalFrame.offsetBy(dx: 0.0, dy: container.bounds.height - finalFrame.minY)
         container.addSubview(toView)
+        toView.layoutIfNeeded()
 
         UIView.animate(
             withDuration: transitionDuration(using: ctx),
@@ -47,6 +48,7 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
             options: [.allowUserInteraction],
             animations: {
                 toView.frame = finalFrame
+                toView.layoutIfNeeded()
             },
             completion: { _ in
                 ctx.completeTransition(!ctx.transitionWasCancelled)
@@ -75,6 +77,7 @@ final class CrystalModalDismissAnimator: NSObject, UIViewControllerAnimatedTrans
             options: [.curveEaseIn],
             animations: {
                 fromView.frame = endFrame
+                fromView.layoutIfNeeded()
             },
             completion: { _ in
                 ctx.completeTransition(!ctx.transitionWasCancelled)

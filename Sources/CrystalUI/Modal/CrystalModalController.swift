@@ -8,6 +8,7 @@ public final class CrystalModalController: UIViewController {
 
     public struct Config: Equatable {
         public var sideInset: CGFloat
+        public var bottomInsetStage1: CGFloat
         public var topInsetStage1: CGFloat
         public var topInsetStage2: CGFloat
         public var topCornerRadius: CGFloat
@@ -15,12 +16,14 @@ public final class CrystalModalController: UIViewController {
 
         public init(
             sideInset: CGFloat = 8.0,
+            bottomInsetStage1: CGFloat = 16.0,
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
             topCornerRadius: CGFloat = 38.0,
             dimAlphaStage2: CGFloat = 0.25
         ) {
             self.sideInset = sideInset
+            self.bottomInsetStage1 = bottomInsetStage1
             self.topInsetStage1 = topInsetStage1
             self.topInsetStage2 = topInsetStage2
             self.topCornerRadius = topCornerRadius
@@ -58,7 +61,7 @@ public final class CrystalModalController: UIViewController {
     }
 
     public override func loadView() {
-        let root = UIView()
+        let root = RootView()
         root.backgroundColor = .clear
         root.layer.mask = maskLayer
 
@@ -128,6 +131,27 @@ public final class CrystalModalController: UIViewController {
             bottomLeftRadius: bottomRadius,
             bottomRightRadius: bottomRadius
         ).cgPath
+    }
+
+    /// Root view for the presented modal. UIKit propagates the window's
+    /// full safe area (including the status bar) to the presented view even
+    /// when the sheet frame doesn't overlap the status bar — this override
+    /// computes the top inset from the sheet's actual position in the
+    /// window so content anchored to `view.safeAreaLayoutGuide.topAnchor`
+    /// doesn't get a phantom status-bar-sized gap at the top.
+    private final class RootView: UIView {
+        override var safeAreaInsets: UIEdgeInsets {
+            let inherited = super.safeAreaInsets
+            let topInWindow = convert(CGPoint.zero, to: nil).y
+            let windowSafeTop = window?.safeAreaInsets.top ?? 0.0
+            let overlap = max(0.0, windowSafeTop - topInWindow)
+            return UIEdgeInsets(
+                top: overlap,
+                left: inherited.left,
+                bottom: inherited.bottom,
+                right: inherited.right
+            )
+        }
     }
 
     private static func roundedRectPath(
