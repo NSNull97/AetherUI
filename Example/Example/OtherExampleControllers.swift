@@ -74,6 +74,7 @@ final class SettingsExampleController: ViewController {
     /// snapshot is visible. Has its own long-press recognizer that calls
     /// `ContextMenuController.present(... presentationStyle: .preview)`.
     private let previewCard = UIView()
+    private let subtitlePill = GlassBarButtonView(title: "Profile")
 
     private let statusLabel = UILabel()
 
@@ -196,6 +197,17 @@ final class SettingsExampleController: ViewController {
             contentHeight: 80.0
         ))
 
+        // 8. Subtitles + leading icons (Phase 3 + 4 polish).
+        subtitlePill.contentTintColor = .label
+        subtitlePill.contextMenuTrigger = .tap
+        subtitlePill.contextMenuItemsProvider = { [weak self] in self?.subtitleAndIconsItems() ?? [] }
+        stack.addArrangedSubview(section(
+            title: "8. Subtitles + leading/trailing icons",
+            description: "Action rows can carry a secondary subtitle line (taller row) and an icon on either side. Icon respects `iconSide`. Leading icons replace the checkmark slot when the item isn't selected.",
+            content: subtitlePill,
+            contentHeight: 36.0
+        ))
+
         // 4. Top-anchored source — menu should open below.
         topAnchoredButton.contentTintColor = .label
         topAnchoredButton.contextMenuTrigger = .tap
@@ -271,6 +283,55 @@ final class SettingsExampleController: ViewController {
             items: cardActionItems(),
             presentationStyle: .preview()
         )
+    }
+
+    private func subtitleAndIconsItems() -> [ContextMenuItem] {
+        return [
+            .header(title: "Account"),
+            .action(ContextMenuActionItem(
+                id: "name",
+                title: "Edit profile",
+                subtitle: "Name, photo, username",
+                icon: UIImage(systemName: "person.crop.circle"),
+                iconSide: .leading,
+                action: { [weak self] _, h in self?.report("Edit profile"); h.dismiss() }
+            )),
+            .action(ContextMenuActionItem(
+                id: "appearance-radio",
+                title: "Appearance",
+                subtitle: "Light · Auto-switch at sunset",
+                icon: UIImage(systemName: "paintbrush"),
+                iconSide: .leading,
+                isSelected: true,  // demonstrates checkmark winning over leading icon
+                action: { [weak self] _, h in self?.report("Appearance"); h.dismiss() }
+            )),
+            .separator,
+            .action(ContextMenuActionItem(
+                id: "trailing-1",
+                title: "Open in Safari",
+                icon: UIImage(systemName: "arrow.up.right.square"),
+                iconSide: .trailing,
+                action: { [weak self] _, h in self?.report("Open in Safari"); h.dismiss() }
+            )),
+            .action(ContextMenuActionItem(
+                id: "trailing-2",
+                title: "Long action title that wraps trailing icon",
+                subtitle: "Subtitle with extra context",
+                icon: UIImage(systemName: "square.and.arrow.up"),
+                iconSide: .trailing,
+                action: { [weak self] _, h in self?.report("Long trailing"); h.dismiss() }
+            )),
+            .separator,
+            .action(ContextMenuActionItem(
+                id: "destructive-sub",
+                title: "Sign out",
+                subtitle: "You'll need to log in again",
+                icon: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
+                iconSide: .leading,
+                textColor: .destructive,
+                action: { [weak self] _, h in self?.report("Sign out"); h.dismiss() }
+            ))
+        ]
     }
 
     private func cardActionItems() -> [ContextMenuItem] {
