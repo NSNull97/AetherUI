@@ -1,13 +1,17 @@
 import UIKit
 import CrystalUI
 
-/// the originaltyle sticker-pack modal sheet. Demonstrates `presentModal` on
-/// `CrystalNavigationController` plus the Figma reference modal layout:
-/// glass "X" close capsule (left), title capsule (centre), more-actions
-/// capsule (right), scrollable grid content, bottom action pill.
-final class StickerPackModalController: ViewController {
-    private let collectionView: UICollectionView
+/// Sticker-pack modal content. Presented wrapped in `CrystalModalController`
+/// via standard UIKit `present(_:animated:)`.
+final class StickerPackModalController: UIViewController {
+    let collectionView: UICollectionView
     private let actionButton = UIButton(type: .system)
+
+    private let headerContainer = UIView()
+    private let closeButton = GlassButton(image: UIImage(systemName: "xmark"))
+    private let moreButton = GlassButton(image: UIImage(systemName: "ellipsis"))
+    private let titleCapsule = GlassBackgroundView(style: .regular)
+    private let titleLabel = UILabel()
 
     private static let emojis: [String] = [
         "🔥", "🫶", "🎀", "👟", "⌚️", "🐆", "🕶", "👜",
@@ -20,7 +24,7 @@ final class StickerPackModalController: ViewController {
         "📷", "📱", "💻", "🎧", "📸", "🎨", "📚", "✏️",
     ]
 
-    override init(navigationBarPresentationData: NavigationBarPresentationData?) {
+    init() {
         let layout = UICollectionViewFlowLayout()
         layout.itemSize = CGSize(width: 64, height: 64)
         layout.minimumInteritemSpacing = 6
@@ -28,49 +32,44 @@ final class StickerPackModalController: ViewController {
         layout.sectionInset = UIEdgeInsets(top: 12, left: 16, bottom: 16, right: 16)
         self.collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
 
-        super.init(navigationBarPresentationData: navigationBarPresentationData)
-
-        navigationPresentation = .modal
-        navigationItem.titleView = StickerPackTitleView(username: "@smilemyllove")
-
-        // Left: X close in a glass circle
-        let closeButton = UIBarButtonItem(
-            image: UIImage(systemName: "xmark"),
-            style: .plain,
-            target: self,
-            action: #selector(closeTapped)
-        )
-        navigationItem.leftBarButtonItem = closeButton
-
-        // Right: more-actions (⋯)
-        let moreButton = UIBarButtonItem(
-            image: UIImage(systemName: "ellipsis"),
-            style: .plain,
-            target: self,
-            action: #selector(moreTapped)
-        )
-        navigationItem.rightBarButtonItem = moreButton
+        super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-
-        // Modal content sits on top of the sheet's glass background, so the
-        // root view is transparent — the chat behind shines through the
-        // translucent glass frost (Apple medium-sheet appearance).
         view.backgroundColor = .clear
 
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.backgroundColor = .clear
         collectionView.dataSource = self
         collectionView.delegate = self
-        collectionView.contentInsetAdjustmentBehavior = .automatic
+        collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.register(EmojiCell.self, forCellWithReuseIdentifier: "Emoji")
         view.addSubview(collectionView)
 
-        // Bottom action pill — Figma's big blue "Добавить N эмодзи" button.
+        headerContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(headerContainer)
+
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.action = { [weak self] _ in self?.closeTapped() }
+        headerContainer.addSubview(closeButton)
+
+        moreButton.translatesAutoresizingMaskIntoConstraints = false
+        moreButton.action = { [weak self] _ in self?.moreTapped() }
+        headerContainer.addSubview(moreButton)
+
+        titleCapsule.translatesAutoresizingMaskIntoConstraints = false
+        headerContainer.addSubview(titleCapsule)
+
+        titleLabel.text = "@smilemyllove"
+        titleLabel.font = .systemFont(ofSize: 17.0, weight: .semibold)
+        titleLabel.textColor = .label
+        titleLabel.textAlignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleCapsule.contentView.addSubview(titleLabel)
+
         actionButton.translatesAutoresizingMaskIntoConstraints = false
         actionButton.setTitle("Добавить \(Self.emojis.count) эмодзи", for: .normal)
         actionButton.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
@@ -81,18 +80,33 @@ final class StickerPackModalController: ViewController {
         actionButton.layer.cornerCurve = .continuous
         actionButton.addTarget(self, action: #selector(addTapped), for: .touchUpInside)
         view.addSubview(actionButton)
-        
-        //hidesBottomBarWhenPushed
-        
-        view.setEdgeEffect(.init(
-            edge: .bottom,
-            thickness: 80,
-            blurRadius: 3,
-            blurRadiusAtEdge: 3,
-            blurRadiusAtFade: 3
-        ))
 
         NSLayoutConstraint.activate([
+            headerContainer.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            headerContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            headerContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            headerContainer.heightAnchor.constraint(equalToConstant: 44),
+
+            closeButton.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
+            closeButton.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 44),
+            closeButton.heightAnchor.constraint(equalToConstant: 44),
+
+            moreButton.trailingAnchor.constraint(equalTo: headerContainer.trailingAnchor),
+            moreButton.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            moreButton.widthAnchor.constraint(equalToConstant: 44),
+            moreButton.heightAnchor.constraint(equalToConstant: 44),
+
+            titleCapsule.centerXAnchor.constraint(equalTo: headerContainer.centerXAnchor),
+            titleCapsule.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            titleCapsule.heightAnchor.constraint(equalToConstant: 36),
+            titleCapsule.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+
+            titleLabel.topAnchor.constraint(equalTo: titleCapsule.contentView.topAnchor),
+            titleLabel.bottomAnchor.constraint(equalTo: titleCapsule.contentView.bottomAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: titleCapsule.contentView.leadingAnchor, constant: 18),
+            titleLabel.trailingAnchor.constraint(equalTo: titleCapsule.contentView.trailingAnchor, constant: -18),
+
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -105,77 +119,38 @@ final class StickerPackModalController: ViewController {
         ])
     }
 
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        super.containerLayoutUpdated(layout, transition: transition)
-
-        // Reserve space at the bottom for the action pill.
-        let actionAreaHeight: CGFloat = 50 + 24
-        collectionView.contentInset = UIEdgeInsets(
-            top: 0,
-            left: 0,
-            bottom: actionAreaHeight,
-            right: 0
-        )
-        collectionView.verticalScrollIndicatorInsets = collectionView.contentInset
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let topOverlap = headerContainer.frame.maxY + 8
+        let bottomOverlap: CGFloat = 50 + 24
+        let insets = UIEdgeInsets(top: topOverlap, left: 0, bottom: bottomOverlap, right: 0)
+        if collectionView.contentInset != insets {
+            collectionView.contentInset = insets
+            collectionView.verticalScrollIndicatorInsets = insets
+        }
+        titleCapsule.update(size: titleCapsule.bounds.size, cornerRadius: 18, transition: .immediate)
     }
 
-    @objc private func closeTapped() {
-        dismiss()
+    private func closeTapped() {
+        dismiss(animated: true)
     }
 
-    @objc private func moreTapped() {}
+    private func moreTapped() {}
 
     @objc private func addTapped() {
-        dismiss()
-    }
-
-    private func dismiss() {
-        guard let nav = self.navigationController as? CrystalNavigationController else { return }
-        nav.dismissModal(animated: true)
+        dismiss(animated: true)
     }
 }
-
-// MARK: - Title view
-
-private final class StickerPackTitleView: UIView {
-    private let label = UILabel()
-
-    init(username: String) {
-        super.init(frame: .zero)
-
-        label.text = username
-        label.font = .systemFont(ofSize: 17.0, weight: .semibold)
-        label.textColor = .label
-        addSubview(label)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var intrinsicContentSize: CGSize {
-        return label.intrinsicContentSize
-    }
-
-    override func sizeThatFits(_ size: CGSize) -> CGSize { label.sizeThatFits(size) }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        label.frame = bounds
-    }
-}
-
-// MARK: - Cells
 
 private final class EmojiCell: UICollectionViewCell {
     private let label = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 40)
         label.textAlignment = .center
         contentView.addSubview(label)
-
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: contentView.topAnchor),
             label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -190,8 +165,6 @@ private final class EmojiCell: UICollectionViewCell {
         label.text = emoji
     }
 }
-
-// MARK: - Data source
 
 extension StickerPackModalController: UICollectionViewDataSource, UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {

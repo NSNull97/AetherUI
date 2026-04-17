@@ -128,15 +128,23 @@ override var interactiveNavivationGestureEdgeWidth: InteractiveTransitionGesture
 
 ## Modals
 
-```swift
-let modal = MyModalController(
-    navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass())
-)
-presentModal(modal, animated: true)
-dismissModal(animated: true)
-```
+Two-detent glass sheet, presented via plain UIKit `present(_:animated:)`.
+Top corners 27pt, bottom corners match the device screen radius. Stage 1 —
+compact with side insets (glass visible). Stage 2 — edge-to-edge, fully
+tinted. Inner scroll cooperates with the sheet drag.
 
-Presentation modes: `.modal`, `.flatModal`, `.standaloneModal`.
+```swift
+let content = MyContentController()
+let modal = CrystalModalController(content: content)
+modal.primaryScrollView = content.scrollView   // optional
+present(modal, animated: true)
+
+// Programmatic detent change:
+modal.setDetent(.stage2, animated: true)
+
+// Dismiss via standard UIKit:
+dismiss(animated: true)
+```
 
 ## Overlays
 

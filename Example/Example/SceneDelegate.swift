@@ -94,14 +94,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             }
         }
 
-        // Demo-only: auto-present the sticker-pack modal to verify the sheet
-        // transition and Figma-style modal nav bar.
         if ProcessInfo.processInfo.environment["TG_NAV_DEMO_MODAL"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chats] in
-                let modal = StickerPackModalController(
-                    navigationBarPresentationData: NavigationBarPresentationData(theme: .liquidGlass())
-                )
-                chats?.presentModal(modal, animated: true)
+                let content = StickerPackModalController()
+                let modal = CrystalModalController(content: content)
+                modal.primaryScrollView = content.collectionView
+                chats?.present(modal, animated: true)
             }
         }
     }
