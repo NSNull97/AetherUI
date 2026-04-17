@@ -2,15 +2,14 @@ import UIKit
 
 // MARK: - ContextMenuActionItemView
 
-/// Single tappable row inside a context menu actions list.
-///
-/// Mirrors the rows Telegram draws in its `ContextActionNode` — a leading
-/// checkmark slot, a title (+ optional subtitle), and a trailing icon. The
-/// highlight state uses a translucent black fill that appears on touch-down.
-final class ContextMenuActionItemView: UIControl {
+/// Single row inside a context menu actions list. Pure presentation — touch
+/// handling and the moving highlight pill live on the parent
+/// `ContextMenuActionsView`, mirroring iOS 26 native context menus where a
+/// single rounded selection rectangle slides between rows during a drag.
+final class ContextMenuActionItemView: UIView {
     // MARK: - Metrics
 
-    static let rowHeight: CGFloat = 48.0
+    static let rowHeight: CGFloat = 44.0
     static let horizontalInset: CGFloat = 16.0
     static let iconSize: CGFloat = 22.0
     static let checkSize: CGFloat = 18.0
@@ -18,7 +17,6 @@ final class ContextMenuActionItemView: UIControl {
 
     // MARK: - Subviews
 
-    private let highlightView = UIView()
     private let checkmarkView = UIImageView()
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
@@ -27,7 +25,6 @@ final class ContextMenuActionItemView: UIControl {
     // MARK: - State
 
     private(set) var item: ContextMenuActionItem
-    var onTap: ((ContextMenuActionItem) -> Void)?
 
     // MARK: - Init
 
@@ -35,13 +32,9 @@ final class ContextMenuActionItemView: UIControl {
         self.item = item
         super.init(frame: .zero)
 
+        isUserInteractionEnabled = false
         isAccessibilityElement = true
         accessibilityTraits = .button
-
-        highlightView.isUserInteractionEnabled = false
-        highlightView.backgroundColor = UIColor.black.withAlphaComponent(0.08)
-        highlightView.alpha = 0
-        addSubview(highlightView)
 
         checkmarkView.contentMode = .scaleAspectFit
         checkmarkView.tintColor = .label
@@ -63,10 +56,6 @@ final class ContextMenuActionItemView: UIControl {
         iconView.contentMode = .scaleAspectFit
         iconView.tintColor = .label
         addSubview(iconView)
-
-        addTarget(self, action: #selector(handleTouchDown), for: [.touchDown, .touchDragEnter])
-        addTarget(self, action: #selector(handleTouchUp), for: [.touchDragExit, .touchCancel, .touchUpOutside])
-        addTarget(self, action: #selector(handleTap), for: .touchUpInside)
 
         apply(item: item)
     }
@@ -100,7 +89,6 @@ final class ContextMenuActionItemView: UIControl {
             iconView.isHidden = true
         }
 
-        isEnabled = item.isEnabled
         alpha = item.isEnabled ? 1.0 : 0.4
         accessibilityLabel = item.title
         if item.isSelected { accessibilityTraits.insert(.selected) }
@@ -112,8 +100,6 @@ final class ContextMenuActionItemView: UIControl {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-
-        highlightView.frame = bounds
 
         let insets = UIEdgeInsets(
             top: 0, left: ContextMenuActionItemView.horizontalInset,
@@ -164,27 +150,6 @@ final class ContextMenuActionItemView: UIControl {
             titleLabel.frame = CGRect(x: textRect.minX, y: startY, width: textRect.width, height: titleH)
             subtitleLabel.frame = CGRect(x: textRect.minX, y: startY + titleH, width: textRect.width, height: subH)
         }
-    }
-
-    // MARK: - Touch handling
-
-    @objc private func handleTouchDown() {
-        UIView.animate(withDuration: 0.08, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.highlightView.alpha = 1.0
-        }
-    }
-
-    @objc private func handleTouchUp() {
-        UIView.animate(withDuration: 0.18, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.highlightView.alpha = 0.0
-        }
-    }
-
-    @objc private func handleTap() {
-        UIView.animate(withDuration: 0.18, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.highlightView.alpha = 0.0
-        }
-        onTap?(item)
     }
 
     // MARK: - Assets

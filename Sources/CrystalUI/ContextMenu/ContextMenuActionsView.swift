@@ -2,29 +2,47 @@ import UIKit
 
 // MARK: - ContextMenuActionsView
 
-/// The actual menu body — rounded glass panel with vertically stacked rows,
-/// optional header labels, and inset hairline separators.
+/// Glass-backed list container for `ContextMenuItem`s. Owns a single
+/// "highlight pill" that slides between rows as the user drags their finger
+/// across the menu — matching the iOS 26 native behaviour where the selection
+/// rectangle smoothly tracks the touch instead of snapping per-row.
 ///
-/// Corresponds to Telegram's `ContextActionsContainerNode` but intentionally
-/// thin: no stack of pages, no tips, no reactions.
+/// Touch handling:
+///   - Touch-down on a row → highlight appears at that row (spring fade-in).
+///   - Touch-move to another row → highlight slides to its new position.
+///   - Touch-up on an enabled action row → that row's action is invoked,
+///     then the menu auto-dismisses via the action callback.
+///   - Touch-up outside any row OR over a header / separator → highlight
+///     fades out, no action fires, no dismissal.
 final class ContextMenuActionsView: UIView {
     // MARK: - Metrics
 
-    static let cornerRadius: CGFloat = 16.0
+    static let cornerRadius: CGFloat = 27.0
     static let preferredWidth: CGFloat = 260.0
-    static let headerHeight: CGFloat = 34.0
+    static let headerHeight: CGFloat = 32.0
     static let separatorHeight: CGFloat = 8.0
+    static let highlightHorizontalInset: CGFloat = 6.0
+    static let highlightCornerRadius: CGFloat = 14.0
 
     // MARK: - Subviews
 
     private let glassBackground: GlassBackgroundView
     private let contentContainer = UIView()
-    private var rowViews: [UIView] = []
+    private let highlightView = UIView()
+    private var rowViews: [RowEntry] = []
+
+    private struct RowEntry {
+        let view: UIView
+        let actionItem: ContextMenuActionItem?
+    }
 
     // MARK: - State
 
     private let items: [ContextMenuItem]
     var onActionSelected: ((ContextMenuActionItem) -> Void)?
+
+    private var trackedTouch: UITouch?
+    private var highlightedIndex: Int?
 
     // MARK: - Init
 
@@ -44,6 +62,15 @@ final class ContextMenuActionsView: UIView {
         }
         addSubview(contentContainer)
 
+        highlightView.backgroundColor = UIColor.label.withAlphaComponent(0.08)
+        highlightView.layer.cornerRadius = ContextMenuActionsView.highlightCornerRadius
+        if #available(iOS 13.0, *) {
+            highlightView.layer.cornerCurve = .continuous
+        }
+        highlightView.alpha = 0
+        highlightView.isUserInteractionEnabled = false
+        contentContainer.addSubview(highlightView)
+
         buildRowViews()
     }
 
@@ -59,12 +86,6 @@ final class ContextMenuActionsView: UIView {
             height += heightForItem(item)
         }
         return CGSize(width: width, height: height)
-    }
-
-    func dimRowHighlight() {
-        for view in rowViews {
-            (view as? ContextMenuActionItemView)?.alpha = (view as? ContextMenuActionItemView)?.item.isEnabled == false ? 0.4 : 1.0
-        }
     }
 
     // MARK: - Layout
@@ -88,9 +109,123 @@ final class ContextMenuActionsView: UIView {
         var y: CGFloat = 0.0
         for (index, item) in items.enumerated() {
             let h = heightForItem(item)
-            rowViews[index].frame = CGRect(x: 0, y: y, width: bounds.width, height: h)
+            rowViews[index].view.frame = CGRect(x: 0, y: y, width: bounds.width, height: h)
             y += h
         }
+
+        // Reposition the highlight if it's currently anchored on a row.
+        if let highlightedIndex {
+            highlightView.frame = highlightFrame(forRowAt: highlightedIndex)
+        }
+    }
+
+    // MARK: - Touch tracking
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard trackedTouch == nil, let touch = touches.first else { return }
+        trackedTouch = touch
+        moveHighlight(to: touch.location(in: self), animated: false)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let tracked = trackedTouch, touches.contains(tracked) else { return }
+        moveHighlight(to: tracked.location(in: self), animated: true)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let tracked = trackedTouch, touches.contains(tracked) else { return }
+        trackedTouch = nil
+        commitTouch(at: tracked.location(in: self))
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let tracked = trackedTouch, touches.contains(tracked) {
+            trackedTouch = nil
+        }
+        clearHighlight(animated: true)
+    }
+
+    // MARK: - Highlight tracking
+
+    private func moveHighlight(to point: CGPoint, animated: Bool) {
+        guard let index = enabledRowIndex(at: point) else {
+            clearHighlight(animated: animated)
+            return
+        }
+
+        let targetFrame = highlightFrame(forRowAt: index)
+        let isFirstShow = (highlightView.alpha < 0.01)
+
+        highlightedIndex = index
+
+        if isFirstShow {
+            // First show: jump to position with no slide, only fade in.
+            highlightView.frame = targetFrame
+            UIView.animate(
+                withDuration: 0.15, delay: 0,
+                options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
+                animations: { self.highlightView.alpha = 1.0 },
+                completion: nil
+            )
+            return
+        }
+
+        // Subsequent moves: slide via spring.
+        if animated {
+            UIView.animate(
+                withDuration: 0.32, delay: 0,
+                usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: { self.highlightView.frame = targetFrame },
+                completion: nil
+            )
+        } else {
+            highlightView.frame = targetFrame
+        }
+    }
+
+    private func clearHighlight(animated: Bool) {
+        highlightedIndex = nil
+        if animated {
+            UIView.animate(
+                withDuration: 0.18, delay: 0,
+                options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
+                animations: { self.highlightView.alpha = 0.0 },
+                completion: nil
+            )
+        } else {
+            highlightView.alpha = 0.0
+        }
+    }
+
+    private func commitTouch(at point: CGPoint) {
+        guard let index = enabledRowIndex(at: point), let actionItem = rowViews[index].actionItem else {
+            clearHighlight(animated: true)
+            return
+        }
+        // Action is invoked synchronously; the highlight stays visible until
+        // the menu dismiss animation removes the view, giving the user a
+        // moment of feedback that their tap registered.
+        onActionSelected?(actionItem)
+    }
+
+    /// Returns the index of the enabled action row whose frame contains
+    /// `point`. Headers / separators / disabled rows return nil.
+    private func enabledRowIndex(at point: CGPoint) -> Int? {
+        for (index, entry) in rowViews.enumerated() {
+            guard entry.view.frame.contains(point) else { continue }
+            guard let actionItem = entry.actionItem, actionItem.isEnabled else { return nil }
+            return index
+        }
+        return nil
+    }
+
+    private func highlightFrame(forRowAt index: Int) -> CGRect {
+        let rowFrame = rowViews[index].view.frame
+        return rowFrame.insetBy(
+            dx: ContextMenuActionsView.highlightHorizontalInset,
+            dy: 2.0
+        )
     }
 
     // MARK: - Internals
@@ -115,6 +250,7 @@ final class ContextMenuActionsView: UIView {
                 label.font = .systemFont(ofSize: 12.0, weight: .semibold)
                 label.textColor = .secondaryLabel
                 let container = UIView()
+                container.isUserInteractionEnabled = false
                 container.addSubview(label)
                 label.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
@@ -123,16 +259,14 @@ final class ContextMenuActionsView: UIView {
                     label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6.0)
                 ])
                 contentContainer.addSubview(container)
-                rowViews.append(container)
+                rowViews.append(RowEntry(view: container, actionItem: nil))
             case let .action(action):
                 let row = ContextMenuActionItemView(item: action)
-                row.onTap = { [weak self] tapped in
-                    self?.onActionSelected?(tapped)
-                }
                 contentContainer.addSubview(row)
-                rowViews.append(row)
+                rowViews.append(RowEntry(view: row, actionItem: action))
             case .separator:
                 let container = UIView()
+                container.isUserInteractionEnabled = false
                 let line = UIView()
                 line.backgroundColor = UIColor.separator.withAlphaComponent(0.6)
                 container.addSubview(line)
@@ -144,8 +278,10 @@ final class ContextMenuActionsView: UIView {
                     line.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale)
                 ])
                 contentContainer.addSubview(container)
-                rowViews.append(container)
+                rowViews.append(RowEntry(view: container, actionItem: nil))
             }
         }
+        // Keep the highlight on top of rows so it visually sits above content.
+        contentContainer.bringSubviewToFront(highlightView)
     }
 }
