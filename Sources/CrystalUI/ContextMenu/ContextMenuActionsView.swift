@@ -294,8 +294,8 @@ final class ContextMenuActionsView: UIView {
         switch item {
         case .header:
             return ContextMenuActionsView.headerHeight
-        case .action:
-            return ContextMenuActionItemView.rowHeight
+        case let .action(action):
+            return ContextMenuActionItemView.rowHeight(for: action)
         case .separator:
             return ContextMenuActionsView.separatorHeight
         }

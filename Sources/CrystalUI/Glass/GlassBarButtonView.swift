@@ -47,20 +47,28 @@ public final class GlassBarButtonView: UIControl {
         }
     }
 
-    /// Matches GlassBarButtonComponent highlight: spring-scale instead of a
-    /// linear alpha fade so buttons feel like they pop off the glass surface.
+    /// Touch feedback. Two flavours:
+    ///   - `.glass` / `.tintedGlass`: subtle elastic press — scale 0.97 + a
+    ///     small alpha dip 1.0→0.92, sprung. The native UIGlassEffect's
+    ///     `.isInteractive` is also enabled (when iOS 26+ is available),
+    ///     so on real glass surfaces the lens deformation kicks in on top.
+    ///   - `.generic`: stronger pop — scale 0.92, alpha 0.7. Same as before.
     override public var isHighlighted: Bool {
         didSet {
-            guard displayState != .glass, displayState != .tintedGlass else {
-                // Native UIGlassEffect provides its own interactive feedback via
-                // `UIGlassEffect.isInteractive`; avoid doubling up the animation.
-                return
-            }
-            let duration = isHighlighted ? 0.1 : 0.25
-            UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.0, options: [.allowUserInteraction, .beginFromCurrentState], animations: {
-                self.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.92, y: 0.92) : .identity
-                self.alpha = self.isHighlighted ? 0.7 : 1.0
-            })
+            let isGlass = (displayState == .glass || displayState == .tintedGlass)
+            let pressedScale: CGFloat = isGlass ? 0.97 : 0.92
+            let pressedAlpha: CGFloat = isGlass ? 0.92 : 0.7
+            let duration: TimeInterval = isHighlighted ? 0.12 : 0.32
+            let damping: CGFloat = isGlass ? 0.7 : 0.9
+            UIView.animate(
+                withDuration: duration, delay: 0,
+                usingSpringWithDamping: damping, initialSpringVelocity: 0.0,
+                options: [.allowUserInteraction, .beginFromCurrentState],
+                animations: {
+                    self.transform = self.isHighlighted ? CGAffineTransform(scaleX: pressedScale, y: pressedScale) : .identity
+                    self.alpha = self.isHighlighted ? pressedAlpha : 1.0
+                }
+            )
         }
     }
 
