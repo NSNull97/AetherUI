@@ -19,9 +19,15 @@ public final class ContextMenuController {
     // MARK: - Animation constants
 
     private static let morphDuration: TimeInterval = 0.5
-    private static let morphDamping: CGFloat = 0.78
+    private static let morphDamping: CGFloat = 0.62  // lower = more elastic overshoot (was 0.78)
     private static let dismissDuration: TimeInterval = 0.36
     private static let dismissDamping: CGFloat = 0.95
+    /// Peak gaussian-blur radius applied to the morphing entity at t=0,
+    /// decaying to 0 by `glassMorphBlurDuration`. Adds the "lens smear" feel
+    /// even when the SDF displacement filter isn't available (simulator,
+    /// iOS < 26).
+    private static let glassMorphBlurPeak: CGFloat = 6.0
+    private static let glassMorphBlurDuration: TimeInterval = 0.28
     private static let dimAlpha: CGFloat = 0.12
     private static let menuCornerRadius: CGFloat = 27.0
 
@@ -370,10 +376,10 @@ public final class ContextMenuController {
             completion: nil
         )
 
-        // SDF wobble: strong displacement at t=0 decaying to none, and a
-        // matching blur ramp. The displacement amount is rooted in the
-        // source button's smaller side so smaller buttons get proportionally
-        // smaller bulges.
+        // SDF wobble (iOS 26 only): hardware-accelerated displacement-map
+        // distortion that gives the actual lens bulge. May silently no-op
+        // on simulators where the private CASDFLayer / displacementMap
+        // filter isn't supported.
         if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
             filter.animateDisplacement(
                 fromHeight: sourceMinSide * 0.25, toHeight: 0.001,
@@ -381,6 +387,12 @@ public final class ContextMenuController {
             )
             filter.animateBlur(duration: ContextMenuController.morphDuration)
         }
+
+        // Lens FEEL augmentation that works on every platform — applied to
+        // the morphing entity ON TOP of the spring frame change. None of
+        // these touch frame/bounds, so autoresizing + hit-testing on the
+        // inner menuContainer/actionsView keep working.
+        applyLensFeelOverlay(on: sdfHost, duration: ContextMenuController.morphDuration)
 
         // 3) Cross-fade snapshot → actions view.
         // Snapshot fades out fast (most of it gone in the first ~30% of morph)
@@ -409,6 +421,53 @@ public final class ContextMenuController {
             return UIGlassEffect(style: .regular)
         }
         return UIBlurEffect(style: isDark ? .systemMaterialDark : .systemMaterialLight)
+    }
+
+    // MARK: - Lens-feel overlay
+    //
+    // Two layered effects that DON'T touch frame/bounds:
+    //   1. transform.scale CAKeyframeAnimation that briefly bulges the
+    //      morphing entity past 1.0 then settles — combined with the
+    //      under-damped spring it reads as elastic glass deformation.
+    //   2. CAFilter("gaussianBlur") on `layer.filters` with radius peaked
+    //      at the start of the morph and decaying to 0 — the "smear" that
+    //      sells the morph as a lens transition rather than a shape change.
+    //
+    // Transforms are applied AFTER layout, so autoresizing on the inner
+    // menuContainer keeps working and hit-testing stays valid.
+    private func applyLensFeelOverlay(on host: UIView, duration: TimeInterval) {
+        let scaleAnim = CAKeyframeAnimation(keyPath: "transform.scale")
+        scaleAnim.values = [1.0, 1.06, 0.985, 1.012, 1.0]
+        scaleAnim.keyTimes = [0.0, 0.32, 0.6, 0.82, 1.0]
+        scaleAnim.duration = duration * UIView.animationDurationFactor()
+        scaleAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        scaleAnim.isRemovedOnCompletion = true
+        scaleAnim.fillMode = .both
+        host.layer.add(scaleAnim, forKey: "lensWobble.scale")
+
+        // Gaussian-blur smear via private CAFilter. Skipped if the runtime
+        // can't vend the filter (would just leave layer.filters = nil).
+        guard let blur = CALayer.blur() else { return }
+        blur.setValue(ContextMenuController.glassMorphBlurPeak as NSNumber, forKey: "inputRadius")
+        host.layer.filters = [blur]
+
+        let blurAnim = CABasicAnimation(keyPath: "filters.gaussianBlur.inputRadius")
+        blurAnim.fromValue = ContextMenuController.glassMorphBlurPeak as NSNumber
+        blurAnim.toValue = 0.0 as NSNumber
+        blurAnim.duration = ContextMenuController.glassMorphBlurDuration * UIView.animationDurationFactor()
+        blurAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        blurAnim.isRemovedOnCompletion = true
+        blurAnim.fillMode = .both
+        host.layer.add(blurAnim, forKey: "lensSmear.blur")
+
+        // Reset model so the filter chain auto-clears after the blur ramp.
+        // Schedule a runloop-tick after the blur completes; using
+        // DispatchQueue.main.asyncAfter to avoid CABasicAnimation completion
+        // delegates (which add object lifecycle complexity for one shot).
+        let clearAt = ContextMenuController.glassMorphBlurDuration + 0.02
+        DispatchQueue.main.asyncAfter(deadline: .now() + clearAt) { [weak host] in
+            host?.layer.filters = nil
+        }
     }
 
     // MARK: - Source snapshot
