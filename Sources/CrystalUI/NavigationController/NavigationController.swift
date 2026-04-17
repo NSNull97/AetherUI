@@ -179,6 +179,15 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     }
 
     private func updateContainerLayout(transition: ContainedViewLayoutTransition) {
+        // When hosted inside a CrystalModalController, there's no status
+        // bar above this nav controller — the sheet's own top edge is the
+        // visual boundary. Reporting the window's status-bar height here
+        // would make child controllers reserve a phantom gap under the
+        // sheet corner.
+        let statusBarHeight: CGFloat? = isHostedInModal
+            ? nil
+            : view.window?.windowScene?.statusBarManager?.statusBarFrame.height
+
         let layout = ContainerViewLayout(
             size: view.bounds.size,
             metrics: LayoutMetrics(
@@ -187,12 +196,21 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             ),
             safeInsets: view.safeAreaInsets,
             additionalInsets: .zero,
-            statusBarHeight: view.window?.windowScene?.statusBarManager?.statusBarFrame.height,
+            statusBarHeight: statusBarHeight,
             inputHeight: validLayout?.inputHeight,
             inputHeightIsInteractivellyChanging: validLayout?.inputHeightIsInteractivellyChanging ?? false,
             inVoiceOver: UIAccessibility.isVoiceOverRunning
         )
         containerLayoutUpdated(layout, transition: transition)
+    }
+
+    private var isHostedInModal: Bool {
+        var current: UIViewController? = self
+        while let vc = current {
+            if vc is CrystalModalController { return true }
+            current = vc.parent
+        }
+        return false
     }
 
     public func requestLayout(transition: ContainedViewLayoutTransition) {
@@ -616,6 +634,10 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             return nil
         }
 
+        let statusBarHeight: CGFloat? = isHostedInModal
+            ? nil
+            : view.window?.windowScene?.statusBarManager?.statusBarFrame.height
+
         return ContainerViewLayout(
             size: view.bounds.size,
             metrics: LayoutMetrics(
@@ -624,7 +646,7 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
             ),
             safeInsets: view.safeAreaInsets,
             additionalInsets: .zero,
-            statusBarHeight: view.window?.windowScene?.statusBarManager?.statusBarFrame.height,
+            statusBarHeight: statusBarHeight,
             inputHeight: nil,
             inputHeightIsInteractivellyChanging: false,
             inVoiceOver: UIAccessibility.isVoiceOverRunning
