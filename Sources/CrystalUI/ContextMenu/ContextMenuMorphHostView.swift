@@ -55,6 +55,14 @@ final class ContextMenuMorphHostView: UIView {
     let sourceContent = UIView()
     let destinationContent = UIView()
 
+    /// CAShapeLayer used as the glass mask. Holds the asymmetric rounded-
+    /// rect path with bottom-bulge / top-neck deformation during the
+    /// intermediate "blob" phase. We use a mask (not `layer.cornerRadius`)
+    /// because cornerRadius can't express per-edge asymmetric radii, which
+    /// is what makes the shape read as a liquid drop instead of a growing
+    /// pill.
+    private let glassMaskLayer = CAShapeLayer()
+
     // MARK: - State
 
     private(set) var metrics: Metrics?
@@ -107,10 +115,12 @@ final class ContextMenuMorphHostView: UIView {
         layer.shadowRadius = Self.collapsedShadowRadius
         layer.shadowOpacity = Self.collapsedShadowOpacity
 
-        glass.clipsToBounds = true
-        if #available(iOS 13.0, *) {
-            glass.layer.cornerCurve = .continuous
-        }
+        glass.clipsToBounds = false
+        // Mask with an explicit path (see `pathForProgress`). Using a mask
+        // layer instead of `cornerRadius` lets us express the asymmetric
+        // neck/belly of the blob phase — something a scalar corner radius
+        // can't represent.
+        glass.layer.mask = glassMaskLayer
         addSubview(glass)
 
         sourceContent.backgroundColor = .clear
@@ -230,40 +240,87 @@ final class ContextMenuMorphHostView: UIView {
     // MARK: - Progress → visuals
 
     /// The heart of the morph: every visual parameter (geometry, shadow,
-    /// source fade, destination fade + slide) is computed as a pure
-    /// function of `t ∈ [0, 1]`. No separate timers, no concurrent
+    /// source fade, destination fade + slide, blob bulge) is computed as
+    /// a pure function of `t ∈ [0, 1]`. No separate timers, no concurrent
     /// `UIView.animate` calls fighting for the same property.
     private func updateForProgress(_ t: CGFloat) {
         guard let metrics else { return }
 
-        // Geometry uses the clamped progress so the frame never overshoots
-        // the expanded rect even if the spring-eased value momentarily
-        // exceeds 1.0 — overshoot is for material (shadow / content
-        // choreography) where it adds life, not for the hard bounds.
+        // Clamped progress drives the axis-aligned lerp targets. The
+        // blob deformation is layered ON TOP of this and zeroes out at
+        // the endpoints, so the start/end shapes remain exactly the
+        // pristine source and menu rects.
         let gt = max(0, min(1, t))
-        let targetFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, gt)
-        let cornerRadius = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
+        let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, gt)
+        let baseCorner = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
+
+        // `blob` peaks at the midpoint of the intermediate phase (~t=0.26)
+        // and decays to 0 at the phase edges. It's what sells the liquid
+        // feel — the shape briefly swells outward, the corners go
+        // asymmetric, THEN settles into the clean menu rect. The window
+        // is deliberately placed BETWEEN the source fade-out (≤0.16) and
+        // the destination fade-in (≥0.34) so there's a pure-blob slice
+        // from ~0.20–0.30 with NO readable content on either side —
+        // that's the frame the user sees as "a glass droplet".
+        let blob = Self.sinWindow(t, 0.06, 0.46)
+
+        // Blob pulse: size overshoots outward at midpoint, centered on the
+        // authoritative lerped frame. Horizontal bulge is smaller than
+        // vertical so the shape reads as stretching downward — a water-
+        // drop feel, not an isotropic pulse. Tuned to be clearly visible
+        // without becoming cartoonish: +10% wide / +18% tall at peak.
+        let widthOvershoot: CGFloat = 1 + blob * 0.10
+        let heightOvershoot: CGFloat = 1 + blob * 0.18
+        let bulgedSize = CGSize(
+            width: lerpFrame.width * widthOvershoot,
+            height: lerpFrame.height * heightOvershoot
+        )
+        let bulgedFrame = CGRect(
+            x: lerpFrame.midX - bulgedSize.width / 2,
+            y: lerpFrame.midY - bulgedSize.height / 2,
+            width: bulgedSize.width,
+            height: bulgedSize.height
+        )
+
+        // Corner radii: asymmetric during the blob phase. Top corners go
+        // tighter (simulates a "neck" above the belly); bottom corners go
+        // rounder (the belly). Both converge back to `baseCorner` at t=0
+        // and t=1, so the endpoints are the exact uniform shapes the
+        // caller configured. Numbers pushed hard so the droplet read is
+        // unambiguous — at t≈0.26 the shape is visibly top-narrow /
+        // bottom-swollen.
+        let topNeck = blob * 0.38        // up to -38% on top at peak
+        let bottomBelly = blob * 0.55    // up to +55% on bottom at peak
+        let topCornerRadius = max(0, baseCorner * (1 - topNeck))
+        let bottomCornerRadius = baseCorner * (1 + bottomBelly)
 
         // Material "thickens" with size — per the rec, Liquid Glass
-        // behaves like a heavier material when larger. Shadow radius and
-        // opacity grow with the morph, selling the depth change.
+        // behaves like a heavier material when larger. An extra kick
+        // during the blob phase makes the drop feel three-dimensional.
+        let shadowBulge = blob * 0.35
         let shadowRadius = Self.lerp(Self.collapsedShadowRadius, Self.expandedShadowRadius, gt)
-        let shadowOpacity = Float(Self.lerp(CGFloat(Self.collapsedShadowOpacity), CGFloat(Self.expandedShadowOpacity), gt))
+            + Self.expandedShadowRadius * shadowBulge
+        let shadowOpacity = Float(Self.lerp(
+            CGFloat(Self.collapsedShadowOpacity),
+            CGFloat(Self.expandedShadowOpacity),
+            gt
+        ) * (1 + shadowBulge * 0.4))
 
-        // Source content (button snapshot): fades out on 0.02…0.16 with a
+        // Source content (button snapshot): fades out on 0.02…0.14 with a
         // slight scale-down, so the label visibly loses structure BEFORE
         // the shape is done moving. Per the rec this timing is the single
         // most important choreography detail — it's what turns "popover
         // appears over button" into "button dissolves into menu".
-        let sourceFadeOut = Self.smoothstep(0.02, 0.16, t)
+        let sourceFadeOut = Self.smoothstep(0.02, 0.14, t)
         let sourceAlpha = max(0, 1 - sourceFadeOut)
         let sourceScale = 0.96 + 0.04 * (1 - sourceFadeOut)
 
-        // Destination content (menu rows): late fade-in on 0.28…0.42, with
-        // an 8pt translateY slide. The gap between source-out (≤0.16) and
-        // destination-in (≥0.28) is what creates the "blob" stage where
-        // the surface is just glass — no readable content on either side.
-        let destFadeIn = Self.smoothstep(0.28, 0.42, t)
+        // Destination content (menu rows): late fade-in on 0.38…0.54, with
+        // an 8pt translateY slide. The gap between source-out (≤0.14) and
+        // destination-in (≥0.38) is a full ~0.24 slice where ONLY the
+        // blob is visible — no button label, no menu rows. That's the
+        // "pure glass droplet" phase the user asked for.
+        let destFadeIn = Self.smoothstep(0.38, 0.54, t)
         let destAlpha = destFadeIn
         let destTranslateY = (1 - destFadeIn) * 8
 
@@ -274,14 +331,19 @@ final class ContextMenuMorphHostView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        self.frame = targetFrame
+        self.frame = bulgedFrame
         glass.frame = bounds
-        glass.layer.cornerRadius = cornerRadius
 
-        // Explicit shadowPath means CA doesn't trace the alpha of the
-        // subtree on every frame (expensive for blurred glass) — we feed
-        // the exact rounded-rect silhouette each tick.
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: cornerRadius).cgPath
+        // Build the asymmetric rounded-rect mask path for this tick. Same
+        // path is fed to the shadow so silhouette and shadow stay locked.
+        let path = Self.makeMorphPath(
+            in: glass.bounds,
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius
+        )
+        glassMaskLayer.frame = glass.bounds
+        glassMaskLayer.path = path
+        layer.shadowPath = path
         layer.shadowRadius = shadowRadius
         layer.shadowOpacity = shadowOpacity
 
@@ -292,6 +354,79 @@ final class ContextMenuMorphHostView: UIView {
         destinationContent.transform = CGAffineTransform(translationX: 0, y: destTranslateY)
 
         CATransaction.commit()
+    }
+
+    // MARK: - Blob shape builders
+
+    /// Sinusoidal bump: `0` at `t ≤ a` and `t ≥ b`, peak `1` at the mid-
+    /// point of `[a, b]`. Used to drive the blob deformation — the shape
+    /// is only distorted during the intermediate transition phase, not at
+    /// the start or end where the geometry has to match the clean source
+    /// / menu rects.
+    private static func sinWindow(_ t: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
+        guard t > a, t < b, b > a else { return 0 }
+        let normalized = (t - a) / (b - a)       // 0…1 across the window
+        return sin(normalized * .pi)             // 0 → 1 (at 0.5) → 0
+    }
+
+    /// Build a rounded-rect path with independent top and bottom corner
+    /// radii. Drawn in `rect`'s local coordinates (we hand it
+    /// `glass.bounds`, so origin is typically `.zero`). This is the mask
+    /// + shadow path that gives the morph its droplet silhouette during
+    /// the blob phase — at t=0 / t=1 top and bottom radii converge to
+    /// the uniform `baseCorner` so the endpoints are exactly the source
+    /// and menu rects.
+    private static func makeMorphPath(
+        in rect: CGRect,
+        topCornerRadius: CGFloat,
+        bottomCornerRadius: CGFloat
+    ) -> CGPath {
+        // Clamp corner radii to half-side — otherwise quadrants overlap
+        // into a malformed path.
+        let halfW = rect.width * 0.5
+        let halfH = rect.height * 0.5
+        let topR = max(0, min(min(topCornerRadius, halfW), halfH))
+        let bottomR = max(0, min(min(bottomCornerRadius, halfW), halfH))
+
+        let path = UIBezierPath()
+        let minX = rect.minX, maxX = rect.maxX
+        let minY = rect.minY, maxY = rect.maxY
+
+        path.move(to: CGPoint(x: minX + topR, y: minY))
+        path.addLine(to: CGPoint(x: maxX - topR, y: minY))
+        path.addArc(
+            withCenter: CGPoint(x: maxX - topR, y: minY + topR),
+            radius: topR,
+            startAngle: -.pi / 2,
+            endAngle: 0,
+            clockwise: true
+        )
+        path.addLine(to: CGPoint(x: maxX, y: maxY - bottomR))
+        path.addArc(
+            withCenter: CGPoint(x: maxX - bottomR, y: maxY - bottomR),
+            radius: bottomR,
+            startAngle: 0,
+            endAngle: .pi / 2,
+            clockwise: true
+        )
+        path.addLine(to: CGPoint(x: minX + bottomR, y: maxY))
+        path.addArc(
+            withCenter: CGPoint(x: minX + bottomR, y: maxY - bottomR),
+            radius: bottomR,
+            startAngle: .pi / 2,
+            endAngle: .pi,
+            clockwise: true
+        )
+        path.addLine(to: CGPoint(x: minX, y: minY + topR))
+        path.addArc(
+            withCenter: CGPoint(x: minX + topR, y: minY + topR),
+            radius: topR,
+            startAngle: .pi,
+            endAngle: 3 * .pi / 2,
+            clockwise: true
+        )
+        path.close()
+        return path.cgPath
     }
 
     // MARK: - Easing helpers
