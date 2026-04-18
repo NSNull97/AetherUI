@@ -55,14 +55,6 @@ final class ContextMenuMorphHostView: UIView {
     let sourceContent = UIView()
     let destinationContent = UIView()
 
-    /// CAShapeLayer used as the glass mask. Holds the asymmetric rounded-
-    /// rect path with bottom-bulge / top-neck deformation during the
-    /// intermediate "blob" phase. We use a mask (not `layer.cornerRadius`)
-    /// because cornerRadius can't express per-edge asymmetric radii, which
-    /// is what makes the shape read as a liquid drop instead of a growing
-    /// pill.
-    private let glassMaskLayer = CAShapeLayer()
-
     // MARK: - State
 
     private(set) var metrics: Metrics?
@@ -115,12 +107,10 @@ final class ContextMenuMorphHostView: UIView {
         layer.shadowRadius = Self.collapsedShadowRadius
         layer.shadowOpacity = Self.collapsedShadowOpacity
 
-        glass.clipsToBounds = false
-        // Mask with an explicit path (see `pathForProgress`). Using a mask
-        // layer instead of `cornerRadius` lets us express the asymmetric
-        // neck/belly of the blob phase — something a scalar corner radius
-        // can't represent.
-        glass.layer.mask = glassMaskLayer
+        glass.clipsToBounds = true
+        if #available(iOS 13.0, *) {
+            glass.layer.cornerCurve = .continuous
+        }
         addSubview(glass)
 
         sourceContent.backgroundColor = .clear
@@ -288,16 +278,18 @@ final class ContextMenuMorphHostView: UIView {
             height: bulgedSize.height
         )
 
-        // Corner radii: mild asymmetry during the blob phase. Top corners
-        // go slightly tighter (simulates a "neck"); bottom corners go
-        // slightly rounder (the belly). Values tuned conservatively —
-        // the earlier -38% / +55% range pushed corners outside the halfW
-        // clamp on tall shapes, producing visibly broken geometry at
-        // certain progress values. ±15% feels liquid without breaking.
-        let topNeck = blob * 0.15
-        let bottomBelly = blob * 0.22
-        let topCornerRadius = max(0, baseCorner * (1 - topNeck))
-        let bottomCornerRadius = baseCorner * (1 + bottomBelly)
+        // Uniform corner radius with a gentle "fatness" pulse during the
+        // blob phase: radius grows a bit beyond the base lerp at peak,
+        // making the shape feel chubbier / more liquid mid-transition
+        // without the artefacts that came from asymmetric top/bottom
+        // radii (those need a CAShapeLayer mask, which UIVisualEffectView
+        // renders *around* — its blur layer isn't clipped by CALayer
+        // masks, so the mask approach left corners un-rounded in the
+        // final state). Sticking with `cornerRadius + clipsToBounds`
+        // means clipping always works. A small blob-peak boost +~18% to
+        // the radius is enough to read as a droplet without breaking.
+        let cornerPulse = blob * baseCorner * 0.18
+        let cornerRadius = baseCorner + cornerPulse
 
         // Material "thickens" with size — per the rec, Liquid Glass
         // behaves like a heavier material when larger. An extra kick
@@ -338,17 +330,11 @@ final class ContextMenuMorphHostView: UIView {
 
         self.frame = bulgedFrame
         glass.frame = bounds
+        glass.layer.cornerRadius = cornerRadius
 
-        // Build the asymmetric rounded-rect mask path for this tick. Same
-        // path is fed to the shadow so silhouette and shadow stay locked.
-        let path = Self.makeMorphPath(
-            in: glass.bounds,
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        )
-        glassMaskLayer.frame = glass.bounds
-        glassMaskLayer.path = path
-        layer.shadowPath = path
+        // Explicit shadowPath derived from the rounded rect stays in sync
+        // with the visible silhouette each tick.
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: cornerRadius).cgPath
         layer.shadowRadius = shadowRadius
         layer.shadowOpacity = shadowOpacity
 
@@ -374,65 +360,6 @@ final class ContextMenuMorphHostView: UIView {
         return sin(normalized * .pi)             // 0 → 1 (at 0.5) → 0
     }
 
-    /// Build a rounded-rect path with independent top and bottom corner
-    /// radii. Drawn in `rect`'s local coordinates (we hand it
-    /// `glass.bounds`, so origin is typically `.zero`). This is the mask
-    /// + shadow path that gives the morph its droplet silhouette during
-    /// the blob phase — at t=0 / t=1 top and bottom radii converge to
-    /// the uniform `baseCorner` so the endpoints are exactly the source
-    /// and menu rects.
-    private static func makeMorphPath(
-        in rect: CGRect,
-        topCornerRadius: CGFloat,
-        bottomCornerRadius: CGFloat
-    ) -> CGPath {
-        // Clamp corner radii to half-side — otherwise quadrants overlap
-        // into a malformed path.
-        let halfW = rect.width * 0.5
-        let halfH = rect.height * 0.5
-        let topR = max(0, min(min(topCornerRadius, halfW), halfH))
-        let bottomR = max(0, min(min(bottomCornerRadius, halfW), halfH))
-
-        let path = UIBezierPath()
-        let minX = rect.minX, maxX = rect.maxX
-        let minY = rect.minY, maxY = rect.maxY
-
-        path.move(to: CGPoint(x: minX + topR, y: minY))
-        path.addLine(to: CGPoint(x: maxX - topR, y: minY))
-        path.addArc(
-            withCenter: CGPoint(x: maxX - topR, y: minY + topR),
-            radius: topR,
-            startAngle: -.pi / 2,
-            endAngle: 0,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: maxX, y: maxY - bottomR))
-        path.addArc(
-            withCenter: CGPoint(x: maxX - bottomR, y: maxY - bottomR),
-            radius: bottomR,
-            startAngle: 0,
-            endAngle: .pi / 2,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: minX + bottomR, y: maxY))
-        path.addArc(
-            withCenter: CGPoint(x: minX + bottomR, y: maxY - bottomR),
-            radius: bottomR,
-            startAngle: .pi / 2,
-            endAngle: .pi,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: minX, y: minY + topR))
-        path.addArc(
-            withCenter: CGPoint(x: minX + topR, y: minY + topR),
-            radius: topR,
-            startAngle: .pi,
-            endAngle: 3 * .pi / 2,
-            clockwise: true
-        )
-        path.close()
-        return path.cgPath
-    }
 
     // MARK: - Easing helpers
 
