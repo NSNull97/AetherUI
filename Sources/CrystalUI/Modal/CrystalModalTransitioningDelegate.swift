@@ -23,8 +23,17 @@ final class CrystalModalTransitioningDelegate: NSObject, UIViewControllerTransit
 }
 
 final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTransitioning {
+    // Reference travel distance (~stage1 from the bottom). The actual
+    // duration scales up for further travels (stage2 moves almost a full
+    // screen) so the spring reads the same regardless of detent.
+    private static let referenceTravel: CGFloat = 420.0
+    private static let baseDuration: CFTimeInterval = 0.45
+
+    private var contextTravel: CGFloat = referenceTravel
+
     func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
-        return 0.45
+        let scale = max(1.0, min(1.55, contextTravel / Self.referenceTravel))
+        return Self.baseDuration * scale
     }
 
     func animateTransition(using ctx: UIViewControllerContextTransitioning) {
@@ -35,6 +44,7 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
         }
         let container = ctx.containerView
         let finalFrame = ctx.finalFrame(for: toVC)
+        contextTravel = max(1.0, container.bounds.height - finalFrame.minY)
 
         toView.frame = finalFrame.offsetBy(dx: 0.0, dy: container.bounds.height - finalFrame.minY)
         container.addSubview(toView)
@@ -43,8 +53,8 @@ final class CrystalModalPresentAnimator: NSObject, UIViewControllerAnimatedTrans
         UIView.animate(
             withDuration: transitionDuration(using: ctx),
             delay: 0.0,
-            usingSpringWithDamping: 0.72,
-            initialSpringVelocity: 0.5,
+            usingSpringWithDamping: 0.78,
+            initialSpringVelocity: 0.2,
             options: [.allowUserInteraction],
             animations: {
                 toView.frame = finalFrame
