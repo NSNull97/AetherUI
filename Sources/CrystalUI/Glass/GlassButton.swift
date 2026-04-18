@@ -62,6 +62,10 @@ public final class GlassButton: UIView {
     public var contentPadding: CGFloat = 14 {
         didSet { setNeedsLayout(); invalidateIntrinsicContentSize() }
     }
+    
+    public var tint: GlassBackgroundView.TintColor = .init(kind: .panel) {
+        didSet { setNeedsLayout(); invalidateIntrinsicContentSize() }
+    }
 
     /// Spacing between icon and title when both are shown.
     public var iconTitleSpacing: CGFloat = 8 {
@@ -176,7 +180,7 @@ public final class GlassButton: UIView {
             size: bounds.size,
             cornerRadius: resolvedCorner,
             isDark: resolvedDark,
-            tintColor: .init(kind: .panel),
+            tintColor: tint,
             isInteractive: true,
             isVisible: true,
             transition: .immediate
@@ -184,6 +188,28 @@ public final class GlassButton: UIView {
 
         contentContainer.frame = bounds
         layoutContent()
+    }
+    
+    public func update(
+        cornerRadius: CGFloat,
+        tintColor: GlassBackgroundView.TintColor,
+        isInteractive: Bool = false,
+        isVisible: Bool = true,
+    ) {
+        self.tint = tintColor
+        self.cornerRadius = cornerRadius
+        
+        let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
+
+        glassBackground.update(
+            size: bounds.size,
+            cornerRadius: cornerRadius,
+            isDark: resolvedDark,
+            tintColor: tintColor,
+            isInteractive: isInteractive,
+            isVisible: isVisible,
+            transition: .immediate
+        )
     }
 
     private func layoutContent() {
