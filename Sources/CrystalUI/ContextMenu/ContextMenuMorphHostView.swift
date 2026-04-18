@@ -363,23 +363,57 @@ final class ContextMenuMorphHostView: UIView {
 
     // MARK: - Easing helpers
 
-    /// Damped-sinusoidal approximation of `UISpringTimingParameters` —
-    /// sweeps 0→1 with a slight overshoot that settles by t≈1.0. Not
-    /// mathematically identical to UIKit's native spring, but visually
-    /// indistinguishable at the ~0.5s durations used by the morph. Built
-    /// in-line instead of via `UIViewPropertyAnimator` so we can read
-    /// progress from a display link without round-tripping through an
-    /// off-screen UIView's presentation layer.
+    /// Damped second-order spring response. `damping` is interpreted as
+    /// the canonical damping RATIO (ζ):
+    ///   - `< 1` underdamped: oscillates, amplitude decays. Smaller = bouncier.
+    ///   - `= 1` critically damped: monotonic approach, NO overshoot.
+    ///   - `> 1` overdamped: slower monotonic approach.
+    ///
+    /// An earlier version used `exp(-damping * t) * cos(2t)` which always
+    /// oscillated — `damping` was a decay rate, not a damping ratio, so
+    /// no value of it could suppress the bounce. Users consistently
+    /// reported "spring too strong" no matter how high the damping went.
+    /// The form below is the proper analytical response, so passing
+    /// `damping = 1.0` truly produces zero overshoot.
+    ///
+    /// `omega` (natural angular frequency) is fixed at a value that
+    /// makes the curve reach ~98-99% by t=1.0 across typical damping
+    /// ratios — keeps the settling feel responsive without requiring a
+    /// per-call parameter.
     private static func springProgress(_ t: CGFloat, damping: CGFloat) -> CGFloat {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
-        let scaled = t * 4.5
-        let decay = exp(-damping * scaled)
-        let osc = cos(2.0 * scaled)
-        let s = 1 - decay * osc
-        // Keep the overshoot modest — too much and the content
-        // choreography visibly re-wiggles at the tail.
-        return min(1.12, max(-0.04, s))
+
+        let omega: CGFloat = 6.5
+        let zeta = max(0.01, damping)
+        let wt = omega * t
+
+        if zeta < 1 {
+            // Underdamped — closed-form cosine/sine envelope decaying
+            // exponentially. Small overshoot, oscillates.
+            let omegaD = omega * sqrt(1 - zeta * zeta)
+            let decay = exp(-zeta * wt)
+            let c = cos(omegaD * t)
+            let s = sin(omegaD * t)
+            let response = decay * (c + (zeta * omega / omegaD) * s)
+            return 1 - response
+        } else if zeta > 1 {
+            // Overdamped — sum of two decaying exponentials, slow smooth
+            // approach, no oscillation. Useful when the user wants the
+            // absolute softest landing.
+            let r = sqrt(zeta * zeta - 1)
+            let a = -zeta + r
+            let b = -zeta - r
+            let A = b / (b - a)
+            let B = -a / (b - a)
+            let response = A * exp(a * wt) + B * exp(b * wt)
+            return 1 - response
+        } else {
+            // Critically damped — (1 + ωt) exp(-ωt). Single monotonic
+            // curve, zero overshoot, fastest possible settle without
+            // oscillation. This is the default "soft spring" feel.
+            return 1 - (1 + wt) * exp(-wt)
+        }
     }
 
     private static func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
