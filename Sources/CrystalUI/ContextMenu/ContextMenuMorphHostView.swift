@@ -97,6 +97,14 @@ final class ContextMenuMorphHostView: UIView {
         self.glass = UIVisualEffectView(effect: effect)
         super.init(frame: .zero)
 
+        // Anchor at top-center. The spring overshoot is applied as a
+        // transform scale, and an isotropic scale around (0.5, 0) expands
+        // the view DOWNWARD + outward from its top edge — which matches
+        // how a `.morph` menu grows (top pinned to source, unfolding down).
+        // Default center-anchor would balloon the bounce upward too, so
+        // the spring visually lifted the menu off the source rect.
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0)
+
         // Host itself is transparent and unmasked so the drop shadow below
         // the glass is visible. Glass inside clips to its own rounded
         // corners.
@@ -236,19 +244,24 @@ final class ContextMenuMorphHostView: UIView {
     private func updateForProgress(_ t: CGFloat) {
         guard let metrics else { return }
 
-        // Two clamp levels:
-        //   * `gt` clamps 0…1 for corner radius + blob bulge + content
-        //     opacities. Those should hold steady at the endpoints and
-        //     never overshoot.
-        //   * `frameProgress` passes the raw spring value through —
-        //     BOTH directions. When the underdamped spring briefly
-        //     overshoots past 1 during open, the frame extends past
-        //     the menu rect; when it overshoots below 0 during close,
-        //     the frame shrinks past the button rect. Either way the
-        //     user sees the "one wobble" in the geometry itself.
+        // Frame lerp uses CLAMPED progress. An earlier revision passed
+        // raw (unclamped) progress through so the spring overshoot
+        // extrapolated the frame past the endpoints — but the
+        // extrapolation is per-axis, scaled by each axis's delta. For a
+        // button→menu morph with height delta (~290pt) much bigger than
+        // width delta (~80pt), 12% overshoot meant +35pt height /
+        // +10pt width — an isotropic spring would bulge ~proportional
+        // in both dimensions, but our frame-lerp version gave a tall
+        // stretchy shape ("squish") that didn't read as spring.
+        //
+        // Now: frame is the pristine lerp 0…1. Spring overshoot is
+        // applied SEPARATELY as an isotropic `transform.scale` below,
+        // which expands / shrinks equally in both dimensions — a real
+        // spring wobble. Combined with the top-anchor point (set in
+        // init), the bounce expands downward + outward from the source
+        // top edge, matching the menu's natural unfold direction.
         let gt = max(0, min(1, t))
-        let frameProgress = t // uncapped both sides for spring overshoot
-        let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, frameProgress)
+        let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, gt)
         let baseCorner = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
 
         // `blob` peaks at the midpoint of the intermediate phase (~t=0.26)
@@ -320,6 +333,23 @@ final class ContextMenuMorphHostView: UIView {
         let destAlpha = destFadeIn
         let destTranslateY = (1 - destFadeIn) * 8
 
+        // Spring overshoot as an isotropic scale transform around the
+        // top-anchor. `t` can exceed 1 (open overshoot) or go below 0
+        // (close undershoot) — the corresponding `springExcess` feeds
+        // the scale: peak open = +12% size, peak close = −12% size.
+        // Both directions scale uniformly in x + y, centered at the
+        // view's top edge (anchorPoint set in init), so the bounce
+        // reads as a true spring wobble instead of a one-axis squish.
+        let springExcess: CGFloat
+        if t > 1 {
+            springExcess = t - 1
+        } else if t < 0 {
+            springExcess = t
+        } else {
+            springExcess = 0
+        }
+        let springScale = 1 + springExcess
+
         // Batch all implicit-animation-prone writes inside one disabled
         // transaction. Per-frame property changes on CALayer default to
         // the 0.25s fade/position animation, which would stutter on top
@@ -327,7 +357,13 @@ final class ContextMenuMorphHostView: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        self.frame = bulgedFrame
+        // Bounds + position directly (avoids `frame` getter/setter
+        // gymnastics with the non-default anchorPoint). `position` is
+        // the anchor-point location in the parent — with anchorPoint
+        // (0.5, 0), that's the top-center of the rendered view.
+        self.bounds = CGRect(origin: .zero, size: bulgedFrame.size)
+        self.layer.position = CGPoint(x: bulgedFrame.midX, y: bulgedFrame.minY)
+        self.transform = CGAffineTransform(scaleX: springScale, y: springScale)
         glass.frame = bounds
         glass.layer.cornerRadius = cornerRadius
 
