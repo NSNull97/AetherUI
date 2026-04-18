@@ -24,9 +24,17 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.25   // symmetric open / close for a consistent feel
-    private static let dismissDuration: TimeInterval = 0.25
-    private static let morphDamping: CGFloat = 0.65          // one light wobble in BOTH directions
+    // 0.22s tuned so the visible spring motion ends around the duration
+    // end — at damping 0.55 the curve peaks at t≈0.5 and settles by
+    // t≈0.8, so at 0.22s total the settle tail is only ~45ms. Shorter
+    // durations start losing the bounce readability; longer ones leave
+    // a noticeable "holding" tail that reads as "animation drags on".
+    private static let morphDuration: TimeInterval = 0.22   // symmetric both ways
+    private static let dismissDuration: TimeInterval = 0.22
+    // damping 0.55 (underdamped) → ~12% overshoot, very visibly a
+    // single spring wobble without multiple oscillations. Was 0.65
+    // (7% overshoot) — user reported they couldn't see the spring.
+    private static let morphDamping: CGFloat = 0.55
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
