@@ -24,18 +24,18 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    // 0.22s tuned so the visible spring motion ends around the duration
-    // end — at damping 0.55 the curve peaks at t≈0.5 and settles by
-    // t≈0.8, so at 0.22s total the settle tail is only ~45ms. Shorter
-    // durations start losing the bounce readability; longer ones leave
-    // a noticeable "holding" tail that reads as "animation drags on".
-    private static let morphDuration: TimeInterval = 0.22   // symmetric both ways
-    private static let dismissDuration: TimeInterval = 0.22
-    // `damping` param feeds the two-phase timing curve in
-    // `ContextMenuMorphHostView.springProgress`. 0 = max bounce,
-    // 1 = zero bounce. 0.50 gives a ~15% overshoot at t=0.70 of
-    // the duration — shape arrives at target size in first 40% of
-    // the time, then visibly wobbles in the remaining 60%.
+    // Duration 0.25s both directions — per user: "длительность 0.25".
+    // Same value symmetrically so open and close feel identical
+    // (important since the curve is the same analytical shape applied
+    // via progress 0→1 for open and 1→0 for close).
+    private static let morphDuration: TimeInterval = 0.25
+    private static let dismissDuration: TimeInterval = 0.25
+    // `damping` feeds the cubic-bezier timing curve in
+    // `ContextMenuMorphHostView.springProgress`. 0 = big overshoot,
+    // 1 = zero overshoot (straight ease-out). 0.50 gives a light
+    // overshoot near the top-half of the curve — a subtle bounce
+    // that rises with the curve rather than a separate "spring at
+    // end" phase. Per user: "легкий спринг" + "единая, без разрывов".
     private static let morphDamping: CGFloat = 0.50
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
