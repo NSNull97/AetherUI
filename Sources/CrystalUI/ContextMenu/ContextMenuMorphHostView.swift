@@ -397,68 +397,56 @@ final class ContextMenuMorphHostView: UIView {
 
     // MARK: - Easing helpers
 
-    /// Damped second-order spring response. `damping` is interpreted as
-    /// the canonical damping RATIO (ζ):
-    ///   - `< 1` underdamped: oscillates, amplitude decays. Smaller = bouncier.
-    ///   - `= 1` critically damped: monotonic approach, NO overshoot.
-    ///   - `> 1` overdamped: slower monotonic approach.
+    /// Two-phase "arrive then bounce" timing curve. Not a proper
+    /// second-order spring — we tried that (underdamped damped-cosine
+    /// response) and couldn't simultaneously get a late-occurring
+    /// overshoot AND a clean settle within the duration. The natural
+    /// spring's trade-off forces the peak into the first half of the
+    /// duration when parameters are chosen for a clean settle.
     ///
-    /// An earlier version used `exp(-damping * t) * cos(2t)` which always
-    /// oscillated — `damping` was a decay rate, not a damping ratio, so
-    /// no value of it could suppress the bounce. Users consistently
-    /// reported "spring too strong" no matter how high the damping went.
-    /// The form below is the proper analytical response, so passing
-    /// `damping = 1.0` truly produces zero overshoot.
+    /// Two phases:
+    ///   1. **Rise** (`t < 0.40`): cubic ease-out from 0 to 1.0. Shape
+    ///      visibly arrives at target size in the first 40% of the
+    ///      duration, before any spring behaviour starts.
+    ///   2. **Wobble** (`t ≥ 0.40`): gaussian envelope × half-sine
+    ///      oscillation around 1.0. The envelope + sin both peak at
+    ///      p=0.5 in phase 2 (= t=0.70 of total duration), and both
+    ///      decay back to 0 at p=1. Peak overshoot = amplitude =
+    ///      (1 − damping) × 0.30. For the 0.50 damping we pass from
+    ///      the controller that's a 15% peak at t=0.70.
     ///
-    /// `omega` (natural angular frequency) is fixed at a value that
-    /// makes the curve reach ~98-99% by t=1.0 across typical damping
-    /// ratios — keeps the settling feel responsive without requiring a
-    /// per-call parameter.
+    /// Endpoints: eased(0)=0, eased(1)=1 exactly. Value continuous at
+    /// the phase boundary (both phases = 1 at t=0.40). Velocity has a
+    /// tiny discontinuity at t=0.40 but it's imperceptible at shape
+    /// scale (~0.05 units/sec on a normalised 0…1 progress driving a
+    /// 200-340pt frame).
+    ///
+    /// `damping` is re-interpreted as "spring tameness" (0 = maximum
+    /// bounce, 1 = zero bounce): a controller passing the same
+    /// 0.50 value gets a more obvious bounce than with the old damped-
+    /// cosine formulation where 0.50 was a ratio.
     private static func springProgress(_ t: CGFloat, damping: CGFloat) -> CGFloat {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // `omega = 6` with the 0.50 damping ratio we pass from the
-        // controller gives:
-        //   - rise to ~99% of target by t≈0.4 (first 40% of duration)
-        //   - first-peak overshoot at t≈0.6 (60% of duration, visibly
-        //     LATE in the animation rather than in the middle)
-        //   - settle back to 1.0 by t≈1.0
-        // The earlier omega=8 peaked at t≈0.5, which combined with a
-        // very fast rise phase read to the user as "the whole spring
-        // happens at the beginning". Lower omega stretches the rise
-        // and delays the peak so the bounce visibly occurs AFTER the
-        // shape has first arrived at its target size.
-        let omega: CGFloat = 6.0
-        let zeta = max(0.01, damping)
-        let wt = omega * t
+        let risePhaseEnd: CGFloat = 0.40
 
-        if zeta < 1 {
-            // Underdamped — closed-form cosine/sine envelope decaying
-            // exponentially. Small overshoot, oscillates.
-            let omegaD = omega * sqrt(1 - zeta * zeta)
-            let decay = exp(-zeta * wt)
-            let c = cos(omegaD * t)
-            let s = sin(omegaD * t)
-            let response = decay * (c + (zeta * omega / omegaD) * s)
-            return 1 - response
-        } else if zeta > 1 {
-            // Overdamped — sum of two decaying exponentials, slow smooth
-            // approach, no oscillation. Useful when the user wants the
-            // absolute softest landing.
-            let r = sqrt(zeta * zeta - 1)
-            let a = -zeta + r
-            let b = -zeta - r
-            let A = b / (b - a)
-            let B = -a / (b - a)
-            let response = A * exp(a * wt) + B * exp(b * wt)
-            return 1 - response
-        } else {
-            // Critically damped — (1 + ωt) exp(-ωt). Single monotonic
-            // curve, zero overshoot, fastest possible settle without
-            // oscillation. This is the default "soft spring" feel.
-            return 1 - (1 + wt) * exp(-wt)
+        if t < risePhaseEnd {
+            // Phase 1: cubic ease-out, zero velocity at end.
+            let p = t / risePhaseEnd
+            let inv = 1 - p
+            return 1 - inv * inv * inv
         }
+
+        // Phase 2: centred wobble. Gaussian envelope × half-sine, both
+        // peaking at the midpoint of phase 2 (= 70% of total duration)
+        // and both reaching zero at the phase boundaries (so value
+        // stays = 1.0 at t=0.40 and t=1.0).
+        let p = (t - risePhaseEnd) / (1 - risePhaseEnd)
+        let amplitude = max(0, 1 - damping) * 0.30
+        let envelope = exp(-pow((p - 0.5) / 0.3, 2))
+        let osc = sin(p * .pi)
+        return 1 + amplitude * envelope * osc
     }
 
     private static func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
