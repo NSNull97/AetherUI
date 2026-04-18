@@ -55,22 +55,6 @@ final class ContextMenuMorphHostView: UIView {
     let sourceContent = UIView()
     let destinationContent = UIView()
 
-    /// Plain UIView that wraps the glass effect view and carries the
-    /// shape-layer mask. An earlier attempt set `layer.mask` directly on
-    /// the UIVisualEffectView, but its backdrop rendering bypassed the
-    /// mask (final menu had flat, un-rounded corners). Putting the mask
-    /// on a *parent* UIView instead clips all rendered children — the
-    /// VEF's blur included — because that clipping happens at the
-    /// parent's layer composition level, which IS respected by UIKit.
-    private let clipContainer = UIView()
-
-    /// Shape-layer mask on `clipContainer`. Renders the asymmetric
-    /// rounded-rect path (top-narrower "neck" / bottom-rounder "belly")
-    /// that gives the droplet silhouette during the blob phase. Both
-    /// corner radii converge to the uniform `baseCorner` at t=0 and
-    /// t=1, so the endpoints are pristine collapsed / expanded rects.
-    private let clipMaskLayer = CAShapeLayer()
-
     // MARK: - State
 
     private(set) var metrics: Metrics?
@@ -123,18 +107,11 @@ final class ContextMenuMorphHostView: UIView {
         layer.shadowRadius = Self.collapsedShadowRadius
         layer.shadowOpacity = Self.collapsedShadowOpacity
 
-        // Clip container sits between `self` and the glass. Its mask
-        // carries the droplet path; the glass fills it fully and
-        // inherits the clipping visually.
-        clipContainer.backgroundColor = .clear
-        clipContainer.layer.mask = clipMaskLayer
-        addSubview(clipContainer)
-
-        glass.clipsToBounds = true  // belt-and-braces even though mask handles silhouette
+        glass.clipsToBounds = true
         if #available(iOS 13.0, *) {
             glass.layer.cornerCurve = .continuous
         }
-        clipContainer.addSubview(glass)
+        addSubview(glass)
 
         sourceContent.backgroundColor = .clear
         sourceContent.isUserInteractionEnabled = false
@@ -277,53 +254,34 @@ final class ContextMenuMorphHostView: UIView {
         // that's the frame the user sees as "a glass droplet".
         let blob = Self.sinWindow(t, 0.06, 0.46)
 
-        // Blob pulse: ADDITIVE pixel delta on top of the lerped size.
-        // Kept small enough to stay monotonic (shape only grows on
-        // open, only shrinks on close — never reverses direction).
-        //
-        // Asymmetric axes for the droplet effect: tiny horizontal
-        // bulge, LARGE vertical bulge. The shape reads as stretching
-        // downward mid-morph (a liquid being pulled down by gravity),
-        // not as an isotropic swelling. Caps scale off the total
-        // delta between collapsed and expanded so small morphs get
-        // small bulges and vice versa.
-        let widthDelta = metrics.expandedFrame.width - metrics.collapsedFrame.width
-        let heightDelta = metrics.expandedFrame.height - metrics.collapsedFrame.height
-        let widthBulge = blob * min(6, max(0, widthDelta) * 0.05)   // barely noticeable
-        let heightBulge = blob * min(36, max(0, heightDelta) * 0.18) // the droplet "drip"
+        // Blob pulse: small symmetric ADDITIVE delta on top of the
+        // lerped size, centered on the lerped frame. Kept small and
+        // symmetric to stay monotonic (shape only grows on open, only
+        // shrinks on close) and because an earlier asymmetric
+        // droplet-extension attempt read as "weird" rather than
+        // liquid — plain uniform puff is less showy but visually
+        // cleaner.
+        let widthBulge = blob * min(14, lerpFrame.width * 0.08)
+        let heightBulge = blob * min(14, lerpFrame.height * 0.08)
         let bulgedSize = CGSize(
             width: lerpFrame.width + widthBulge,
             height: lerpFrame.height + heightBulge
         )
-        // Anchor the bulge to the TOP edge of the lerped frame, not to
-        // its centre. The shape then extends DOWNWARD during the blob
-        // phase — a liquid being pulled down by gravity. Centering
-        // would balloon the bulge upward AND downward symmetrically,
-        // which reads as an isotropic swell rather than a drop.
         let bulgedFrame = CGRect(
             x: lerpFrame.midX - bulgedSize.width / 2,
-            y: lerpFrame.minY,
+            y: lerpFrame.midY - bulgedSize.height / 2,
             width: bulgedSize.width,
             height: bulgedSize.height
         )
 
-        // Corner radii: asymmetric during the blob phase for a real
-        // droplet silhouette — top narrower (the "neck"), bottom
-        // rounder (the "belly"). Both converge back to `baseCorner`
-        // at t=0 and t=1, so the endpoints are the pristine collapsed
-        // / expanded rects.
-        //
-        // Applied via `clipContainer.layer.mask` (a CAShapeLayer),
-        // NOT via `glass.layer.cornerRadius`. A scalar radius can't
-        // express asymmetric corners, and the earlier mask-on-VEF
-        // attempt failed because UIVisualEffectView's backdrop
-        // bypasses its own layer mask — but placing the mask on a
-        // parent UIView works because the parent's compositing does
-        // respect the mask.
-        let topNeck = blob * 0.18
-        let bottomBelly = blob * 0.38
-        let topCornerRadius = max(0, baseCorner * (1 - topNeck))
-        let bottomCornerRadius = baseCorner * (1 + bottomBelly)
+        // Uniform corner-radius pulse during the blob phase — the
+        // shape reads slightly chubbier at the midpoint without any
+        // of the asymmetric / asymmetric-mask complexity (that needed
+        // a parent-UIView mask to clip the VEF's backdrop, which
+        // added moving parts for a visual gain the user preferred to
+        // drop).
+        let cornerPulse = blob * baseCorner * 0.18
+        let cornerRadius = baseCorner + cornerPulse
 
         // Material "thickens" with size — per the rec, Liquid Glass
         // behaves like a heavier material when larger. An extra kick
@@ -363,22 +321,12 @@ final class ContextMenuMorphHostView: UIView {
         CATransaction.setDisableActions(true)
 
         self.frame = bulgedFrame
-        clipContainer.frame = bounds
-        glass.frame = clipContainer.bounds
+        glass.frame = bounds
+        glass.layer.cornerRadius = cornerRadius
 
-        // Build the asymmetric rounded-rect mask path for this tick.
-        // Applied to clipContainer so it clips the glass inside.
-        let path = Self.makeMorphPath(
-            in: clipContainer.bounds,
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        )
-        clipMaskLayer.frame = clipContainer.bounds
-        clipMaskLayer.path = path
-
-        // Shadow uses the same path so the silhouette under the glass
-        // matches what's visible.
-        layer.shadowPath = path
+        // Explicit shadowPath derived from the rounded rect stays in
+        // sync with the visible silhouette each tick.
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: cornerRadius).cgPath
         layer.shadowRadius = shadowRadius
         layer.shadowOpacity = shadowOpacity
 
@@ -402,65 +350,6 @@ final class ContextMenuMorphHostView: UIView {
         guard t > a, t < b, b > a else { return 0 }
         let normalized = (t - a) / (b - a)       // 0…1 across the window
         return sin(normalized * .pi)             // 0 → 1 (at 0.5) → 0
-    }
-
-    /// Rounded-rect path with independent top and bottom corner radii.
-    /// Used as the `clipContainer.layer.mask` path + `layer.shadowPath`
-    /// on each display-link tick; gives the morph its droplet
-    /// silhouette during the blob phase. At t=0 / t=1 the caller
-    /// passes the same value for both radii, so endpoints are clean
-    /// uniform rounded rects.
-    private static func makeMorphPath(
-        in rect: CGRect,
-        topCornerRadius: CGFloat,
-        bottomCornerRadius: CGFloat
-    ) -> CGPath {
-        // Clamp to half-side — otherwise neighbouring arc quadrants
-        // overlap and produce a degenerate path.
-        let halfW = rect.width * 0.5
-        let halfH = rect.height * 0.5
-        let topR = max(0, min(min(topCornerRadius, halfW), halfH))
-        let bottomR = max(0, min(min(bottomCornerRadius, halfW), halfH))
-
-        let path = UIBezierPath()
-        let minX = rect.minX, maxX = rect.maxX
-        let minY = rect.minY, maxY = rect.maxY
-
-        path.move(to: CGPoint(x: minX + topR, y: minY))
-        path.addLine(to: CGPoint(x: maxX - topR, y: minY))
-        path.addArc(
-            withCenter: CGPoint(x: maxX - topR, y: minY + topR),
-            radius: topR,
-            startAngle: -.pi / 2,
-            endAngle: 0,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: maxX, y: maxY - bottomR))
-        path.addArc(
-            withCenter: CGPoint(x: maxX - bottomR, y: maxY - bottomR),
-            radius: bottomR,
-            startAngle: 0,
-            endAngle: .pi / 2,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: minX + bottomR, y: maxY))
-        path.addArc(
-            withCenter: CGPoint(x: minX + bottomR, y: maxY - bottomR),
-            radius: bottomR,
-            startAngle: .pi / 2,
-            endAngle: .pi,
-            clockwise: true
-        )
-        path.addLine(to: CGPoint(x: minX, y: minY + topR))
-        path.addArc(
-            withCenter: CGPoint(x: minX + topR, y: minY + topR),
-            radius: topR,
-            startAngle: .pi,
-            endAngle: 3 * .pi / 2,
-            clockwise: true
-        )
-        path.close()
-        return path.cgPath
     }
 
     // MARK: - Easing helpers
