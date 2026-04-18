@@ -430,25 +430,25 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // THREE phases with the pulse spanning the whole back half
-        // of the duration — gives the spring room to breathe without
-        // it feeling tacked-on after the rise.
+        // THREE phases, rise compressed into the first third so the
+        // pulse dominates the remaining ~58% of the duration — makes
+        // the spring feel slower and more expansive relative to the
+        // snap-up phase.
         //
-        //   Rise  (0…0.40)  cubic ease-out 0 → 1.0
-        //   Hold  (0.40…0.50) plateau at 1.0 (brief stop between rise
-        //                      and pulse so the spring reads as a
-        //                      distinct event)
-        //   Pulse (0.50…1.0) half-sine around 1.0, peak at t=0.75
+        //   Rise  (0…0.34)   cubic ease-out 0 → 1.0
+        //   Hold  (0.34…0.42) plateau at 1.0 (brief stop between rise
+        //                      and pulse so the spring reads distinct)
+        //   Pulse (0.42…1.0)  half-sine around 1.0, peak at t=0.71
         //
-        // At 0.22s duration:
+        // At 0.26s duration:
         //   rise   88ms
-        //   hold   22ms
-        //   pulse  110ms  (peak at t≈165ms)
+        //   hold   21ms
+        //   pulse  151ms  (peak at t≈185ms)
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse. 0.50 →
         // 20% peak overshoot.
-        let riseEnd: CGFloat = 0.40
-        let holdEnd: CGFloat = 0.50
+        let riseEnd: CGFloat = 0.34
+        let holdEnd: CGFloat = 0.42
 
         if t < riseEnd {
             let p = t / riseEnd

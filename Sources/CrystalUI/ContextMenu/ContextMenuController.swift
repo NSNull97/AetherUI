@@ -24,13 +24,13 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    // Duration at 0.22s — bumped up from 0.18 so the spring pulse
-    // has more room to breathe without making the rise feel sluggish.
-    //   rise  ~ 88ms     (0 → 0.40)
-    //   hold  ~ 22ms     (0.40 → 0.50)
-    //   pulse ~ 110ms    (0.50 → 1.0, peak at ~165ms)
-    private static let morphDuration: TimeInterval = 0.22
-    private static let dismissDuration: TimeInterval = 0.22
+    // Duration 0.26s — rise stays at ~88ms (snappy), spring gets
+    // more room to breathe (~151ms, up from 110ms).
+    //   rise  ~ 88ms   (0 → 0.34)
+    //   hold  ~ 21ms   (0.34 → 0.42)
+    //   pulse ~ 151ms  (0.42 → 1.0, peak at ~192ms)
+    private static let morphDuration: TimeInterval = 0.26
+    private static let dismissDuration: TimeInterval = 0.26
     // `damping` feeds the cubic-bezier timing curve in
     // `ContextMenuMorphHostView.springProgress`. 0 = big overshoot,
     // 1 = zero overshoot (straight ease-out). 0.50 gives a light
