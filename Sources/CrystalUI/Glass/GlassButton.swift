@@ -42,6 +42,7 @@ public final class GlassButton: UIView {
     private let contentContainer = UIView()
     private var iconView: UIImageView?
     private var titleLabel: UILabel?
+    private var loadingIndicator: UIActivityIndicatorView?
     private var tapRecognizer: UITapGestureRecognizer?
 
     // MARK: - Properties
@@ -79,6 +80,7 @@ public final class GlassButton: UIView {
             iconView?.tintColor = contentColor
             iconView?.setMonochromaticEffect(tintColor: contentColor)
             titleLabel?.textColor = contentColor
+            loadingIndicator?.color = contentColor
         }
     }
 
@@ -119,7 +121,19 @@ public final class GlassButton: UIView {
         didSet {
             if isEnabled == oldValue { return }
             alpha = isEnabled ? 1.0 : 0.4
-            tapRecognizer?.isEnabled = isEnabled
+            tapRecognizer?.isEnabled = isEnabled && !isLoading
+        }
+    }
+
+    /// Waiting/loading state. Swaps the icon+title for a centered spinner,
+    /// blocks taps, and keeps the glass pill at full opacity (this is a
+    /// "working on it" affordance, not a disabled look — use `isEnabled`
+    /// for that). Transition is a short crossfade.
+    public var isLoading: Bool = false {
+        didSet {
+            if isLoading == oldValue { return }
+            tapRecognizer?.isEnabled = isEnabled && !isLoading
+            updateLoadingState(animated: true)
         }
     }
 
@@ -220,6 +234,15 @@ public final class GlassButton: UIView {
         let hasIcon = (iconView?.image != nil)
         let hasTitle = (titleLabel?.text?.isEmpty == false)
 
+        if let indicator = loadingIndicator {
+            let size = indicator.intrinsicContentSize
+            indicator.frame = CGRect(
+                x: (bounds.width - size.width) / 2.0,
+                y: (bounds.height - size.height) / 2.0,
+                width: size.width, height: size.height
+            )
+        }
+
         if hasIcon && hasTitle {
             let spacing = iconTitleSpacing
             let totalW = clampedIconSize + spacing + titleSize.width
@@ -288,10 +311,50 @@ public final class GlassButton: UIView {
         iconView = view
     }
 
+    private func configureLoadingIndicatorIfNeeded() {
+        guard loadingIndicator == nil else { return }
+        let style: UIActivityIndicatorView.Style = .medium
+        let indicator = UIActivityIndicatorView(style: style)
+        indicator.hidesWhenStopped = false
+        indicator.color = contentColor
+        indicator.alpha = 0
+        glassBackground.contentView.addSubview(indicator)
+        loadingIndicator = indicator
+        setNeedsLayout()
+    }
+
+    private func updateLoadingState(animated: Bool) {
+        if isLoading {
+            configureLoadingIndicatorIfNeeded()
+            loadingIndicator?.startAnimating()
+        }
+
+        let contentTarget: CGFloat = isLoading ? 0.0 : 1.0
+        let indicatorTarget: CGFloat = isLoading ? 1.0 : 0.0
+
+        let apply = {
+            self.contentContainer.alpha = contentTarget
+            self.loadingIndicator?.alpha = indicatorTarget
+        }
+        let finalize = { [weak self] in
+            guard let self = self else { return }
+            if !self.isLoading {
+                self.loadingIndicator?.stopAnimating()
+            }
+        }
+
+        if animated {
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .curveEaseInOut], animations: apply) { _ in finalize() }
+        } else {
+            apply()
+            finalize()
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func handleTap() {
-        guard isEnabled else { return }
+        guard isEnabled, !isLoading else { return }
         action?(self)
     }
 }
