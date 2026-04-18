@@ -525,14 +525,13 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 1,
             duration: ContextMenuController.morphDuration,
-            // Critically damped — `damping = 1.0` is now a proper
-            // damping ratio, which means zero overshoot, no oscillation,
-            // just a monotonic soft settle into the final menu rect.
-            // User feedback: "спринг всё ещё сильный" → kill the bounce
-            // entirely. The blob phase still reads as liquid because the
-            // size + corner pulse are driven off progress (which is now
-            // smoother / non-oscillating), not off the spring itself.
-            damping: 1.0,
+            // Underdamped spring: one visible overshoot, quick settle.
+            // User feedback: "раз колыхнулось и всё, и быстро".
+            // damping=0.65 puts peak overshoot around 7% at t≈0.5;
+            // motion is ~97% done by t≈0.85 and held after that.
+            // Close stays critically damped (damping=1) — no inverse
+            // bounce as the shape shrinks back toward the button.
+            damping: 0.65,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {

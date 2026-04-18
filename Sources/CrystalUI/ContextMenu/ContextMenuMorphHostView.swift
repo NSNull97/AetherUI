@@ -236,12 +236,18 @@ final class ContextMenuMorphHostView: UIView {
     private func updateForProgress(_ t: CGFloat) {
         guard let metrics else { return }
 
-        // Clamped progress drives the axis-aligned lerp targets. The
-        // blob deformation is layered ON TOP of this and zeroes out at
-        // the endpoints, so the start/end shapes remain exactly the
-        // pristine source and menu rects.
+        // Two clamp levels:
+        //   * `gt` clamps 0…1 for corner radius and material opacities —
+        //      those should hold steady at the endpoint and never overshoot.
+        //   * `frameProgress` allows the raw spring value through, so when
+        //      an underdamped spring overshoots (progress briefly > 1) the
+        //      frame actually extends past the expanded rect — that's how
+        //      the "one wobble" reads visually. At critical damping (open's
+        //      damping=1, close's damping=1) progress is monotonic 0…1, so
+        //      this has no effect; only the bouncy underdamped open uses it.
         let gt = max(0, min(1, t))
-        let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, gt)
+        let frameProgress = max(0, t) // allow > 1 for overshoot, clamp negatives
+        let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, frameProgress)
         let baseCorner = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
 
         // `blob` peaks at the midpoint of the intermediate phase (~t=0.26)
@@ -375,7 +381,11 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        let omega: CGFloat = 6.5
+        // `omega = 8` chosen so the curve reaches ~99% by t=1.0 at
+        // critical damping, and the first overshoot of an underdamped
+        // response peaks around t≈0.5 — matching "one wobble and done"
+        // within short total durations.
+        let omega: CGFloat = 8.0
         let zeta = max(0.01, damping)
         let wt = omega * t
 
