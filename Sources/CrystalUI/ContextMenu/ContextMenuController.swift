@@ -24,8 +24,9 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.22  // snappy: critically-damped spring reaches ~98% quickly
-    private static let dismissDuration: TimeInterval = 0.16 // close even snappier
+    private static let morphDuration: TimeInterval = 0.25   // symmetric open / close for a consistent feel
+    private static let dismissDuration: TimeInterval = 0.25
+    private static let morphDamping: CGFloat = 0.65          // one light wobble in BOTH directions
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
@@ -446,7 +447,7 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 0,
             duration: ContextMenuController.dismissDuration,
-            damping: 1.0,  // critically damped: no bounce either direction
+            damping: ContextMenuController.morphDamping,  // symmetric with open
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {
@@ -525,13 +526,9 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 1,
             duration: ContextMenuController.morphDuration,
-            // Underdamped spring: one visible overshoot, quick settle.
-            // User feedback: "раз колыхнулось и всё, и быстро".
-            // damping=0.65 puts peak overshoot around 7% at t≈0.5;
-            // motion is ~97% done by t≈0.85 and held after that.
-            // Close stays critically damped (damping=1) — no inverse
-            // bounce as the shape shrinks back toward the button.
-            damping: 0.65,
+            // Same spring on open and close — one light wobble,
+            // peak overshoot ~7% at t≈0.5, settled by t≈0.85.
+            damping: ContextMenuController.morphDamping,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {

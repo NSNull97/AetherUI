@@ -237,16 +237,17 @@ final class ContextMenuMorphHostView: UIView {
         guard let metrics else { return }
 
         // Two clamp levels:
-        //   * `gt` clamps 0…1 for corner radius and material opacities —
-        //      those should hold steady at the endpoint and never overshoot.
-        //   * `frameProgress` allows the raw spring value through, so when
-        //      an underdamped spring overshoots (progress briefly > 1) the
-        //      frame actually extends past the expanded rect — that's how
-        //      the "one wobble" reads visually. At critical damping (open's
-        //      damping=1, close's damping=1) progress is monotonic 0…1, so
-        //      this has no effect; only the bouncy underdamped open uses it.
+        //   * `gt` clamps 0…1 for corner radius + blob bulge + content
+        //     opacities. Those should hold steady at the endpoints and
+        //     never overshoot.
+        //   * `frameProgress` passes the raw spring value through —
+        //     BOTH directions. When the underdamped spring briefly
+        //     overshoots past 1 during open, the frame extends past
+        //     the menu rect; when it overshoots below 0 during close,
+        //     the frame shrinks past the button rect. Either way the
+        //     user sees the "one wobble" in the geometry itself.
         let gt = max(0, min(1, t))
-        let frameProgress = max(0, t) // allow > 1 for overshoot, clamp negatives
+        let frameProgress = t // uncapped both sides for spring overshoot
         let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, frameProgress)
         let baseCorner = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
 
