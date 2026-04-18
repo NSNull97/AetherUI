@@ -31,10 +31,11 @@ public final class ContextMenuController {
     // a noticeable "holding" tail that reads as "animation drags on".
     private static let morphDuration: TimeInterval = 0.22   // symmetric both ways
     private static let dismissDuration: TimeInterval = 0.22
-    // damping 0.50 (underdamped) + omega=6 inside the morph host:
-    // ~16% overshoot, first peak around t≈0.6 of the duration — so
-    // the bounce visibly occurs AFTER the rise phase ("spring at the
-    // end"), not during it.
+    // `damping` param feeds the two-phase timing curve in
+    // `ContextMenuMorphHostView.springProgress`. 0 = max bounce,
+    // 1 = zero bounce. 0.50 gives a ~15% overshoot at t=0.70 of
+    // the duration — shape arrives at target size in first 40% of
+    // the time, then visibly wobbles in the remaining 60%.
     private static let morphDamping: CGFloat = 0.50
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
