@@ -264,16 +264,22 @@ final class ContextMenuMorphHostView: UIView {
         // that's the frame the user sees as "a glass droplet".
         let blob = Self.sinWindow(t, 0.06, 0.46)
 
-        // Blob pulse: size overshoots outward at midpoint, centered on the
-        // authoritative lerped frame. Horizontal bulge is smaller than
-        // vertical so the shape reads as stretching downward — a water-
-        // drop feel, not an isotropic pulse. Tuned to be clearly visible
-        // without becoming cartoonish: +10% wide / +18% tall at peak.
-        let widthOvershoot: CGFloat = 1 + blob * 0.10
-        let heightOvershoot: CGFloat = 1 + blob * 0.18
+        // Blob pulse: size ADDS a monotonic bulge to the authoritative
+        // lerped size. Uses an additive delta (in pixels) that's small
+        // enough to keep total size growing monotonically — an earlier
+        // multiplicative overshoot caused the shape to visibly shrink and
+        // re-grow around t≈0.40 (broken / janky look). Additive delta
+        // with a conservative cap guarantees the open animation only
+        // grows, the close only shrinks, no hiccups.
+        //
+        // Cap = 8% of the lerped dimension, or 14pt absolute — whichever
+        // is smaller. For a 200×50 button → 280×340 menu morph, this is
+        // ~14pt at peak: visible droplet puff, no direction-reversal.
+        let widthBulge = blob * min(14, lerpFrame.width * 0.08)
+        let heightBulge = blob * min(14, lerpFrame.height * 0.08)
         let bulgedSize = CGSize(
-            width: lerpFrame.width * widthOvershoot,
-            height: lerpFrame.height * heightOvershoot
+            width: lerpFrame.width + widthBulge,
+            height: lerpFrame.height + heightBulge
         )
         let bulgedFrame = CGRect(
             x: lerpFrame.midX - bulgedSize.width / 2,
@@ -282,15 +288,14 @@ final class ContextMenuMorphHostView: UIView {
             height: bulgedSize.height
         )
 
-        // Corner radii: asymmetric during the blob phase. Top corners go
-        // tighter (simulates a "neck" above the belly); bottom corners go
-        // rounder (the belly). Both converge back to `baseCorner` at t=0
-        // and t=1, so the endpoints are the exact uniform shapes the
-        // caller configured. Numbers pushed hard so the droplet read is
-        // unambiguous — at t≈0.26 the shape is visibly top-narrow /
-        // bottom-swollen.
-        let topNeck = blob * 0.38        // up to -38% on top at peak
-        let bottomBelly = blob * 0.55    // up to +55% on bottom at peak
+        // Corner radii: mild asymmetry during the blob phase. Top corners
+        // go slightly tighter (simulates a "neck"); bottom corners go
+        // slightly rounder (the belly). Values tuned conservatively —
+        // the earlier -38% / +55% range pushed corners outside the halfW
+        // clamp on tall shapes, producing visibly broken geometry at
+        // certain progress values. ±15% feels liquid without breaking.
+        let topNeck = blob * 0.15
+        let bottomBelly = blob * 0.22
         let topCornerRadius = max(0, baseCorner * (1 - topNeck))
         let bottomCornerRadius = baseCorner * (1 + bottomBelly)
 
