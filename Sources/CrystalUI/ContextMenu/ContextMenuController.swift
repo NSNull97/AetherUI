@@ -24,8 +24,8 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.32  // snappy; critically-damped spring settles without needing much time
-    private static let dismissDuration: TimeInterval = 0.24 // close even snappier
+    private static let morphDuration: TimeInterval = 0.22  // snappy: critically-damped spring reaches ~98% quickly
+    private static let dismissDuration: TimeInterval = 0.16 // close even snappier
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
