@@ -216,19 +216,24 @@ public final class ContextMenuController {
         // position with the same shape, so visually the button is "still
         // there" but it's actually inside the morphing container.
         //
-        // The explicit `removeAllAnimations()` + transform reset is
-        // critical on the `.tap` trigger path: GlassBarButtonView's
-        // press-release UIView.animate (scale 0.97 → 1, alpha 0.92 → 1)
-        // is still running at the moment `tapped()` fires, and without
-        // cancelling it the release anim keeps lerping alpha back toward
-        // 1.0, making the source button visibly bleed through *under*
-        // the morphing menu. Killing every in-flight CA animation on the
-        // source layer before pinning alpha=0 prevents that stomp.
+        // `isHidden = true` (rather than `alpha = 0.0` alone) is critical
+        // on the `.tap` trigger path. GlassBarButtonView's press-release
+        // UIView.animate (scale 0.97 → 1, alpha 0.92 → 1) can be *queued*
+        // by the runloop at the moment `tapped()` fires but not yet
+        // committed — so even `removeAllAnimations()` right now won't
+        // catch it; the UIView.animate block runs NEXT tick and slams
+        // alpha back up toward 1.0, visibly bleeding the pressed button
+        // under the morphing menu. `isHidden` isn't an animatable
+        // property, so UIView.animate can't touch it — the button stays
+        // hidden regardless of what animations are queued against it.
+        // `alpha = 0` is still set as a belt-and-braces defence for any
+        // paths that set `isHidden = false` via their own housekeeping.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         source.layer.removeAllAnimations()
         source.transform = .identity
         source.alpha = 0.0
+        source.isHidden = true
         CATransaction.commit()
         CATransaction.flush()
 
@@ -364,6 +369,7 @@ public final class ContextMenuController {
             didClean = true
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            sourceView?.isHidden = false
             sourceView?.alpha = 1.0
             CATransaction.commit()
             if #available(iOS 26.0, *), let filter = self?.sdfFilter as? LensSDFFilter {
