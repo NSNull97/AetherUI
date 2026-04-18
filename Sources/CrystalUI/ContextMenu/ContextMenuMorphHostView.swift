@@ -418,11 +418,18 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // `omega = 8` chosen so the curve reaches ~99% by t=1.0 at
-        // critical damping, and the first overshoot of an underdamped
-        // response peaks around t≈0.5 — matching "one wobble and done"
-        // within short total durations.
-        let omega: CGFloat = 8.0
+        // `omega = 6` with the 0.50 damping ratio we pass from the
+        // controller gives:
+        //   - rise to ~99% of target by t≈0.4 (first 40% of duration)
+        //   - first-peak overshoot at t≈0.6 (60% of duration, visibly
+        //     LATE in the animation rather than in the middle)
+        //   - settle back to 1.0 by t≈1.0
+        // The earlier omega=8 peaked at t≈0.5, which combined with a
+        // very fast rise phase read to the user as "the whole spring
+        // happens at the beginning". Lower omega stretches the rise
+        // and delays the peak so the bounce visibly occurs AFTER the
+        // shape has first arrived at its target size.
+        let omega: CGFloat = 6.0
         let zeta = max(0.01, damping)
         let wt = omega * t
 

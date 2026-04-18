@@ -31,10 +31,11 @@ public final class ContextMenuController {
     // a noticeable "holding" tail that reads as "animation drags on".
     private static let morphDuration: TimeInterval = 0.22   // symmetric both ways
     private static let dismissDuration: TimeInterval = 0.22
-    // damping 0.55 (underdamped) → ~12% overshoot, very visibly a
-    // single spring wobble without multiple oscillations. Was 0.65
-    // (7% overshoot) — user reported they couldn't see the spring.
-    private static let morphDamping: CGFloat = 0.55
+    // damping 0.50 (underdamped) + omega=6 inside the morph host:
+    // ~16% overshoot, first peak around t≈0.6 of the duration — so
+    // the bounce visibly occurs AFTER the rise phase ("spring at the
+    // end"), not during it.
+    private static let morphDamping: CGFloat = 0.50
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
