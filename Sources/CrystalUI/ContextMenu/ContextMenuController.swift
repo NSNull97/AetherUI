@@ -212,28 +212,26 @@ public final class ContextMenuController {
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Hide source INSTANTLY — the snapshot is now at the same screen
-        // position with the same shape, so visually the button is "still
-        // there" but it's actually inside the morphing container.
+        // Hide source INVISIBLY — not via `isHidden`, which would trigger
+        // parent re-layout in UIStackView / self-sizing collection cells,
+        // and not via `alpha = 0.0`, which GlassBarButtonView's press-
+        // release `UIView.animate` slams back to 1.0 on the .tap path.
         //
-        // `isHidden = true` (rather than `alpha = 0.0` alone) is critical
-        // on the `.tap` trigger path. GlassBarButtonView's press-release
-        // UIView.animate (scale 0.97 → 1, alpha 0.92 → 1) can be *queued*
-        // by the runloop at the moment `tapped()` fires but not yet
-        // committed — so even `removeAllAnimations()` right now won't
-        // catch it; the UIView.animate block runs NEXT tick and slams
-        // alpha back up toward 1.0, visibly bleeding the pressed button
-        // under the morphing menu. `isHidden` isn't an animatable
-        // property, so UIView.animate can't touch it — the button stays
-        // hidden regardless of what animations are queued against it.
-        // `alpha = 0` is still set as a belt-and-braces defence for any
-        // paths that set `isHidden = false` via their own housekeeping.
+        // Instead: attach a fully-transparent `CALayer` as the source
+        // layer's mask. A mask's alpha gates the host's visibility —
+        // clear mask → fully hidden. Crucially this is layer-level and
+        // has no UIView-API counterpart, so UIView.animate can't touch
+        // it; the source stays invisible regardless of what press
+        // animations fire. Layout-wise the source view stays at its
+        // normal `frame` / `isHidden = false`, so the surrounding
+        // stack / collection doesn't shift — a "view ghost" sits in
+        // the button's slot.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        source.layer.removeAllAnimations()
-        source.transform = .identity
-        source.alpha = 0.0
-        source.isHidden = true
+        let hideMask = CALayer()
+        hideMask.frame = source.layer.bounds
+        hideMask.backgroundColor = UIColor.clear.cgColor
+        source.layer.mask = hideMask
         CATransaction.commit()
         CATransaction.flush()
 
@@ -369,8 +367,11 @@ public final class ContextMenuController {
             didClean = true
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            sourceView?.isHidden = false
-            sourceView?.alpha = 1.0
+            // Drop the transparent hide-mask (paired with `present`'s
+            // `source.layer.mask = hideMask`). The source becomes visible
+            // again with its original layout + frame intact — no isHidden
+            // / alpha to restore because we never touched either.
+            sourceView?.layer.mask = nil
             CATransaction.commit()
             if #available(iOS 26.0, *), let filter = self?.sdfFilter as? LensSDFFilter {
                 filter.uninstall()
@@ -524,7 +525,10 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 1,
             duration: ContextMenuController.morphDuration,
-            damping: 0.78,
+            // Softer spring — less overshoot, more of a liquid settle
+            // (user feedback: "спринг чуть слабее"). Higher damping
+            // value = less elastic, smoother approach to the end state.
+            damping: 0.95,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {
