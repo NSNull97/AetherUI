@@ -430,30 +430,28 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // THREE phases for maximum "arrive THEN bounce" readability:
+        // THREE phases, phase boundaries tightened so the rise is
+        // punchy and the pulse dominates the back half:
         //
-        //   Rise  (0…0.55)  — cubic ease-out from 0 to 1.0. Fast start,
-        //                      slowing as it approaches the target size.
-        //   Hold  (0.55…0.65) — value is exactly 1.0. A short but real
-        //                      plateau: visually the shape arrives and
-        //                      stays motionless for ~25-40ms. THIS is
-        //                      what makes the user's eye register that
-        //                      the rise is OVER, so the subsequent pulse
-        //                      reads as a distinct spring event and not
-        //                      a continuation of the rise. Previous
-        //                      monotonic curves (bezier / ease-out +
-        //                      overlaid-bump) never really let the
-        //                      shape "land"; the user just saw smooth
-        //                      motion that never paused.
-        //   Pulse (0.65…1.0) — half-sine pulse around 1.0. Peak at
-        //                      t=0.825, zero at both ends of the
-        //                      window, so the value is continuous and
-        //                      ends exactly at 1.0 at t=1.
+        //   Rise  (0…0.40)   — cubic ease-out from 0 to 1.0.
+        //                      40% of duration → rise happens fast
+        //                      (~72ms at 0.18s total).
+        //   Hold  (0.40…0.50) — value pinned at 1.0 for 10% of
+        //                      duration (~18ms). Short but perceptible
+        //                      stop that makes the user's eye
+        //                      register that the arrival is done,
+        //                      so the subsequent pulse reads as a
+        //                      distinct spring event.
+        //   Pulse (0.50…1.0) — half-sine around 1.0, amplitude up to
+        //                      40% × (1 − damping). Peak at t=0.75,
+        //                      returns to 1.0 at t=1. Spans the whole
+        //                      back half so the spring has room to
+        //                      fully rise, peak, and settle.
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse (pure
         // rise-then-hold). 0.50 → 20% peak overshoot.
-        let riseEnd: CGFloat = 0.55
-        let holdEnd: CGFloat = 0.65
+        let riseEnd: CGFloat = 0.40
+        let holdEnd: CGFloat = 0.50
 
         if t < riseEnd {
             let p = t / riseEnd
