@@ -97,12 +97,15 @@ final class ContextMenuMorphHostView: UIView {
         self.glass = UIVisualEffectView(effect: effect)
         super.init(frame: .zero)
 
-        // Anchor at top-center. The spring overshoot is applied as a
-        // transform scale, and an isotropic scale around (0.5, 0) expands
-        // the view DOWNWARD + outward from its top edge — which matches
-        // how a `.morph` menu grows (top pinned to source, unfolding down).
-        // Default center-anchor would balloon the bounce upward too, so
-        // the spring visually lifted the menu off the source rect.
+        // Top anchor (y=0). X-anchor is resolved per-presentation in
+        // `configure(metrics:)` based on which edge (left / center /
+        // right) the menu shares with the source button. That way the
+        // spring scale transform and frame lerp pivot around the edge
+        // that's visually anchored to the source — a right-side
+        // button's menu unfolds leftward from the source's right
+        // edge, a left-side button's menu unfolds rightward from its
+        // left edge, a centered button expands symmetrically.
+        // Default is top-center until metrics are supplied.
         layer.anchorPoint = CGPoint(x: 0.5, y: 0)
 
         // Host itself is transparent and unmasked so the drop shadow below
@@ -138,12 +141,42 @@ final class ContextMenuMorphHostView: UIView {
 
     // MARK: - Configuration
 
+    /// Horizontal anchor resolved from source ↔ menu alignment. Used
+    /// both for the CALayer `anchorPoint.x` (so transform scale pivots
+    /// from the right edge) and for computing `layer.position.x`
+    /// during animation. Reset on every `configure(metrics:)` call.
+    private var xAnchor: CGFloat = 0.5
+
     /// Set the collapsed (source button) and expanded (menu) rects + corner
     /// radii. Once configured, the host's visual state at any `progress`
     /// value is well-defined. Safe to call repeatedly; the next
     /// `updateForProgress(...)` picks up the new metrics.
     func configure(metrics: Metrics) {
         self.metrics = metrics
+
+        // Pick the horizontal anchor by matching which horizontal edge
+        // source and menu share:
+        //   - Same left edge → anchor x = 0 (shape grows rightward
+        //     from the shared left edge)
+        //   - Same right edge → anchor x = 1 (shape grows leftward
+        //     from the shared right edge)
+        //   - Neither → fall back to center so scale at least pivots
+        //     from the midpoint.
+        // Tolerance of 1pt handles rounding differences between
+        // caller-computed source / menu rects.
+        let srcMinX = metrics.collapsedFrame.minX
+        let srcMaxX = metrics.collapsedFrame.maxX
+        let expMinX = metrics.expandedFrame.minX
+        let expMaxX = metrics.expandedFrame.maxX
+        if abs(srcMinX - expMinX) <= 1.0 {
+            xAnchor = 0.0
+        } else if abs(srcMaxX - expMaxX) <= 1.0 {
+            xAnchor = 1.0
+        } else {
+            xAnchor = 0.5
+        }
+        layer.anchorPoint = CGPoint(x: xAnchor, y: 0)
+
         // Content containers stay at their own full size throughout the
         // morph — the glass host clips them to its (changing) bounds. The
         // containers sit at the top-left (origin .zero) so the button
@@ -359,10 +392,17 @@ final class ContextMenuMorphHostView: UIView {
 
         // Bounds + position directly (avoids `frame` getter/setter
         // gymnastics with the non-default anchorPoint). `position` is
-        // the anchor-point location in the parent — with anchorPoint
-        // (0.5, 0), that's the top-center of the rendered view.
+        // the anchor-point location in the parent:
+        //   anchor x = 0.0 → position.x = bulgedFrame.minX  (left edge)
+        //   anchor x = 1.0 → position.x = bulgedFrame.maxX  (right edge)
+        //   anchor x = 0.5 → position.x = bulgedFrame.midX  (centre)
+        // `xAnchor` was resolved in `configure(metrics:)` and applied
+        // to `layer.anchorPoint`; using the matching formula here
+        // keeps the visible frame aligned to bulgedFrame regardless
+        // of which edge the shape is pivoting from.
+        let anchorPositionX = bulgedFrame.minX + bulgedFrame.width * xAnchor
         self.bounds = CGRect(origin: .zero, size: bulgedFrame.size)
-        self.layer.position = CGPoint(x: bulgedFrame.midX, y: bulgedFrame.minY)
+        self.layer.position = CGPoint(x: anchorPositionX, y: bulgedFrame.minY)
         self.transform = CGAffineTransform(scaleX: springScale, y: springScale)
         glass.frame = bounds
         glass.layer.cornerRadius = cornerRadius

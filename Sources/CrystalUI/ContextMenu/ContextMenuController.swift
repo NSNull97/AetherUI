@@ -641,11 +641,31 @@ public final class ContextMenuController {
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
 
-        var x = sourceRect.minX
+        // Horizontal alignment: align the menu to the SAME EDGE as the
+        // source button so the morph visibly grows from that edge. By
+        // default try left-align (menu.minX = source.minX); if the menu
+        // would overflow the right edge of the screen, flip to
+        // right-align (menu.maxX = source.maxX) so the shared edge is
+        // the source's right. That way a right-side button visually
+        // unfolds its menu leftward from its own right edge, and a
+        // left-side button unfolds rightward from its own left edge —
+        // animation anchor in `ContextMenuMorphHostView` follows the
+        // same edge, so the morph doesn't appear to "slide in from the
+        // wrong side" during the transition.
+        var x: CGFloat
+        if sourceRect.minX + menuSize.width <= hostBounds.maxX - sideInset {
+            // Fits on the right of the source — left-align.
+            x = sourceRect.minX
+        } else {
+            // Doesn't fit — right-align to source's right edge.
+            x = sourceRect.maxX - menuSize.width
+        }
+        x = max(sideInset, x)
+        // Final safety clamp: if right-align still overflows left side,
+        // pin to left inset.
         if x + menuSize.width > hostBounds.maxX - sideInset {
             x = hostBounds.maxX - sideInset - menuSize.width
         }
-        x = max(sideInset, x)
 
         let initialY: CGFloat
         switch presentationStyle {
