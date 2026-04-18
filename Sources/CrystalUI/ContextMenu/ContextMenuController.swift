@@ -446,7 +446,7 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 0,
             duration: ContextMenuController.dismissDuration,
-            damping: 0.9,  // heavier damping on close — less elastic
+            damping: 1.0,  // critically damped: no bounce either direction
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {
@@ -525,10 +525,14 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 1,
             duration: ContextMenuController.morphDuration,
-            // Softer spring — less overshoot, more of a liquid settle
-            // (user feedback: "спринг чуть слабее"). Higher damping
-            // value = less elastic, smoother approach to the end state.
-            damping: 0.95,
+            // Critically damped — `damping = 1.0` is now a proper
+            // damping ratio, which means zero overshoot, no oscillation,
+            // just a monotonic soft settle into the final menu rect.
+            // User feedback: "спринг всё ещё сильный" → kill the bounce
+            // entirely. The blob phase still reads as liquid because the
+            // size + corner pulse are driven off progress (which is now
+            // smoother / non-oscillating), not off the spring itself.
+            damping: 1.0,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {
