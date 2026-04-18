@@ -224,11 +224,25 @@ final class ContextMenuActionsView: UIView {
     // MARK: - Highlight tracking
 
     private func moveHighlight(to point: CGPoint, animated: Bool) {
-        guard let index = enabledRowIndex(at: point) else {
-            clearHighlight(animated: animated)
+        // Pick the nearest enabled row — this is what makes the drag
+        // track smoothly across separators / headers BETWEEN sections
+        // instead of clearing whenever the finger crosses a non-action
+        // row. If the point is far outside the menu we keep the
+        // highlight pinned to the last valid row (don't clear) so
+        // dragging outside doesn't jitter the highlight off; the user
+        // can drag back in and land on a row cleanly.
+        if let index = nearestEnabledRowIndex(at: point) {
+            applyHighlight(to: index, animated: animated)
             return
         }
+        // Far outside the menu — preserve whatever highlight was last
+        // shown. Only cancel/touchesEnded will actually clear it.
+        if highlightedIndex == nil {
+            clearHighlight(animated: animated)
+        }
+    }
 
+    private func applyHighlight(to index: Int, animated: Bool) {
         let targetFrame = highlightFrame(forRowAt: index)
         let isFirstShow = (highlightLens.alpha < 0.01)
 
@@ -302,10 +316,10 @@ final class ContextMenuActionsView: UIView {
         }
     }
 
-    /// Returns the index of the enabled tappable row (action OR header row)
-    /// whose frame contains `point`. `point` is in actions-view bounds; rows
-    /// live inside the inset contentContainer so we offset by its origin
-    /// before hit-testing. Headers / separators / disabled rows return nil.
+    /// Returns the index of the enabled tappable row (action OR header
+    /// row) whose frame contains `point`. Direct hit only — used by
+    /// `commitTouch` to decide whether a touch-up lands on an
+    /// actionable row.
     private func enabledRowIndex(at point: CGPoint) -> Int? {
         let pointInContent = convertToContentContainer(point)
         for (index, entry) in rowViews.enumerated() {
@@ -315,6 +329,59 @@ final class ContextMenuActionsView: UIView {
             return index
         }
         return nil
+    }
+
+    /// Nearest enabled row for highlight purposes during a drag. Unlike
+    /// `enabledRowIndex` this one:
+    ///   - returns the closest tappable row when the finger is over a
+    ///     separator / section header / disabled item (so the highlight
+    ///     tracks smoothly across section boundaries instead of clearing)
+    ///   - returns `nil` only when the finger is genuinely far from the
+    ///     menu (beyond a generous slack band) — we use that to mean
+    ///     "don't touch the highlight", and the caller preserves whatever
+    ///     row was last highlighted.
+    private func nearestEnabledRowIndex(at point: CGPoint) -> Int? {
+        let pointInContent = convertToContentContainer(point)
+
+        // Direct hit on a tappable row short-circuits the nearest-search.
+        for (index, entry) in rowViews.enumerated() {
+            guard entry.view.frame.contains(pointInContent) else { continue }
+            if entry.isHeaderRow { return index }
+            if let actionItem = entry.actionItem, actionItem.isEnabled {
+                return index
+            }
+            // Direct hit on a disabled / separator / header-label row —
+            // fall through to nearest-search so the highlight jumps to
+            // the nearest tappable row.
+            break
+        }
+
+        // Slack band: accept points up to 40pt horizontally outside the
+        // content area so a lazy drag that clips the menu edge still
+        // tracks. Vertically unbounded — we clamp to the row band below
+        // via the nearest-search, so finger-above-menu pins to the top
+        // row, finger-below pins to the bottom.
+        let horizontalSlack: CGFloat = 40
+        let xMin = contentContainer.bounds.minX - horizontalSlack
+        let xMax = contentContainer.bounds.maxX + horizontalSlack
+        guard pointInContent.x >= xMin, pointInContent.x <= xMax else {
+            return nil
+        }
+
+        // Nearest tappable row by vertical distance to its midY.
+        var nearestIndex: Int? = nil
+        var nearestDistance: CGFloat = .infinity
+        for (index, entry) in rowViews.enumerated() {
+            let isTappable = entry.isHeaderRow || (entry.actionItem?.isEnabled == true)
+            guard isTappable else { continue }
+            let rowMidY = entry.view.frame.midY
+            let distance = abs(pointInContent.y - rowMidY)
+            if distance < nearestDistance {
+                nearestDistance = distance
+                nearestIndex = index
+            }
+        }
+        return nearestIndex
     }
 
     private func convertToContentContainer(_ point: CGPoint) -> CGPoint {
