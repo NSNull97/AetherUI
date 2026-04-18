@@ -377,6 +377,12 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         bottomPillIcon?.frame = CGRect(x: 14, y: (h - 18) / 2, width: 18, height: 18)
         bottomPillLabel?.frame = CGRect(x: 38, y: 0, width: frame.width - 48, height: h)
     }
+    
+    public func updateEdgeEffect(color: UIColor) {
+        if let edge = bottomEdgeEffect {
+            edge.updateColor(color: color, transition: .immediate)
+        }
+    }
 
     @objc private func bottomPillTapped() {
         activate()
