@@ -363,6 +363,18 @@ public enum TabBarItemContextActionType {
 
     override open func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // Re-pick up `navigationItem` contents now that viewDidLoad has run.
+        // NavigationController wires `bar.item = navigationItem` at setViewControllers
+        // time, which can happen BEFORE the view is loaded — on that path the
+        // subclass hasn't yet had a chance to assign title, titleView, or bar
+        // button items in viewDidLoad. Re-assigning the same UINavigationItem
+        // here re-fires the bar's `didSet` and lets it observe the populated
+        // state. Idempotent for unchanged screens (reference-equality checks
+        // inside updateItemContent skip redundant work).
+        if let bar = navigationBarView {
+            bar.item = navigationItem
+            bar.requestContainerLayout?(.immediate)
+        }
     }
 
     override open func viewDidAppear(_ animated: Bool) {
