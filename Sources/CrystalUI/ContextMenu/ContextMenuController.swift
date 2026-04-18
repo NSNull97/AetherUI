@@ -24,8 +24,8 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    private static let morphDuration: TimeInterval = 0.52  // per the rec: ~0.48s open
-    private static let dismissDuration: TimeInterval = 0.38 // close faster than open
+    private static let morphDuration: TimeInterval = 0.62  // slower open lets the blob stage breathe
+    private static let dismissDuration: TimeInterval = 0.42 // close faster than open
     private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
