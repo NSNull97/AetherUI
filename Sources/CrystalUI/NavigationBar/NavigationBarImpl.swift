@@ -609,10 +609,27 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         let balancedTitleInset = max(titleLeftInset, titleRightInset)
         let titleMaxWidth = max(0.0, width - balancedTitleInset * 2.0)
         if let titleContentView {
+            // Try, in order: sizeThatFits → current bounds → intrinsicContentSize.
+            // Plain UIView.sizeThatFits returns bounds.size; if the caller
+            // provided a wrapper whose frame was zeroed by an earlier
+            // layout pass (e.g. mid-push before the navbar knew its own
+            // width), both sizeThatFits and bounds can be zero. Falling
+            // back to intrinsicContentSize lets titleViews that only
+            // declare intrinsic size still render.
             let fittingSize = titleContentView.sizeThatFits(CGSize(width: titleMaxWidth, height: buttonHeight))
+            var resolvedWidth: CGFloat = fittingSize.width
+            var resolvedHeight: CGFloat = fittingSize.height
+            if resolvedWidth <= 0.0 { resolvedWidth = titleContentView.bounds.width }
+            if resolvedHeight <= 0.0 { resolvedHeight = titleContentView.bounds.height }
+            if resolvedWidth <= 0.0 || resolvedHeight <= 0.0 {
+                let intrinsic = titleContentView.intrinsicContentSize
+                if resolvedWidth <= 0.0 && intrinsic.width > 0.0 { resolvedWidth = intrinsic.width }
+                if resolvedHeight <= 0.0 && intrinsic.height > 0.0 { resolvedHeight = intrinsic.height }
+            }
+            if resolvedHeight <= 0.0 { resolvedHeight = buttonHeight }
             let titleSize = CGSize(
-                width: min(titleMaxWidth, max(0.0, fittingSize.width > 0.0 ? fittingSize.width : titleContentView.bounds.width)),
-                height: min(buttonHeight, max(0.0, fittingSize.height > 0.0 ? fittingSize.height : titleContentView.bounds.height))
+                width: min(titleMaxWidth, max(0.0, resolvedWidth)),
+                height: min(buttonHeight, max(0.0, resolvedHeight))
             )
             var titleFrame = CGRect(
                 x: floor((width - titleSize.width) / 2.0),
@@ -639,6 +656,63 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         let theme = presentationData.theme
 
         if theme.style == .glass {
+            // When every bar-button item has its own customView and no
+            // auto back-button is needed, skip the shared GlassControlGroup
+            // capsule entirely. Reason: wrapping caller-provided views
+            // (especially glass-bearing ones like GlassButton) inside the
+            // group's glass capsule creates a double-glass stack — the
+            // inner iconView's iOS 26 monochromatic treatment then inverts
+            // against the outer capsule and renders with the wrong tint,
+            // and custom layout views lose their size when the group
+            // constrains them to its own flow. Laying out customViews
+            // directly in the container lets them render exactly as-is.
+            let rawItems = items ?? []
+            let needsBackButton = alignment == .left && previousItem != nil && enableAutomaticBackButton
+            let allCustomView = !rawItems.isEmpty && rawItems.allSatisfy { $0.customView != nil }
+
+            if allCustomView && !needsBackButton {
+                switch alignment {
+                case .left:
+                    if let g = leftButtonsGroup { g.removeFromSuperview(); leftButtonsGroup = nil }
+                case .right:
+                    if let g = rightButtonsGroup { g.removeFromSuperview(); rightButtonsGroup = nil }
+                }
+
+                let expected = rawItems.compactMap { $0.customView }
+                for sub in container.subviews where !expected.contains(where: { $0 === sub }) {
+                    sub.removeFromSuperview()
+                }
+
+                let spacing: CGFloat = 6.0
+                var offsetX: CGFloat = 0.0
+                for (idx, view) in expected.enumerated() {
+                    if view.superview !== container {
+                        container.addSubview(view)
+                    }
+                    var measured = view.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: height))
+                    if measured.width <= 0.0 || measured.height <= 0.0 {
+                        let bounds = view.bounds.size
+                        if bounds.width > 0.0 { measured.width = bounds.width }
+                        if bounds.height > 0.0 { measured.height = bounds.height }
+                    }
+                    if measured.width <= 0.0 || measured.height <= 0.0 {
+                        let intrinsic = view.intrinsicContentSize
+                        if intrinsic.width > 0.0 { measured.width = intrinsic.width }
+                        if intrinsic.height > 0.0 { measured.height = intrinsic.height }
+                    }
+                    if measured.width <= 0.0 { measured.width = height }
+                    if measured.height <= 0.0 { measured.height = height }
+                    measured.height = min(measured.height, height)
+
+                    let y = floor((height - measured.height) / 2.0)
+                    let frame = CGRect(x: offsetX, y: y, width: measured.width, height: measured.height)
+                    glassTransition.updateFrame(view: view, frame: frame)
+                    offsetX += measured.width
+                    if idx < expected.count - 1 { offsetX += spacing }
+                }
+                return offsetX
+            }
+
             // Reuse persistent GlassControlGroup across updates so the native
             // UIGlassEffect capsule can animate/morph instead of being rebuilt.
             let group: GlassControlGroup
