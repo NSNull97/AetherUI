@@ -429,7 +429,7 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        let risePhaseEnd: CGFloat = 0.40
+        let risePhaseEnd: CGFloat = 0.60
 
         if t < risePhaseEnd {
             // Phase 1: cubic ease-out, zero velocity at end.
@@ -439,9 +439,12 @@ final class ContextMenuMorphHostView: UIView {
         }
 
         // Phase 2: centred wobble. Gaussian envelope × half-sine, both
-        // peaking at the midpoint of phase 2 (= 70% of total duration)
-        // and both reaching zero at the phase boundaries (so value
-        // stays = 1.0 at t=0.40 and t=1.0).
+        // peaking at the midpoint of phase 2 (= t=0.80 of total
+        // duration) and both reaching zero at the phase boundaries,
+        // so value stays = 1.0 at t=0.60 and t=1.0. User feedback
+        // wanted the bounce visibly at the END, which means
+        // dedicating more of the duration to the rise (60%) and
+        // packing the wobble into the final 40%.
         let p = (t - risePhaseEnd) / (1 - risePhaseEnd)
         let amplitude = max(0, 1 - damping) * 0.30
         let envelope = exp(-pow((p - 0.5) / 0.3, 2))
