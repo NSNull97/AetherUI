@@ -215,8 +215,19 @@ public final class ContextMenuController {
         // Hide source INSTANTLY — the snapshot is now at the same screen
         // position with the same shape, so visually the button is "still
         // there" but it's actually inside the morphing container.
+        //
+        // The explicit `removeAllAnimations()` + transform reset is
+        // critical on the `.tap` trigger path: GlassBarButtonView's
+        // press-release UIView.animate (scale 0.97 → 1, alpha 0.92 → 1)
+        // is still running at the moment `tapped()` fires, and without
+        // cancelling it the release anim keeps lerping alpha back toward
+        // 1.0, making the source button visibly bleed through *under*
+        // the morphing menu. Killing every in-flight CA animation on the
+        // source layer before pinning alpha=0 prevents that stomp.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        source.layer.removeAllAnimations()
+        source.transform = .identity
         source.alpha = 0.0
         CATransaction.commit()
         CATransaction.flush()
