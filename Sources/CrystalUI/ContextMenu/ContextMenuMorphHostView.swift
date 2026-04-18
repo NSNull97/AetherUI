@@ -397,48 +397,56 @@ final class ContextMenuMorphHostView: UIView {
 
     // MARK: - Easing helpers
 
-    /// Cubic-bezier timing curve with a slight overshoot. One unified
-    /// analytical curve from t=0 to t=1 — value, first and second
-    /// derivatives all continuous — which satisfies "единая, без
-    /// разрывов" while simultaneously giving the other requested
-    /// characteristics:
+    /// Cubic-bezier timing curve where the overshoot peak is placed
+    /// in the LAST THIRD of the animation. One unified analytical
+    /// curve — value, first and second derivatives all continuous —
+    /// satisfying "единая, без разрывов", with a visible bounce at
+    /// the end per user feedback "спринг не в конце".
     ///
-    ///   - **Fast start** via the first control point at (0.20, 1+0.40(1−d)).
-    ///     The curve's X coordinate reaches 0.10 when the bezier
-    ///     parameter u is already ≈0.17 — i.e. the Y coordinate shoots
-    ///     up to ≈50% of target in the first 10% of the animation time.
+    /// Control points:
+    ///   P1 = (0.25, 1.00)               (at/on the y=1 line)
+    ///   P2 = (0.60, 1 + 0.30·(1−damping))  (above y=1, late x)
     ///
-    ///   - **Slightly slower finish** via the second control point at
-    ///     (0.40, 1+0.20(1−d)). Both Y values are set above 1.0 so the
-    ///     curve overshoots; the second is lower than the first so the
-    ///     curve comes back DOWN toward 1.0 during the latter half —
-    ///     that's the "long tail" that reads as "finish slower".
+    /// At the 0.50 damping the controller passes:
+    ///   P1 = (0.25, 1.00)
+    ///   P2 = (0.60, 1.15)
     ///
-    ///   - **Light spring** = the amount the curve exceeds 1.0 during
-    ///     the middle/late portion. Peak overshoot ≈ (1−damping)*0.05
-    ///     at the 0.50 ratio the controller passes, that's a 2.5%
-    ///     bump — visible but subtle.
+    /// Resulting shape:
+    ///   - t=0.10 → Y≈0.28   (quick acceleration from rest)
+    ///   - t=0.35 → Y≈0.83   (approaching target)
+    ///   - t=0.55 → Y≈1.00   (shape arrives at menu rect CLEANLY)
+    ///   - t=0.70 → Y≈1.04
+    ///   - t=0.80 → Y≈1.05   (peak overshoot — the "bounce")
+    ///   - t=0.90 → Y≈1.04
+    ///   - t=1.00 → Y=1.00   (settled)
+    ///
+    /// The critical difference vs the previous tuning: P1's y is at 1.0
+    /// (not above), so the curve rises CLEANLY through y=1 before
+    /// beginning to overshoot — the peak therefore sits in the 2nd
+    /// half rather than mid-curve. The earlier (0.20, 1.20), (0.40,
+    /// 1.10) tuning had BOTH control points lifted, so the curve
+    /// peaked mid-way and slid down smoothly afterward, which read to
+    /// the user as "smooth end, spring in the middle".
     ///
     /// Inversion (finding `u` such that X(u) = t) is done with a short
     /// Newton-Raphson loop — 6 iterations converges to 1e-5 precision,
     /// which is well below a pixel at our animation scales.
     ///
-    /// `damping` reinterpreted as bounce tameness: 0 = big overshoot,
-    /// 1 = no overshoot (straight-line curve through the two x-axis
-    /// control points). 0.50 is the default controller value.
+    /// `damping`: 0 = bigger overshoot, 1 = no overshoot (straight
+    /// ease-through). 0.50 is the default controller value.
     private static func springProgress(_ t: CGFloat, damping: CGFloat) -> CGFloat {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        let c1x: CGFloat = 0.20
-        let c2x: CGFloat = 0.40
-        // Y control points scale with "bounce amount" = (1 - damping):
-        //   - damping = 0: c1y = 1.40, c2y = 1.20 → clear overshoot
-        //   - damping = 0.5: c1y = 1.20, c2y = 1.10 → light spring
-        //   - damping = 1: c1y = 1.00, c2y = 1.00 → straight ease-out
+        let c1x: CGFloat = 0.25
+        let c1y: CGFloat = 1.00
+        let c2x: CGFloat = 0.60
+        // Overshoot magnitude scales with bounce amount = (1 - damping).
+        //   - damping = 0: c2y = 1.30 → 10% peak overshoot
+        //   - damping = 0.5: c2y = 1.15 → ~5% peak overshoot
+        //   - damping = 1: c2y = 1.00 → no overshoot, gentle ease-through
         let bounce = max(0, 1 - damping)
-        let c1y = 1 + bounce * 0.40
-        let c2y = 1 + bounce * 0.20
+        let c2y = 1 + bounce * 0.30
 
         // Newton-Raphson on X(u) = t → find u.
         var u = t
