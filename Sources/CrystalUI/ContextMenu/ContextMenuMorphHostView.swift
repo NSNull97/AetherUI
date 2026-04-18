@@ -430,31 +430,25 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // THREE phases with a tight pulse window so the spring
-        // doesn't drag. Any duration left after `pulseEnd` is simply
-        // held at 1.0 — visually the animation "lands" at pulseEnd
-        // and the display-link just coasts out the remainder.
+        // THREE phases with the pulse spanning the whole back half
+        // of the duration — gives the spring room to breathe without
+        // it feeling tacked-on after the rise.
         //
-        //   Rise  (0…0.40)          cubic ease-out 0 → 1.0
-        //   Hold  (0.40…0.50)       plateau at 1.0
-        //   Pulse (0.50…0.85)       half-sine up to 1+amp and back
-        //   Settled (0.85…1.0)      held at 1.0
+        //   Rise  (0…0.40)  cubic ease-out 0 → 1.0
+        //   Hold  (0.40…0.50) plateau at 1.0 (brief stop between rise
+        //                      and pulse so the spring reads as a
+        //                      distinct event)
+        //   Pulse (0.50…1.0) half-sine around 1.0, peak at t=0.75
         //
-        // At 0.18s duration:
-        //   rise    72ms
-        //   hold    18ms
-        //   pulse   63ms  (peak at t=0.675, ~121ms)
-        //   settled 27ms
-        //
-        // The pulse is now ~35% of duration instead of 50%, so the
-        // spring feels quicker relative to the rise and lands sooner
-        // after the hold.
+        // At 0.22s duration:
+        //   rise   88ms
+        //   hold   22ms
+        //   pulse  110ms  (peak at t≈165ms)
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse. 0.50 →
         // 20% peak overshoot.
         let riseEnd: CGFloat = 0.40
         let holdEnd: CGFloat = 0.50
-        let pulseEnd: CGFloat = 0.85
 
         if t < riseEnd {
             let p = t / riseEnd
@@ -462,14 +456,16 @@ final class ContextMenuMorphHostView: UIView {
             return 1 - inv * inv * inv
         }
 
-        if t < holdEnd || t >= pulseEnd {
+        if t < holdEnd {
             return 1.0
         }
 
-        // Pulse phase (tighter window than before)
+        // Pulse phase spans the whole back half so the spring has
+        // the full second-half duration to rise, peak, and settle
+        // back to 1.0 — slower feel per user's ask.
         let bounce = max(0, 1 - damping)
         let amplitude = bounce * 0.40
-        let localT = (t - holdEnd) / (pulseEnd - holdEnd)
+        let localT = (t - holdEnd) / (1 - holdEnd)
         let pulse = sin(localT * .pi)
         return 1.0 + amplitude * pulse
     }
