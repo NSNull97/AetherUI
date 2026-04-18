@@ -430,27 +430,47 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        // Base rise: cubic ease-out. Reaches 0.97+ by t=0.7, so by the
-        // time the bump kicks in the shape is essentially at target.
-        let inv = 1 - t
-        let easeOut = 1 - inv * inv * inv
+        // THREE phases for maximum "arrive THEN bounce" readability:
+        //
+        //   Rise  (0…0.55)  — cubic ease-out from 0 to 1.0. Fast start,
+        //                      slowing as it approaches the target size.
+        //   Hold  (0.55…0.65) — value is exactly 1.0. A short but real
+        //                      plateau: visually the shape arrives and
+        //                      stays motionless for ~25-40ms. THIS is
+        //                      what makes the user's eye register that
+        //                      the rise is OVER, so the subsequent pulse
+        //                      reads as a distinct spring event and not
+        //                      a continuation of the rise. Previous
+        //                      monotonic curves (bezier / ease-out +
+        //                      overlaid-bump) never really let the
+        //                      shape "land"; the user just saw smooth
+        //                      motion that never paused.
+        //   Pulse (0.65…1.0) — half-sine pulse around 1.0. Peak at
+        //                      t=0.825, zero at both ends of the
+        //                      window, so the value is continuous and
+        //                      ends exactly at 1.0 at t=1.
+        //
+        // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse (pure
+        // rise-then-hold). 0.50 → 20% peak overshoot.
+        let riseEnd: CGFloat = 0.55
+        let holdEnd: CGFloat = 0.65
 
-        // Bump window: last ~45% of the animation. Below the start
-        // the curve is exactly the ease-out — no hidden hump in the
-        // middle.
-        let bumpStart: CGFloat = 0.55
-        if t < bumpStart { return easeOut }
+        if t < riseEnd {
+            let p = t / riseEnd
+            let inv = 1 - p
+            return 1 - inv * inv * inv
+        }
 
-        // Half-sine from 0 → 1 (at window midpoint) → 0. Additive,
-        // scaled by `amplitude`. At damping = 0.5 the peak add is
-        // 0.125, layered on top of easeOut(t≈0.775)=0.989 to give a
-        // visible ~11% overshoot.
+        if t < holdEnd {
+            return 1.0
+        }
+
+        // Pulse phase
         let bounce = max(0, 1 - damping)
-        let amplitude = bounce * 0.25
-        let localT = (t - bumpStart) / (1 - bumpStart)
-        let bump = sin(localT * .pi)
-
-        return easeOut + amplitude * bump
+        let amplitude = bounce * 0.40
+        let localT = (t - holdEnd) / (1 - holdEnd)
+        let pulse = sin(localT * .pi)
+        return 1.0 + amplitude * pulse
     }
 
     private static func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
