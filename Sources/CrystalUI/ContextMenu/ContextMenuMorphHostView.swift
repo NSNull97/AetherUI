@@ -429,7 +429,7 @@ final class ContextMenuMorphHostView: UIView {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        let risePhaseEnd: CGFloat = 0.60
+        let risePhaseEnd: CGFloat = 0.80
 
         if t < risePhaseEnd {
             // Phase 1: cubic ease-out, zero velocity at end.
@@ -438,15 +438,19 @@ final class ContextMenuMorphHostView: UIView {
             return 1 - inv * inv * inv
         }
 
-        // Phase 2: centred wobble. Gaussian envelope × half-sine, both
-        // peaking at the midpoint of phase 2 (= t=0.80 of total
-        // duration) and both reaching zero at the phase boundaries,
-        // so value stays = 1.0 at t=0.60 and t=1.0. User feedback
-        // wanted the bounce visibly at the END, which means
-        // dedicating more of the duration to the rise (60%) and
-        // packing the wobble into the final 40%.
+        // Phase 2: wobble packed into the final 20% of the duration.
+        // Peak of the envelope × half-sine is at the midpoint of
+        // phase 2 → t = 0.90 of total duration (the user asked to
+        // shift the bounce "right up to 1"; literally peaking at 1.0
+        // would require the wobble to be at max AND back to zero
+        // simultaneously, so 0.90 is the practical ceiling). Both
+        // the envelope and the sine hit zero at the phase boundaries,
+        // keeping value = 1.0 at t=0.80 and t=1.0. Amplitude coef
+        // bumped 0.30 → 0.35 since the wobble window is now half as
+        // wide — a slightly taller peak keeps the bounce legible
+        // despite the shorter rise+fall time.
         let p = (t - risePhaseEnd) / (1 - risePhaseEnd)
-        let amplitude = max(0, 1 - damping) * 0.30
+        let amplitude = max(0, 1 - damping) * 0.35
         let envelope = exp(-pow((p - 0.5) / 0.3, 2))
         let osc = sin(p * .pi)
         return 1 + amplitude * envelope * osc
