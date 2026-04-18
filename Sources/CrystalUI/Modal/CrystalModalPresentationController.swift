@@ -48,6 +48,8 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         super.presentationTransitionWillBegin()
         guard let container = containerView else { return }
 
+        detent = modalController?.config.resolvedInitialDetent ?? .stage1
+
         dimView.backgroundColor = UIColor(white: 0.0, alpha: 1.0)
         dimView.alpha = 0.0
         dimView.frame = container.bounds
@@ -65,7 +67,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         }
 
         modalController?.applyCurrentDetent(detent)
-        modalController?.applyDetentProgress(0.0)
+        // Tint overlay reflects the current detent (stage2 → full tint).
+        modalController?.applyDetentProgress(detent == .stage2 ? 1.0 : 0.0)
+        dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * (detent == .stage2 ? 1.0 : 0.0)
     }
 
     override func dismissalTransitionWillBegin() {
@@ -98,7 +102,12 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
     func setDetent(_ newDetent: CrystalModalController.Detent, animated: Bool) {
         guard detent != newDetent else { return }
+        guard modalController?.config.detents.contains(newDetent) ?? true else { return }
         animateTo(detent: newDetent, container: containerView, initialVelocityY: 0.0, animated: animated)
+    }
+
+    private var allowedDetents: Set<CrystalModalController.Detent> {
+        modalController?.config.detents ?? [.stage1, .stage2]
     }
 
     // MARK: - Frame calc
@@ -180,31 +189,46 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let bounds = container.bounds
         let stage1 = frame(for: .stage1, in: bounds)
         let stage2 = frame(for: .stage2, in: bounds)
+        let allowed = allowedDetents
 
         var newFrame = dragStartFrame
         var progress: CGFloat
         switch dragStartDetent {
         case .stage1:
             if draggingUp {
-                // Grow toward stage2 with the bottom edge pinned — the sheet
-                // doesn't translate, only its top/sides expand outward.
-                let distance = transitionDistance(from: stage1, to: stage2)
-                let t = max(0.0, min(1.0, -translation.y / distance))
-                newFrame = expandFrame(from: stage1, to: stage2, t: t)
-                progress = t
+                if allowed.contains(.stage2) {
+                    // Grow toward stage2 with the bottom pinned.
+                    let distance = transitionDistance(from: stage1, to: stage2)
+                    let t = max(0.0, min(1.0, -translation.y / distance))
+                    newFrame = expandFrame(from: stage1, to: stage2, t: t)
+                    progress = t
+                } else {
+                    // Stage2 not allowed — resist with a rubberband so the
+                    // sheet doesn't go anywhere past its detent.
+                    let resistance = Self.rubberband(offset: -translation.y, dimension: 100.0)
+                    newFrame = stage1.offsetBy(dx: 0.0, dy: -resistance)
+                    progress = 0.0
+                }
             } else {
-                // Dismiss from the compact state while keeping its size.
+                // Dismiss-drag: translate downward, keep size.
                 newFrame = stage1.offsetBy(dx: 0.0, dy: max(0.0, translation.y))
                 progress = 0.0
             }
         case .stage2:
             if draggingDown {
-                let distance = transitionDistance(from: stage1, to: stage2)
-                let t = max(0.0, min(1.0, translation.y / distance))
-                newFrame = collapseFrame(from: stage2, to: stage1, t: t)
-                progress = 1.0 - t
+                if allowed.contains(.stage1) {
+                    let distance = transitionDistance(from: stage1, to: stage2)
+                    let t = max(0.0, min(1.0, translation.y / distance))
+                    newFrame = collapseFrame(from: stage2, to: stage1, t: t)
+                    progress = 1.0 - t
+                } else {
+                    // Stage1 not allowed — dismiss-drag straight from stage2:
+                    // translate the whole sheet down like a single-detent sheet.
+                    newFrame = stage2.offsetBy(dx: 0.0, dy: max(0.0, translation.y))
+                    progress = 1.0
+                }
             } else {
-                // Drag up from stage2 — no-op here, scroll should be handling.
+                // Drag up from stage2 — no-op.
                 newFrame = stage2
                 progress = 1.0
             }
@@ -215,15 +239,22 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * progress
     }
 
+    private static func rubberband(offset: CGFloat, dimension: CGFloat, coefficient: CGFloat = 0.55) -> CGFloat {
+        guard offset > 0, dimension > 0 else { return 0 }
+        return (1.0 - 1.0 / ((offset * coefficient / dimension) + 1.0)) * dimension
+    }
+
     private func finishDrag(translation: CGPoint, velocity: CGPoint, container: UIView) {
         let dismissVelocityThreshold: CGFloat = 800.0
         let expandVelocityThreshold: CGFloat = 400.0
         let expandProgressThreshold: CGFloat = 0.4
         let collapseProgressThreshold: CGFloat = 0.4
+        let dismissTranslationThreshold: CGFloat = 140.0
 
         let bounds = container.bounds
         let stage1 = frame(for: .stage1, in: bounds)
         let stage2 = frame(for: .stage2, in: bounds)
+        let allowed = allowedDetents
 
         switch dragStartDetent {
         case .stage1:
@@ -234,6 +265,10 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
                     animateTo(detent: .stage1, container: container, initialVelocityY: velocity.y)
                 }
             } else {
+                guard allowed.contains(.stage2) else {
+                    animateTo(detent: .stage1, container: container, initialVelocityY: velocity.y)
+                    return
+                }
                 let distance = transitionDistance(from: stage1, to: stage2)
                 let progress = max(0.0, min(1.0, -translation.y / distance))
                 if progress > expandProgressThreshold || velocity.y < -expandVelocityThreshold {
@@ -244,6 +279,17 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
             }
         case .stage2:
             if translation.y > 0 {
+                if !allowed.contains(.stage1) {
+                    // Single-detent stage2: downward drag is a dismiss
+                    // candidate. Dismiss on velocity OR on a significant
+                    // translation, otherwise snap back.
+                    if velocity.y > dismissVelocityThreshold || translation.y > dismissTranslationThreshold {
+                        animateDismiss()
+                    } else {
+                        animateTo(detent: .stage2, container: container, initialVelocityY: velocity.y)
+                    }
+                    return
+                }
                 let distance = transitionDistance(from: stage1, to: stage2)
                 let progress = max(0.0, min(1.0, translation.y / distance))
                 if progress > collapseProgressThreshold || velocity.y > expandVelocityThreshold {
@@ -400,6 +446,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     }
 
     private func nearestDetent(to frame: CGRect, in bounds: CGRect) -> CrystalModalController.Detent {
+        let allowed = allowedDetents
+        if allowed == [.stage1] { return .stage1 }
+        if allowed == [.stage2] { return .stage2 }
         let stage1 = self.frame(for: .stage1, in: bounds)
         let stage2 = self.frame(for: .stage2, in: bounds)
         let stage1Distance = abs(frame.minY - stage1.minY)

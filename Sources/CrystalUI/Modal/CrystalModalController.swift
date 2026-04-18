@@ -16,6 +16,14 @@ public final class CrystalModalController: UIViewController {
         public var topInsetStage2: CGFloat
         public var topCornerRadius: CGFloat
         public var dimAlphaStage2: CGFloat
+        /// Detents the sheet is allowed to rest at. When a single detent
+        /// is specified the sheet opens at that detent and drags toward
+        /// the other detent are blocked — only a strong downward drag can
+        /// dismiss the sheet. Must contain at least one detent.
+        public var detents: Set<Detent>
+        /// Detent the sheet opens at. Must be contained in `detents`.
+        /// Nil → pick the first allowed detent (stage1 preferred).
+        public var initialDetent: Detent?
 
         public init(
             sideInset: CGFloat = 8.0,
@@ -23,7 +31,9 @@ public final class CrystalModalController: UIViewController {
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
             topCornerRadius: CGFloat = 38.0,
-            dimAlphaStage2: CGFloat = 0.25
+            dimAlphaStage2: CGFloat = 0.25,
+            detents: Set<Detent> = [.stage1, .stage2],
+            initialDetent: Detent? = nil
         ) {
             self.sideInset = sideInset
             self.bottomInset = bottomInset
@@ -31,6 +41,17 @@ public final class CrystalModalController: UIViewController {
             self.topInsetStage2 = topInsetStage2
             self.topCornerRadius = topCornerRadius
             self.dimAlphaStage2 = dimAlphaStage2
+            self.detents = detents.isEmpty ? [.stage1, .stage2] : detents
+            self.initialDetent = initialDetent
+        }
+
+        /// Resolved opening detent — `initialDetent` if allowed,
+        /// otherwise stage1 (if allowed), otherwise stage2.
+        public var resolvedInitialDetent: Detent {
+            if let requested = initialDetent, detents.contains(requested) {
+                return requested
+            }
+            return detents.contains(.stage1) ? .stage1 : .stage2
         }
     }
 
