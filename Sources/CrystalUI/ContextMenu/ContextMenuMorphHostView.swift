@@ -397,70 +397,60 @@ final class ContextMenuMorphHostView: UIView {
 
     // MARK: - Easing helpers
 
-    /// Cubic-bezier timing curve where the overshoot peak is placed
-    /// in the LAST THIRD of the animation. One unified analytical
-    /// curve — value, first and second derivatives all continuous —
-    /// satisfying "единая, без разрывов", with a visible bounce at
-    /// the end per user feedback "спринг не в конце".
+    /// Cubic ease-out + half-sine spring bump. The bump is the key:
+    /// it's an ADDITIVE pulse that activates only in the last ~45% of
+    /// the animation, so the user sees the shape ARRIVE at the target
+    /// via the ease-out alone, THEN a visible kick-up-and-settle
+    /// happens at the end. Previous bezier-only tunings produced a
+    /// monotonic curve that read as "smooth with a slight hump in the
+    /// middle" — the bump needed to be a clearly separate event.
     ///
-    /// Control points:
-    ///   P1 = (0.25, 1.00)               (at/on the y=1 line)
-    ///   P2 = (0.60, 1 + 0.30·(1−damping))  (above y=1, late x)
+    /// Timeline (damping = 0.50, duration 0.25s):
+    ///   0.00  Y=0.00   (start)
+    ///   0.10  Y=0.27   (fast rise)
+    ///   0.30  Y=0.66
+    ///   0.55  Y=0.91   (bump window begins; curve ≈ ease-out value)
+    ///   0.70  Y=1.07   (ease-out near 1 + bump adding 8%)
+    ///   0.775 Y=1.11   (PEAK — bump at its sin(π/2)=1 maximum)
+    ///   0.85  Y=1.08
+    ///   0.95  Y=1.03
+    ///   1.00  Y=1.00   (clean end; bump returns to 0)
     ///
-    /// At the 0.50 damping the controller passes:
-    ///   P1 = (0.25, 1.00)
-    ///   P2 = (0.60, 1.15)
+    /// The pulse shape — sin(π·localT) — is 0 at both ends of its
+    /// window and peaks at its midpoint, so y(1) is exactly 1.00 and
+    /// y is value-continuous at t=0.55. Velocity has a small kink at
+    /// t=0.55 where the bump starts — but that kink is the POINT,
+    /// it's what makes the bump read as a distinct spring rather than
+    /// blending invisibly into the ease-out.
     ///
-    /// Resulting shape:
-    ///   - t=0.10 → Y≈0.28   (quick acceleration from rest)
-    ///   - t=0.35 → Y≈0.83   (approaching target)
-    ///   - t=0.55 → Y≈1.00   (shape arrives at menu rect CLEANLY)
-    ///   - t=0.70 → Y≈1.04
-    ///   - t=0.80 → Y≈1.05   (peak overshoot — the "bounce")
-    ///   - t=0.90 → Y≈1.04
-    ///   - t=1.00 → Y=1.00   (settled)
-    ///
-    /// The critical difference vs the previous tuning: P1's y is at 1.0
-    /// (not above), so the curve rises CLEANLY through y=1 before
-    /// beginning to overshoot — the peak therefore sits in the 2nd
-    /// half rather than mid-curve. The earlier (0.20, 1.20), (0.40,
-    /// 1.10) tuning had BOTH control points lifted, so the curve
-    /// peaked mid-way and slid down smoothly afterward, which read to
-    /// the user as "smooth end, spring in the middle".
-    ///
-    /// Inversion (finding `u` such that X(u) = t) is done with a short
-    /// Newton-Raphson loop — 6 iterations converges to 1e-5 precision,
-    /// which is well below a pixel at our animation scales.
-    ///
-    /// `damping`: 0 = bigger overshoot, 1 = no overshoot (straight
-    /// ease-through). 0.50 is the default controller value.
+    /// `damping`: 0 = big bump (amplitude 0.25 → ~18% peak), 1 = flat
+    /// ease-out with no bump. Controller passes 0.50 for the standard
+    /// "light spring" feel.
     private static func springProgress(_ t: CGFloat, damping: CGFloat) -> CGFloat {
         if t <= 0 { return 0 }
         if t >= 1 { return 1 }
 
-        let c1x: CGFloat = 0.25
-        let c1y: CGFloat = 1.00
-        let c2x: CGFloat = 0.60
-        // Overshoot magnitude scales with bounce amount = (1 - damping).
-        //   - damping = 0: c2y = 1.30 → 10% peak overshoot
-        //   - damping = 0.5: c2y = 1.15 → ~5% peak overshoot
-        //   - damping = 1: c2y = 1.00 → no overshoot, gentle ease-through
+        // Base rise: cubic ease-out. Reaches 0.97+ by t=0.7, so by the
+        // time the bump kicks in the shape is essentially at target.
+        let inv = 1 - t
+        let easeOut = 1 - inv * inv * inv
+
+        // Bump window: last ~45% of the animation. Below the start
+        // the curve is exactly the ease-out — no hidden hump in the
+        // middle.
+        let bumpStart: CGFloat = 0.55
+        if t < bumpStart { return easeOut }
+
+        // Half-sine from 0 → 1 (at window midpoint) → 0. Additive,
+        // scaled by `amplitude`. At damping = 0.5 the peak add is
+        // 0.125, layered on top of easeOut(t≈0.775)=0.989 to give a
+        // visible ~11% overshoot.
         let bounce = max(0, 1 - damping)
-        let c2y = 1 + bounce * 0.30
+        let amplitude = bounce * 0.25
+        let localT = (t - bumpStart) / (1 - bumpStart)
+        let bump = sin(localT * .pi)
 
-        // Newton-Raphson on X(u) = t → find u.
-        var u = t
-        for _ in 0..<6 {
-            let iu = 1 - u
-            let x = 3 * iu * iu * u * c1x + 3 * iu * u * u * c2x + u * u * u
-            let dx = 3 * iu * iu * c1x + 6 * iu * u * (c2x - c1x) + 3 * u * u * (1 - c2x)
-            if abs(dx) < 1e-6 { break }
-            let next = u - (x - t) / dx
-            u = max(0, min(1, next))
-        }
-
-        let iu = 1 - u
-        return 3 * iu * iu * u * c1y + 3 * iu * u * u * c2y + u * u * u
+        return easeOut + amplitude * bump
     }
 
     private static func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
