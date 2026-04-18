@@ -62,6 +62,17 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
 
         self.controllers = controllers
 
+        // If a transition is already in flight (e.g. an interactive pop
+        // gesture), the coordinator owns the frames of top/bottom views.
+        // Running updateControllerViews here would reset the top view's
+        // frame to (0,0,w,h) via transition.updateFrame, stomping on the
+        // gesture's in-progress frame. The follow-up containerLayoutUpdated
+        // call (from the same updateRootContainer site) already takes the
+        // transition-aware path and forwards layout per-controller.
+        if transitionCoordinator != nil {
+            return
+        }
+
         if let layout = validLayout {
             if animated, let previousTop = previousTopController, let newTop = newTopController, previousTop !== newTop {
                 let isPush = controllers.count >= previousControllers.count
@@ -229,6 +240,13 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             )
             self.transitionCoordinator = coordinator
             coordinator.updateProgress(0.0, transition: .immediate, completion: {})
+
+            // Dismiss the keyboard along with the outgoing view. Done *after*
+            // the coordinator is installed so the keyboard's synchronous
+            // layout cascade hits the transition-aware branch of
+            // containerLayoutUpdated rather than stomping the interactive
+            // frames.
+            currentController.view.endEditing(true)
 
         case .changed:
             transitionCoordinator?.updateProgress(progress, transition: .immediate, completion: {})
