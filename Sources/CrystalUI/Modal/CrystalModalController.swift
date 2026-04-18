@@ -8,10 +8,12 @@ public final class CrystalModalController: UIViewController {
 
     public struct Config: Equatable {
         public var sideInset: CGFloat
-        /// Inset from the screen bottom. Applied in both detents — the
-        /// sheet's bottom edge stays pinned at this distance from the
-        /// screen bottom regardless of detent.
-        public var bottomInset: CGFloat
+        /// Distance from the sheet's bottom edge to the screen bottom at
+        /// stage1. Default 8pt — the sheet floats above the home indicator.
+        public var bottomInsetStage1: CGFloat
+        /// Distance from the sheet's bottom edge to the screen bottom at
+        /// stage2. Default 0 — the sheet nestles into the device corners.
+        public var bottomInsetStage2: CGFloat
         public var topInsetStage1: CGFloat
         public var topInsetStage2: CGFloat
         public var topCornerRadius: CGFloat
@@ -27,7 +29,8 @@ public final class CrystalModalController: UIViewController {
 
         public init(
             sideInset: CGFloat = 8.0,
-            bottomInset: CGFloat = 8.0,
+            bottomInsetStage1: CGFloat = 8.0,
+            bottomInsetStage2: CGFloat = 0.0,
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
             topCornerRadius: CGFloat = 38.0,
@@ -36,7 +39,8 @@ public final class CrystalModalController: UIViewController {
             initialDetent: Detent? = nil
         ) {
             self.sideInset = sideInset
-            self.bottomInset = bottomInset
+            self.bottomInsetStage1 = bottomInsetStage1
+            self.bottomInsetStage2 = bottomInsetStage2
             self.topInsetStage1 = topInsetStage1
             self.topInsetStage2 = topInsetStage2
             self.topCornerRadius = topCornerRadius
@@ -144,8 +148,15 @@ public final class CrystalModalController: UIViewController {
         presentation.setDetent(detent, animated: animated)
     }
 
+    private var detentProgress: CGFloat = 0.0
+
     func applyDetentProgress(_ progress: CGFloat) {
-        tintOverlay.alpha = max(0.0, min(1.0, progress))
+        let clamped = max(0.0, min(1.0, progress))
+        tintOverlay.alpha = clamped
+        if abs(detentProgress - clamped) > 0.0001 {
+            detentProgress = clamped
+            updateMaskPath()
+        }
     }
 
     func applyCurrentDetent(_ detent: Detent) {
@@ -177,12 +188,14 @@ public final class CrystalModalController: UIViewController {
     private func updateMaskPath() {
         let bounds = view.bounds
         let topRadius = config.topCornerRadius
-        // Concentric bottom: subtract the distance from the sheet's bottom
-        // edge to the screen bottom (= bottomInset) so the sheet's bottom
-        // corners nest into the device chamfer when drawn — otherwise the
-        // same device radius at a higher Y looks visibly rounder than the
-        // actual device corner.
-        let bottomRadius = max(0.0, deviceCornerRadius() - config.bottomInset)
+        // Concentric bottom: subtract the sheet's distance from the screen
+        // bottom from the device radius so the sheet's bottom corner nests
+        // into the device chamfer. That distance interpolates between the
+        // two detents' bottom insets via detentProgress.
+        let deviceRadius = deviceCornerRadius()
+        let stage1Radius = max(0.0, deviceRadius - config.bottomInsetStage1)
+        let stage2Radius = max(0.0, deviceRadius - config.bottomInsetStage2)
+        let bottomRadius = stage1Radius + (stage2Radius - stage1Radius) * detentProgress
         let newPath = Self.roundedRectPath(
             in: bounds,
             topLeftRadius: topRadius,

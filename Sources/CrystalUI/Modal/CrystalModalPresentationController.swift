@@ -115,11 +115,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private func frame(for detent: CrystalModalController.Detent, in bounds: CGRect) -> CGRect {
         let cfg = modalController?.config ?? .init()
         let safeArea = containerView?.safeAreaInsets ?? presentingViewController.view.safeAreaInsets
-        // Bottom edge is pinned in both detents — the sheet never translates
-        // while switching between them, only its top/side insets change.
-        let bottom = bounds.height - cfg.bottomInset
         switch detent {
         case .stage1:
+            let bottom = bounds.height - cfg.bottomInsetStage1
             let configuredTop = safeArea.top + cfg.topInsetStage1
             let minimumHeight = bounds.height * 0.5
             let height = max(bottom - configuredTop, minimumHeight)
@@ -131,6 +129,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
                 height: max(0.0, height)
             )
         case .stage2:
+            let bottom = bounds.height - cfg.bottomInsetStage2
             let top = safeArea.top + cfg.topInsetStage2
             return CGRect(
                 x: 0.0,
@@ -486,7 +485,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let y = expanded.minY + (compact.minY - expanded.minY) * verticalT
         let x = expanded.minX + (compact.minX - expanded.minX) * horizontalT
         let width = expanded.width + (compact.width - expanded.width) * horizontalT
-        let bottom = expanded.maxY
+        // Bottom interpolates quadratically too, so the bottom inset
+        // appears late during collapse (matching the sides).
+        let bottom = expanded.maxY + (compact.maxY - expanded.maxY) * horizontalT
         return CGRect(
             x: x,
             y: y,
@@ -501,10 +502,9 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         let y = compact.minY + (expanded.minY - compact.minY) * verticalT
         let x = compact.minX + (expanded.minX - compact.minX) * horizontalT
         let width = compact.width + (expanded.width - compact.width) * horizontalT
-        // Bottom pinned at compact.maxY — the sheet grows upward/sideways
-        // but its bottom edge stays put. On release, animateTo settles the
-        // bottom to the target detent's position.
-        let bottom = compact.maxY
+        // Bottom interpolates quadratically toward the target's bottom
+        // (which usually sits lower — 0pt inset at stage2 vs stage1's).
+        let bottom = compact.maxY + (expanded.maxY - compact.maxY) * horizontalT
         return CGRect(
             x: x,
             y: y,
