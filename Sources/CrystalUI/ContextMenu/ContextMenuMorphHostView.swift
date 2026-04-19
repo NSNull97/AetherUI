@@ -152,11 +152,6 @@ final class ContextMenuMorphHostView: UIView {
     /// during animation. Reset on every `configure(metrics:)` call.
     private var xAnchor: CGFloat = 0.5
 
-    #if DEBUG
-    /// Tick-counter to stop flooding Xcode console.
-    static var debugTickCount: Int = 0
-    #endif
-
     /// Set the collapsed (source button) and expanded (menu) rects + corner
     /// radii. Once configured, the host's visual state at any `progress`
     /// value is well-defined. Safe to call repeatedly; the next
@@ -186,13 +181,6 @@ final class ContextMenuMorphHostView: UIView {
             xAnchor = 0.5
         }
 
-        #if DEBUG
-        // Temporary debug trace — verify on-device that the anchor
-        // detection produces the expected value. Remove after the
-        // jump-left issue is resolved.
-        print("[MorphHost.configure] source=\(metrics.collapsedFrame) menu=\(metrics.expandedFrame) delta=\(delta) xAnchor=\(xAnchor)")
-        #endif
-
         // The anchor-point change AND the subsequent
         // updateForProgress (which recomputes layer.position for the
         // new anchor) must happen atomically inside one disabled-
@@ -201,10 +189,6 @@ final class ContextMenuMorphHostView: UIView {
         // results from the anchor-point shift, and the view
         // momentarily slides from its old rendered location to the
         // new one.
-        #if DEBUG
-        Self.debugTickCount = 0
-        #endif
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.anchorPoint = CGPoint(x: xAnchor, y: 0)
@@ -443,17 +427,6 @@ final class ContextMenuMorphHostView: UIView {
         self.bounds = CGRect(origin: .zero, size: bulgedFrame.size)
         self.layer.position = CGPoint(x: anchorPositionX, y: bulgedFrame.minY)
         self.transform = CGAffineTransform(scaleX: springScale, y: springScale)
-
-        #if DEBUG
-        // Per-progress trace. Emits only for the first 5 calls per
-        // animation so the console doesn't get flooded — we want to
-        // see if bulgedFrame / position stay anchored to the shared
-        // edge across the early ticks.
-        if Self.debugTickCount < 5 {
-            Self.debugTickCount += 1
-            print("[MorphHost.tick] t=\(String(format: "%.3f", surfaceProgress)) xAnchor=\(xAnchor) bulged=\(bulgedFrame) pos=\(self.layer.position) bounds=\(self.bounds)")
-        }
-        #endif
         glass.frame = bounds
         glass.layer.cornerRadius = cornerRadius
 
@@ -624,8 +597,14 @@ final class ContextMenuMorphHostView: UIView {
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse. 0.50 →
         // 20% peak overshoot.
-        let riseEnd: CGFloat = 0.34
-        let holdEnd: CGFloat = 0.42
+        // riseEnd 0.34 → 0.55: rise phase now ~143ms at 0.26s
+        // duration (was 88ms). Shorter rise caused the UIVisualEffectView
+        // + shapeMaskLayer + SDF filter render pipeline to drop 2-3
+        // frames during the fast geometry change, making the shape look
+        // like it "jumped" to the menu position instead of morphing.
+        // Longer rise gives the GPU room to render intermediate frames.
+        let riseEnd: CGFloat = 0.55
+        let holdEnd: CGFloat = 0.62
 
         if t < riseEnd {
             // ease-in-out quadratic: slow start, accelerating through
