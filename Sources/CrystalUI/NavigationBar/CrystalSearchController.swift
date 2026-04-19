@@ -363,7 +363,7 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
 
         if let edge = bottomEdgeEffect {
             let edgeH: CGFloat = 48.0
-            let edgeFrame = CGRect(x: 0, y: y - edgeH, width: view.bounds.width, height: edgeH + h + (view.bounds.height - y - h))
+            let edgeFrame = CGRect(x: 0, y: y - edgeH + 72, width: view.bounds.width, height: 72)
             edge.frame = edgeFrame
             edge.update(content: .systemBackground, blur: true, alpha: 0.65,
                         rect: CGRect(origin: .zero, size: edgeFrame.size),

@@ -487,7 +487,7 @@ final class ContextMenuMorphHostView: UIView {
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse. 0.50 →
         // 20% peak overshoot.
-        let riseEnd: CGFloat = 0.34
+        let riseEnd: CGFloat = 0
         let holdEnd: CGFloat = 0.42
 
         if t < riseEnd {
@@ -504,7 +504,7 @@ final class ContextMenuMorphHostView: UIView {
         // the full second-half duration to rise, peak, and settle
         // back to 1.0 — slower feel per user's ask.
         let bounce = max(0, 1 - damping)
-        let amplitude = bounce * 0.40
+        let amplitude = bounce * 0.2
         let localT = (t - holdEnd) / (1 - holdEnd)
         let pulse = sin(localT * .pi)
         return 1.0 + amplitude * pulse

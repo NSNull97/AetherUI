@@ -37,8 +37,8 @@ public final class ContextMenuController {
     // overshoot near the top-half of the curve — a subtle bounce
     // that rises with the curve rather than a separate "spring at
     // end" phase. Per user: "легкий спринг" + "единая, без разрывов".
-    private static let morphDamping: CGFloat = 0.50
-    private static let dismissDamping: CGFloat = 0.78       // slightly less elastic than open
+    private static let morphDamping: CGFloat = 0.85
+    private static let dismissDamping: CGFloat = 1       // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
     private static let menuCornerRadius: CGFloat = 27.0

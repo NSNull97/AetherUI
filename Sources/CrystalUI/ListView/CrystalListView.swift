@@ -460,6 +460,7 @@ open class CrystalListView: UIView, UIScrollViewDelegate {
         }
 
         // Add nodes for newly visible items
+        var didUpdateHeights = false
         for idx in visibleRange {
             if itemNodes.contains(where: { $0.index == idx }) { continue }
 
@@ -469,15 +470,27 @@ open class CrystalListView: UIView, UIScrollViewDelegate {
             let (node, layout) = item.createNode(params: params, previousItem: prevItem, nextItem: nextItem)
             node.applyLayout(layout)
             node.index = idx
-            itemHeights[idx] = layout.totalHeight
+            if abs(itemHeights[idx] - layout.totalHeight) > 0.5 {
+                itemHeights[idx] = layout.totalHeight
+                didUpdateHeights = true
+            }
             itemNodes.append(node)
             scrollView.addSubview(node)
-
-            let y = itemOffsets[idx]
-            node.frame = CGRect(x: 0, y: y, width: bounds.width, height: layout.totalHeight)
         }
 
         itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
+        
+        if didUpdateHeights {
+            rebuildOffsets()
+            positionNodes()
+            updateContentSize()
+        } else {
+            for node in itemNodes {
+                guard let index = node.index, index < itemOffsets.count else { continue }
+                let y = itemOffsets[index]
+                node.frame = CGRect(x: 0, y: y, width: bounds.width, height: itemHeights[index])
+            }
+        }
 
         // Update displayed range
         let displayedRange = computeDisplayedRange()
