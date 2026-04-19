@@ -67,13 +67,15 @@ final class ContextMenuMorphHostView: UIView {
         set {
             cancelDisplayLink()
             progressValue = newValue
-            updateForProgress(newValue)
+            phaseValue = max(0, min(1, newValue))
+            updateForProgress(surfaceProgress: newValue, phaseProgress: phaseValue)
         }
     }
 
     // MARK: - Private state
 
     private var progressValue: CGFloat = 0
+    private var phaseValue: CGFloat = 0
 
     private var displayLink: CADisplayLink?
     private var animStart: CFTimeInterval = 0
@@ -83,6 +85,7 @@ final class ContextMenuMorphHostView: UIView {
     private var animDamping: CGFloat = 0.78
     private var animStep: ((CGFloat) -> Void)?
     private var animCompletion: ((Bool) -> Void)?
+    private let shapeMaskLayer = CAShapeLayer()
 
     // Stored shadow constants (scaled per-progress).
     private static let collapsedShadowRadius: CGFloat = 12.0
@@ -118,10 +121,12 @@ final class ContextMenuMorphHostView: UIView {
         layer.shadowRadius = Self.collapsedShadowRadius
         layer.shadowOpacity = Self.collapsedShadowOpacity
 
-        glass.clipsToBounds = true
+        glass.clipsToBounds = false
         if #available(iOS 13.0, *) {
             glass.layer.cornerCurve = .continuous
         }
+        shapeMaskLayer.fillColor = UIColor.black.cgColor
+        glass.layer.mask = shapeMaskLayer
         addSubview(glass)
 
         sourceContent.backgroundColor = .clear
@@ -185,7 +190,7 @@ final class ContextMenuMorphHostView: UIView {
         // anchored.
         sourceContent.frame = CGRect(origin: .zero, size: metrics.collapsedFrame.size)
         destinationContent.frame = CGRect(origin: .zero, size: metrics.expandedFrame.size)
-        updateForProgress(progressValue)
+        updateForProgress(surfaceProgress: progressValue, phaseProgress: phaseValue)
     }
 
     // MARK: - Animation API
@@ -224,7 +229,8 @@ final class ContextMenuMorphHostView: UIView {
 
         if duration <= 0 {
             progressValue = target
-            updateForProgress(target)
+            phaseValue = max(0, min(1, target))
+            updateForProgress(surfaceProgress: target, phaseProgress: phaseValue)
             step?(target)
             let c = animCompletion
             animCompletion = nil
@@ -255,8 +261,12 @@ final class ContextMenuMorphHostView: UIView {
         let tClamped = max(0, min(1, tRaw))
         let eased = Self.springProgress(tClamped, damping: animDamping)
         let value = animFrom + (animTo - animFrom) * eased
+        let phaseFrom = max(0, min(1, animFrom))
+        let phaseTo = max(0, min(1, animTo))
+        let phase = phaseFrom + (phaseTo - phaseFrom) * tClamped
         progressValue = value
-        updateForProgress(value)
+        phaseValue = phase
+        updateForProgress(surfaceProgress: value, phaseProgress: phase)
         animStep?(value)
         if tRaw >= 1 {
             link.invalidate()
@@ -274,7 +284,7 @@ final class ContextMenuMorphHostView: UIView {
     /// source fade, destination fade + slide, blob bulge) is computed as
     /// a pure function of `t ∈ [0, 1]`. No separate timers, no concurrent
     /// `UIView.animate` calls fighting for the same property.
-    private func updateForProgress(_ t: CGFloat) {
+    private func updateForProgress(surfaceProgress: CGFloat, phaseProgress: CGFloat) {
         guard let metrics else { return }
 
         // Frame lerp uses CLAMPED progress. An earlier revision passed
@@ -293,7 +303,8 @@ final class ContextMenuMorphHostView: UIView {
         // spring wobble. Combined with the top-anchor point (set in
         // init), the bounce expands downward + outward from the source
         // top edge, matching the menu's natural unfold direction.
-        let gt = max(0, min(1, t))
+        let gt = max(0, min(1, surfaceProgress))
+        let phaseT = max(0, min(1, phaseProgress))
         let lerpFrame = Self.lerpRect(metrics.collapsedFrame, metrics.expandedFrame, gt)
         let baseCorner = Self.lerp(metrics.collapsedCornerRadius, metrics.expandedCornerRadius, gt)
 
@@ -305,7 +316,7 @@ final class ContextMenuMorphHostView: UIView {
         // the destination fade-in (≥0.34) so there's a pure-blob slice
         // from ~0.20–0.30 with NO readable content on either side —
         // that's the frame the user sees as "a glass droplet".
-        let blob = Self.sinWindow(t, 0.06, 0.46)
+        let blob = Self.sinWindow(phaseT, 0.10, 0.58)
 
         // Blob pulse: small symmetric ADDITIVE delta on top of the
         // lerped size, centered on the lerped frame. Kept small and
@@ -314,8 +325,8 @@ final class ContextMenuMorphHostView: UIView {
         // droplet-extension attempt read as "weird" rather than
         // liquid — plain uniform puff is less showy but visually
         // cleaner.
-        let widthBulge = blob * min(14, lerpFrame.width * 0.08)
-        let heightBulge = blob * min(14, lerpFrame.height * 0.08)
+        let widthBulge = blob * min(18, lerpFrame.width * 0.10)
+        let heightBulge = blob * min(22, lerpFrame.height * 0.12)
         let bulgedSize = CGSize(
             width: lerpFrame.width + widthBulge,
             height: lerpFrame.height + heightBulge
@@ -353,18 +364,18 @@ final class ContextMenuMorphHostView: UIView {
         // the shape is done moving. Per the rec this timing is the single
         // most important choreography detail — it's what turns "popover
         // appears over button" into "button dissolves into menu".
-        let sourceFadeOut = Self.smoothstep(0.02, 0.14, t)
+        let sourceFadeOut = Self.smoothstep(0.03, 0.20, phaseT)
         let sourceAlpha = max(0, 1 - sourceFadeOut)
-        let sourceScale = 0.96 + 0.04 * (1 - sourceFadeOut)
+        let sourceScale = 0.95 + 0.05 * (1 - sourceFadeOut)
 
         // Destination content (menu rows): late fade-in on 0.38…0.54, with
         // an 8pt translateY slide. The gap between source-out (≤0.14) and
         // destination-in (≥0.38) is a full ~0.24 slice where ONLY the
         // blob is visible — no button label, no menu rows. That's the
         // "pure glass droplet" phase the user asked for.
-        let destFadeIn = Self.smoothstep(0.38, 0.54, t)
+        let destFadeIn = Self.smoothstep(0.48, 0.74, phaseT)
         let destAlpha = destFadeIn
-        let destTranslateY = (1 - destFadeIn) * 8
+        let destTranslateY = (1 - destFadeIn) * 10
 
         // Spring overshoot as an isotropic scale transform around the
         // top-anchor. `t` can exceed 1 (open overshoot) or go below 0
@@ -374,10 +385,10 @@ final class ContextMenuMorphHostView: UIView {
         // view's top edge (anchorPoint set in init), so the bounce
         // reads as a true spring wobble instead of a one-axis squish.
         let springExcess: CGFloat
-        if t > 1 {
-            springExcess = t - 1
-        } else if t < 0 {
-            springExcess = t
+        if surfaceProgress > 1 {
+            springExcess = surfaceProgress - 1
+        } else if surfaceProgress < 0 {
+            springExcess = surfaceProgress
         } else {
             springExcess = 0
         }
@@ -407,9 +418,18 @@ final class ContextMenuMorphHostView: UIView {
         glass.frame = bounds
         glass.layer.cornerRadius = cornerRadius
 
+        let shapePath = Self.makeMorphPath(
+            in: bounds,
+            cornerRadius: cornerRadius,
+            blob: blob,
+            xAnchor: xAnchor
+        )
+        shapeMaskLayer.frame = bounds
+        shapeMaskLayer.path = shapePath
+
         // Explicit shadowPath derived from the rounded rect stays in
         // sync with the visible silhouette each tick.
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: cornerRadius).cgPath
+        layer.shadowPath = shapePath
         layer.shadowRadius = shadowRadius
         layer.shadowOpacity = shadowOpacity
 
@@ -423,6 +443,84 @@ final class ContextMenuMorphHostView: UIView {
     }
 
     // MARK: - Blob shape builders
+
+    /// Rounded rect at rest; during the blob window the top edge pinches
+    /// toward the source anchor and the lower half swells into a drop. This
+    /// keeps the shared edge visually attached to the source button while
+    /// still resolving to a clean rounded menu container at the endpoints.
+    private static func makeMorphPath(
+        in rect: CGRect,
+        cornerRadius: CGFloat,
+        blob: CGFloat,
+        xAnchor: CGFloat
+    ) -> CGPath {
+        guard rect.width > 0, rect.height > 0 else {
+            return UIBezierPath(rect: rect).cgPath
+        }
+        guard blob > 0.001 else {
+            return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).cgPath
+        }
+
+        let width = rect.width
+        let height = rect.height
+        let pinch = min(width * 0.34, 44.0) * blob
+        let leftPinch = pinch * xAnchor
+        let rightPinch = pinch * (1.0 - xAnchor)
+        let topLeftX = rect.minX + leftPinch
+        let topRightX = rect.maxX - rightPinch
+        let topRadius = min(cornerRadius * (1.0 - blob * 0.34), (topRightX - topLeftX) * 0.5)
+        let bottomRadius = min(cornerRadius * (1.0 + blob * 0.22), width * 0.5 - 1.0)
+        let neckY = rect.minY + topRadius + height * 0.03 * blob
+        let bodyBottomY = rect.maxY - max(1.0, cornerRadius * 0.14 * blob)
+        let centerShift = (xAnchor - 0.5) * pinch * 0.46
+
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: topLeftX + topRadius, y: rect.minY))
+        path.addLine(to: CGPoint(x: topRightX - topRadius, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: topRightX, y: neckY),
+            controlPoint: CGPoint(x: topRightX, y: rect.minY)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - bottomRadius, y: bodyBottomY),
+            controlPoint1: CGPoint(
+                x: min(rect.maxX, topRightX + rightPinch * 0.12),
+                y: rect.minY + max(14.0, height * 0.22)
+            ),
+            controlPoint2: CGPoint(
+                x: rect.maxX + width * 0.02 * blob,
+                y: rect.minY + height * 0.64
+            )
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.minX + bottomRadius, y: bodyBottomY),
+            controlPoint1: CGPoint(
+                x: rect.minX + width * 0.82 + centerShift,
+                y: rect.maxY + height * 0.04 * blob
+            ),
+            controlPoint2: CGPoint(
+                x: rect.minX + width * 0.18 + centerShift,
+                y: rect.maxY + height * 0.04 * blob
+            )
+        )
+        path.addCurve(
+            to: CGPoint(x: topLeftX, y: neckY),
+            controlPoint1: CGPoint(
+                x: rect.minX - width * 0.02 * blob,
+                y: rect.minY + height * 0.64
+            ),
+            controlPoint2: CGPoint(
+                x: max(rect.minX, topLeftX - leftPinch * 0.12),
+                y: rect.minY + max(14.0, height * 0.22)
+            )
+        )
+        path.addQuadCurve(
+            to: CGPoint(x: topLeftX + topRadius, y: rect.minY),
+            controlPoint: CGPoint(x: topLeftX, y: rect.minY)
+        )
+        path.close()
+        return path.cgPath
+    }
 
     /// Sinusoidal bump: `0` at `t ≤ a` and `t ≥ b`, peak `1` at the mid-
     /// point of `[a, b]`. Used to drive the blob deformation — the shape
@@ -487,7 +585,7 @@ final class ContextMenuMorphHostView: UIView {
         //
         // `damping`: 0 → big pulse (amp 0.40), 1 → no pulse. 0.50 →
         // 20% peak overshoot.
-        let riseEnd: CGFloat = 0
+        let riseEnd: CGFloat = 0.34
         let holdEnd: CGFloat = 0.42
 
         if t < riseEnd {

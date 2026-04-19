@@ -30,7 +30,7 @@ public final class ContextMenuController {
     //   hold  ~ 21ms   (0.34 → 0.42)
     //   pulse ~ 151ms  (0.42 → 1.0, peak at ~192ms)
     private static let morphDuration: TimeInterval = 0.26
-    private static let dismissDuration: TimeInterval = 0.26
+    private static let dismissDuration: TimeInterval = 0.22
     // `damping` feeds the cubic-bezier timing curve in
     // `ContextMenuMorphHostView.springProgress`. 0 = big overshoot,
     // 1 = zero overshoot (straight ease-out). 0.50 gives a light
@@ -38,7 +38,7 @@ public final class ContextMenuController {
     // that rises with the curve rather than a separate "spring at
     // end" phase. Per user: "легкий спринг" + "единая, без разрывов".
     private static let morphDamping: CGFloat = 0.85
-    private static let dismissDamping: CGFloat = 1       // slightly less elastic than open
+    private static let dismissDamping: CGFloat = 0.94    // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
     private static let menuCornerRadius: CGFloat = 27.0
@@ -91,6 +91,13 @@ public final class ContextMenuController {
     /// For `.preview` style: left `nil`; `sdfHost` is used as the outer
     /// wrapper instead.
     private var morphHost: ContextMenuMorphHostView?
+    /// iOS 26+ lens-based morph host. Unlike `morphHost`, this uses the
+    /// dedicated lens transition pipeline (keyframed size/position/corner
+    /// radius + SDF displacement) so the intermediate "drop" actually reads
+    /// as a refracting glass object instead of a rounded-rect expansion.
+    private var lensMenuContainer: LensTransitionContainer?
+    private var sourceLensEffectView: LensEffectView?
+    private var menuContentWrapper: UIView?
     /// For `.preview` style only: the outer wrapper holding the (static-
     /// size) glass menu. Left `nil` for `.morph` — morphHost plays that role.
     private var sdfHost: UIView?
@@ -100,19 +107,25 @@ public final class ContextMenuController {
     private var actionsView: ContextMenuActionsView?
     private var tapRecognizer: UITapGestureRecognizer?
     /// The view that plays the role of "the glass surface hit-test target"
-    /// for submenu + stretch purposes. For `.morph` this is `morphHost`;
+    /// for submenu + stretch purposes. For `.morph` this is either the lens
+    /// container on iOS 26+ or `morphHost` on older systems;
     /// for `.preview` it's `sdfHost`. Collapsed into a single property so
     /// downstream wiring code doesn't have to branch on presentation style.
-    private var surfaceView: UIView? { morphHost ?? sdfHost }
+    private var surfaceView: UIView? { lensMenuContainer ?? morphHost ?? sdfHost }
+    /// Some overlays must participate in the same hit-test space as the menu
+    /// rows. `LensTransitionContainer` forwards hit-testing directly into its
+    /// `contentsView`, so auxiliary hit-targets for inline submenus need to
+    /// be installed there rather than on the outer wrapper.
+    private var surfaceOverlayView: UIView? { lensMenuContainer?.contentsView ?? surfaceView }
     /// Inline submenu overlay (Yandex Music style). When non-nil, the parent
     /// `actionsView` is dimmed + disabled and `submenuCard` is overlaid on
     /// the parent menu, anchored to the source row's Y position. Tap on the
     /// card's header chevron OR on the dimmed parent collapses it.
     private var submenuCard: UIVisualEffectView?
     private var submenuActions: ContextMenuActionsView?
-    /// Transparent hit-target placed inside `sdfHost` while a submenu is
-    /// open: catches taps that miss the submenu card and collapses instead
-    /// of dismissing the entire menu.
+    /// Transparent hit-target placed inside the active menu surface while a
+    /// submenu is open: catches taps that miss the submenu card and collapses
+    /// instead of dismissing the entire menu.
     private var submenuCollapseHitView: UIView?
 
     /// Lifted snapshot of the source view, only created in `.preview` style.
@@ -218,7 +231,7 @@ public final class ContextMenuController {
         let handle = ContextMenuDismissHandle(dismiss: { [weak self] animated in self?.dismiss(animated: animated) })
         self.dismissHandle = handle
         if let surface = surfaceView {
-            wireActionsView(actionsView, handle: handle, sdfHost: surface)
+            wireActionsView(actionsView, handle: handle, surfaceView: surface)
         }
 
         // Haptic.
@@ -270,6 +283,19 @@ public final class ContextMenuController {
         sourceCornerRadius: CGFloat,
         menuFrame: CGRect
     ) {
+        if #available(iOS 26.0, *) {
+            setupLensMorphStyle(
+                host: host,
+                source: source,
+                snapshot: snapshot,
+                actionsView: actionsView,
+                sourceRectInHost: sourceRectInHost,
+                sourceCornerRadius: sourceCornerRadius,
+                menuFrame: menuFrame
+            )
+            return
+        }
+
         let morphHost = ContextMenuMorphHostView(effect: effect)
         morphHost.frame = sourceRectInHost
         host.addSubview(morphHost)
@@ -307,6 +333,56 @@ public final class ContextMenuController {
             filter.install(on: morphHost.layer, size: sourceRectInHost.size, cornerRadius: sourceCornerRadius)
             self.sdfFilter = filter
         }
+    }
+
+    /// iOS 26+ path: a proper lens-transition presentation instead of the
+    /// ad-hoc rect/corner morph. `LensTransitionContainer` already bakes the
+    /// liquid blob keyframes and drives the SDF displacement filter, so the
+    /// intermediate stage reads as a refracting droplet rather than a
+    /// rounded-rect simply getting bigger.
+    @available(iOS 26.0, *)
+    private func setupLensMorphStyle(
+        host: UIView,
+        source: UIView,
+        snapshot: UIView,
+        actionsView: ContextMenuActionsView,
+        sourceRectInHost: CGRect,
+        sourceCornerRadius: CGFloat,
+        menuFrame: CGRect
+    ) {
+        let isDark = source.traitCollection.userInterfaceStyle == .dark
+
+        let sourceEffectView = LensEffectView(contentView: snapshot)
+        sourceEffectView.updateAppearance(isDark: isDark)
+        snapshot.frame = CGRect(origin: .zero, size: sourceRectInHost.size)
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+        let lensEffectView = LensEffectView(contentView: nil)
+        lensEffectView.updateAppearance(isDark: isDark)
+
+        let lensContainer = LensTransitionContainer(effectView: lensEffectView)
+        lensContainer.frame = menuFrame
+        host.addSubview(lensContainer)
+        lensContainer.update(
+            size: menuFrame.size,
+            cornerRadius: ContextMenuActionsView.cornerRadius,
+            isDark: isDark,
+            transition: .immediate
+        )
+
+        let contentWrapper = UIView(frame: lensContainer.bounds)
+        contentWrapper.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentWrapper.alpha = 0.0
+        contentWrapper.transform = CGAffineTransform(translationX: 0, y: 10)
+        lensContainer.contentsView.addSubview(contentWrapper)
+
+        actionsView.frame = contentWrapper.bounds
+        actionsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        contentWrapper.addSubview(actionsView)
+
+        self.lensMenuContainer = lensContainer
+        self.sourceLensEffectView = sourceEffectView
+        self.menuContentWrapper = contentWrapper
     }
 
     /// Wires up the `.preview` path: static glass menu + a lifted snapshot
@@ -367,6 +443,8 @@ public final class ContextMenuController {
         let host = hostView
         let dim = dimView
         let morphHost = self.morphHost
+        let lensMenuContainer = self.lensMenuContainer
+        let sourceLensEffectView = self.sourceLensEffectView
         let sdfHost = self.sdfHost
         let container = menuContainer
         let snapshot = snapshotView
@@ -390,6 +468,8 @@ public final class ContextMenuController {
             }
             dim?.removeFromSuperview()
             morphHost?.removeFromSuperview()
+            lensMenuContainer?.removeFromSuperview()
+            sourceLensEffectView?.removeFromSuperview()
             sdfHost?.removeFromSuperview()
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
@@ -399,6 +479,9 @@ public final class ContextMenuController {
             self?.hostView = nil
             self?.dimView = nil
             self?.morphHost = nil
+            self?.lensMenuContainer = nil
+            self?.sourceLensEffectView = nil
+            self?.menuContentWrapper = nil
             self?.sdfHost = nil
             self?.sdfFilter = nil
             self?.menuContainer = nil
@@ -444,6 +527,16 @@ public final class ContextMenuController {
         dim: UIView?,
         cleanup: @escaping () -> Void
     ) {
+        if #available(iOS 26.0, *), let lensMenuContainer, let sourceLensEffectView {
+            animateOutLensMorph(
+                lensMenuContainer: lensMenuContainer,
+                sourceLensEffectView: sourceLensEffectView,
+                dim: dim,
+                cleanup: cleanup
+            )
+            return
+        }
+
         guard let morphHost else { cleanup(); return }
 
         // Reset any active stretch transform instantly so the reverse
@@ -458,7 +551,7 @@ public final class ContextMenuController {
         morphHost.animateProgress(
             to: 0,
             duration: ContextMenuController.dismissDuration,
-            damping: ContextMenuController.morphDamping,  // symmetric with open
+            damping: ContextMenuController.dismissDamping,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
                 if #available(iOS 26.0, *), let sdfFilter = filter as? LensSDFFilter {
@@ -480,6 +573,35 @@ public final class ContextMenuController {
                 duration: ContextMenuController.dismissDuration
             )
             filter.animateBlur(duration: ContextMenuController.dismissDuration)
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func animateOutLensMorph(
+        lensMenuContainer: LensTransitionContainer,
+        sourceLensEffectView: LensEffectView,
+        dim: UIView?,
+        cleanup: @escaping () -> Void
+    ) {
+        menuContentWrapper?.layer.removeAllAnimations()
+        menuContentWrapper?.transform = .identity
+        UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseIn, .beginFromCurrentState], animations: {
+            self.menuContentWrapper?.alpha = 0.0
+            dim?.alpha = 0.0
+        })
+
+        lensMenuContainer.transform = .identity
+        lensMenuContainer.animateOut(
+            fromRect: lensMenuContainer.bounds,
+            toRect: sourceRectInHost.offsetBy(dx: -menuFrameInHost.minX, dy: -menuFrameInHost.minY),
+            fromCornerRadius: ContextMenuActionsView.cornerRadius,
+            toCornerRadius: sourceCornerRadius,
+            isDark: lensMenuContainer.traitCollection.userInterfaceStyle == .dark,
+            sourceEffectView: sourceLensEffectView
+        )
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.52) {
+            cleanup()
         }
     }
 
@@ -532,13 +654,21 @@ public final class ContextMenuController {
     /// radius interpolation — is owned by the host's `updateForProgress`
     /// and driven off a single display-link timeline.
     private func animateInMorph(sourceMinSide: CGFloat) {
+        if #available(iOS 26.0, *), let lensMenuContainer, let sourceLensEffectView {
+            animateInLensMorph(
+                lensMenuContainer: lensMenuContainer,
+                sourceLensEffectView: sourceLensEffectView
+            )
+            return
+        }
+
         guard let morphHost else { return }
 
         morphHost.animateProgress(
             to: 1,
             duration: ContextMenuController.morphDuration,
-            // Same spring on open and close — one light wobble,
-            // peak overshoot ~7% at t≈0.5, settled by t≈0.85.
+            // Opening keeps a light overshoot so the surface feels elastic
+            // as it resolves from the blob into the final menu container.
             damping: ContextMenuController.morphDamping,
             step: { [weak self] _ in
                 guard let self, let filter = self.sdfFilter else { return }
@@ -563,6 +693,34 @@ public final class ContextMenuController {
             )
             filter.animateBlur(duration: ContextMenuController.morphDuration)
         }
+    }
+
+    @available(iOS 26.0, *)
+    private func animateInLensMorph(
+        lensMenuContainer: LensTransitionContainer,
+        sourceLensEffectView: LensEffectView
+    ) {
+        lensMenuContainer.animateIn(
+            fromRect: sourceRectInHost.offsetBy(dx: -menuFrameInHost.minX, dy: -menuFrameInHost.minY),
+            toRect: lensMenuContainer.bounds,
+            fromCornerRadius: sourceCornerRadius,
+            toCornerRadius: ContextMenuActionsView.cornerRadius,
+            isDark: lensMenuContainer.traitCollection.userInterfaceStyle == .dark,
+            sourceEffectView: sourceLensEffectView
+        )
+
+        menuContentWrapper?.alpha = 0.0
+        menuContentWrapper?.transform = CGAffineTransform(translationX: 0, y: 10)
+        UIView.animate(
+            withDuration: 0.20,
+            delay: 0.30,
+            options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
+            animations: {
+                self.menuContentWrapper?.alpha = 1.0
+                self.menuContentWrapper?.transform = .identity
+            },
+            completion: nil
+        )
     }
 
     /// Lifted preview + below-source menu spring-in (no morph).
@@ -702,7 +860,7 @@ public final class ContextMenuController {
     private func wireActionsView(
         _ view: ContextMenuActionsView,
         handle: ContextMenuDismissHandle,
-        sdfHost: UIView,
+        surfaceView: UIView,
         isSubmenu: Bool = false
     ) {
         view.onActionSelected = { [weak self] actionItem in
@@ -720,16 +878,16 @@ public final class ContextMenuController {
             // for submenu cards.
             self?.collapseInlineSubmenu()
         }
-        view.onStretchUpdate = { [weak self, weak sdfHost, weak view] point in
-            guard let self, let sdfHost, let view else { return }
+        view.onStretchUpdate = { [weak self, weak surfaceView, weak view] point in
+            guard let self, let surfaceView, let view else { return }
             // Stretch only the parent host. Submenu cards don't carry the
             // SDF lens — they're a lightweight popover.
             if isSubmenu { return }
-            self.applyStretch(toContainer: sdfHost, touchInActions: point, actionsBounds: view.bounds, animated: false)
+            self.applyStretch(toContainer: surfaceView, touchInActions: point, actionsBounds: view.bounds, animated: false)
         }
-        view.onStretchRelease = { [weak self, weak sdfHost] in
-            guard let self, let sdfHost, !isSubmenu else { return }
-            self.releaseStretch(onContainer: sdfHost)
+        view.onStretchRelease = { [weak self, weak surfaceView] in
+            guard let self, let surfaceView, !isSubmenu else { return }
+            self.releaseStretch(onContainer: surfaceView)
         }
     }
 
@@ -749,8 +907,8 @@ public final class ContextMenuController {
         guard
             let submenu = item.submenu,
             let host = self.hostView,
-            let sdfHost = self.sdfHost,
-            let menuContainer = self.menuContainer,
+            let surfaceView = self.surfaceView,
+            let surfaceOverlayView = self.surfaceOverlayView,
             let parentActions = self.actionsView,
             let handle = self.dismissHandle
         else { return }
@@ -762,7 +920,7 @@ public final class ContextMenuController {
         }
 
         // Build the card.
-        let isDark = sdfHost.traitCollection.userInterfaceStyle == .dark
+        let isDark = surfaceView.traitCollection.userInterfaceStyle == .dark
         let card = UIVisualEffectView(effect: ContextMenuController.makeMenuEffect(isDark: isDark))
         card.layer.cornerRadius = ContextMenuActionsView.cornerRadius
         card.layer.masksToBounds = true
@@ -774,12 +932,12 @@ public final class ContextMenuController {
             items: submenu,
             headerStyle: .disclosure(title: item.title)
         )
-        let cardWidth = sdfHost.bounds.width
+        let cardWidth = surfaceView.bounds.width
         let cardSize = submenuActions.preferredSize(maxWidth: cardWidth)
         submenuActions.frame = CGRect(origin: .zero, size: cardSize)
         submenuActions.autoresizingMask = [.flexibleWidth]
         card.contentView.addSubview(submenuActions)
-        wireActionsView(submenuActions, handle: handle, sdfHost: sdfHost, isSubmenu: true)
+        wireActionsView(submenuActions, handle: handle, surfaceView: surfaceView, isSubmenu: true)
 
         // Anchor card.minY to the source row's Y in screen coords. We can
         // approximate by finding the touched item's row in `parentActions`
@@ -787,7 +945,7 @@ public final class ContextMenuController {
         let cardOriginInParent = sourceRowFrame(for: item, in: parentActions)?.origin ?? .zero
         let cardOriginInHost = parentActions.convert(cardOriginInParent, to: host)
         let cardFrame = CGRect(
-            x: sdfHost.frame.minX,
+            x: surfaceView.frame.minX,
             y: cardOriginInHost.y,
             width: cardWidth,
             height: cardSize.height
@@ -797,15 +955,16 @@ public final class ContextMenuController {
         self.submenuCard = card
         self.submenuActions = submenuActions
 
-        // Hit-target inside sdfHost that catches taps which miss the card.
-        // Lives BELOW the card in the host hierarchy (sdfHost is below the
-        // card sibling), so card touches still go to the card first.
-        let hitView = UIView(frame: sdfHost.bounds)
+        // Hit-target inside the active menu surface that catches taps which
+        // miss the card. Lives BELOW the card in the host hierarchy (the
+        // surface is below the card sibling), so card touches still go to
+        // the card first.
+        let hitView = UIView(frame: surfaceOverlayView.bounds)
         hitView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         hitView.backgroundColor = .clear
         let collapseTap = UITapGestureRecognizer(target: self, action: #selector(handleCollapseTap))
         hitView.addGestureRecognizer(collapseTap)
-        sdfHost.addSubview(hitView)
+        surfaceOverlayView.addSubview(hitView)
         self.submenuCollapseHitView = hitView
 
         // Dim parent + disable its touches so the card / hit-view interaction
