@@ -159,27 +159,38 @@ final class ContextMenuMorphHostView: UIView {
     func configure(metrics: Metrics) {
         self.metrics = metrics
 
-        // Pick the horizontal anchor by matching which horizontal edge
-        // source and menu share:
-        //   - Same left edge → anchor x = 0 (shape grows rightward
-        //     from the shared left edge)
-        //   - Same right edge → anchor x = 1 (shape grows leftward
-        //     from the shared right edge)
-        //   - Neither → fall back to center so scale at least pivots
-        //     from the midpoint.
-        // Tolerance of 1pt handles rounding differences between
-        // caller-computed source / menu rects.
-        let srcMinX = metrics.collapsedFrame.minX
-        let srcMaxX = metrics.collapsedFrame.maxX
-        let expMinX = metrics.expandedFrame.minX
-        let expMaxX = metrics.expandedFrame.maxX
-        if abs(srcMinX - expMinX) <= 1.0 {
-            xAnchor = 0.0
-        } else if abs(srcMaxX - expMaxX) <= 1.0 {
+        // Resolve horizontal anchor by comparing midpoints. If the
+        // expanded menu's midX is to the LEFT of the source's midX,
+        // the menu extends leftward from the source → pivot from the
+        // source's right edge (anchor x = 1). Rightward extension →
+        // pivot left (anchor x = 0). Same midX → center.
+        //
+        // Midpoint comparison is more robust than edge-equality with
+        // a small tolerance: any real-device layout that shifts
+        // source or menu by even a couple of pixels would otherwise
+        // fall through to the 0.5 fallback and cause the view to
+        // center-morph, which reads as a "jump to the left" for
+        // right-side buttons because the midpoint shifts by
+        // (menu.width − source.width) / 2 during the rise.
+        let delta = metrics.expandedFrame.midX - metrics.collapsedFrame.midX
+        if delta < -0.5 {
             xAnchor = 1.0
+        } else if delta > 0.5 {
+            xAnchor = 0.0
         } else {
             xAnchor = 0.5
         }
+
+        // The anchor-point change AND the subsequent
+        // updateForProgress (which recomputes layer.position for the
+        // new anchor) must happen atomically inside one disabled-
+        // actions transaction — otherwise UIKit applies a default
+        // 0.25s implicit animation to the position change that
+        // results from the anchor-point shift, and the view
+        // momentarily slides from its old rendered location to the
+        // new one.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         layer.anchorPoint = CGPoint(x: xAnchor, y: 0)
 
         // Content containers stay at their own full size throughout the
@@ -191,6 +202,7 @@ final class ContextMenuMorphHostView: UIView {
         sourceContent.frame = CGRect(origin: .zero, size: metrics.collapsedFrame.size)
         destinationContent.frame = CGRect(origin: .zero, size: metrics.expandedFrame.size)
         updateForProgress(surfaceProgress: progressValue, phaseProgress: phaseValue)
+        CATransaction.commit()
     }
 
     // MARK: - Animation API
