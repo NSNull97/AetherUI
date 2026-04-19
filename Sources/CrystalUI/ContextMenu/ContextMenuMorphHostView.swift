@@ -589,9 +589,19 @@ final class ContextMenuMorphHostView: UIView {
         let holdEnd: CGFloat = 0.42
 
         if t < riseEnd {
+            // ease-in-out quadratic: slow start, accelerating through
+            // the middle, decelerating into the hold. Unlike cubic
+            // ease-out (velocity=3 at t=0, then decreasing) this gives
+            // the shape a gentle onset — important for right-side
+            // buttons whose left edge would otherwise "whip" leftward
+            // at the first couple of frames.
             let p = t / riseEnd
-            let inv = 1 - p
-            return 1 - inv * inv * inv
+            if p < 0.5 {
+                return 2 * p * p
+            } else {
+                let inv = 1 - p
+                return 1 - 2 * inv * inv
+            }
         }
 
         if t < holdEnd {
