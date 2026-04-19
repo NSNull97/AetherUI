@@ -41,6 +41,14 @@ public final class ContextMenuController {
     private static let dismissDamping: CGFloat = 0.94    // slightly less elastic than open
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
+    /// Radius of the backdrop blur applied to the dim layer, in points.
+    /// Uses a raw CABackdropLayer + CAFilter("gaussianBlur"), so any
+    /// non-negative radius works (unlike UIBlurEffect which snaps to
+    /// a few fixed styles). 0 disables the blur and falls back to a
+    /// plain tint. 2pt is the "barely-there" default — enough to
+    /// soften the edges of background content without making it
+    /// unreadable.
+    public static var dimBlurRadius: CGFloat = 2.0
     private static let menuCornerRadius: CGFloat = 27.0
 
     /// Rubber-band stretch metrics for the WHOLE menu container.
@@ -155,9 +163,16 @@ public final class ContextMenuController {
         window.addSubview(host)
         self.hostView = host
 
-        // Dim layer + tap-to-dismiss target.
-        let dim = UIView(frame: host.bounds)
-        dim.backgroundColor = UIColor.black.withAlphaComponent(ContextMenuController.dimAlpha)
+        // Dim layer + tap-to-dismiss target. Uses a custom
+        // CABackdropLayer-based blur (see `ContextMenuDimBlurView`)
+        // so the radius is continuously configurable via
+        // `dimBlurRadius`. At the default 2pt radius the background
+        // is just barely softened, not frosted.
+        let dim = ContextMenuDimBlurView(
+            blurRadius: ContextMenuController.dimBlurRadius,
+            tintAlpha: ContextMenuController.dimAlpha
+        )
+        dim.frame = host.bounds
         dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         dim.alpha = 0
         dim.isUserInteractionEnabled = true
@@ -642,28 +657,30 @@ public final class ContextMenuController {
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
 
-        // Horizontal alignment: align the menu to the SAME EDGE as the
-        // source button so the morph visibly grows from that edge. By
-        // default try left-align (menu.minX = source.minX); if the menu
-        // would overflow the right edge of the screen, flip to
-        // right-align (menu.maxX = source.maxX) so the shared edge is
-        // the source's right. That way a right-side button visually
-        // unfolds its menu leftward from its own right edge, and a
-        // left-side button unfolds rightward from its own left edge —
-        // animation anchor in `ContextMenuMorphHostView` follows the
-        // same edge, so the morph doesn't appear to "slide in from the
-        // wrong side" during the transition.
+        // Horizontal alignment: prefer the edge of the source that's
+        // closer to the nearer screen edge, so a right-side button's
+        // menu visibly unfolds LEFTWARD from the button's own right
+        // edge (and vice versa for left-side buttons). Previously the
+        // rule was purely "left-align unless it overflows", which
+        // produced menu.minX = source.minX even for buttons positioned
+        // in the right half of the screen — the animation then read
+        // as starting from the wrong side. Now we right-align as soon
+        // as the source's centre is past the host's centre, regardless
+        // of whether left-align would overflow.
+        let sourceCentreIsOnRight = sourceRect.midX > hostBounds.midX
+        let leftAlignedX = sourceRect.minX
+        let rightAlignedX = sourceRect.maxX - menuSize.width
+        let wouldOverflowRight = leftAlignedX + menuSize.width > hostBounds.maxX - sideInset
+
         var x: CGFloat
-        if sourceRect.minX + menuSize.width <= hostBounds.maxX - sideInset {
-            // Fits on the right of the source — left-align.
-            x = sourceRect.minX
+        if sourceCentreIsOnRight || wouldOverflowRight {
+            x = rightAlignedX
         } else {
-            // Doesn't fit — right-align to source's right edge.
-            x = sourceRect.maxX - menuSize.width
+            x = leftAlignedX
         }
         x = max(sideInset, x)
         // Final safety clamp: if right-align still overflows left side,
-        // pin to left inset.
+        // pin to right edge of screen minus inset.
         if x + menuSize.width > hostBounds.maxX - sideInset {
             x = hostBounds.maxX - sideInset - menuSize.width
         }
