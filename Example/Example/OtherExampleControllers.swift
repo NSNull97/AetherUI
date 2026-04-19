@@ -69,6 +69,14 @@ final class SettingsExampleController: ViewController {
     private let topAnchoredButton = GlassBarButtonView(title: "Top anchored")
     private let bottomAnchoredButton = GlassBarButtonView(title: "Bottom anchored")
     private let submenuPill = GlassBarButtonView(title: "Settings ›")
+    /// Two pills, one hugging the left edge of the section and one hugging
+    /// the right edge. Used to visually verify that the morph anchor
+    /// follows the source position: tapping the left button should unfold
+    /// the menu rightward from the button's left edge, and tapping the
+    /// right one should unfold LEFTWARD from its own right edge — not
+    /// "always from the left", which was the old bug.
+    private let leftAlignButton = GlassBarButtonView(title: "Left")
+    private let rightAlignButton = GlassBarButtonView(title: "Right")
     /// Decorated card view for the long-press-preview demo (Phase 2). Plain
     /// UIView with rounded corners + colored background + label so the lifted
     /// snapshot is visible. Has its own long-press recognizer that calls
@@ -143,6 +151,28 @@ final class SettingsExampleController: ViewController {
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
         ])
+
+        // 0. Left + right anchor test.
+        //
+        // Two pills in the same row: one flush-left, one flush-right.
+        // Tapping each should unfold the menu from the corresponding
+        // edge (left button → menu grows rightward; right button →
+        // menu grows leftward). If both look identical (menu appears
+        // from the left regardless), the xAnchor detection in the
+        // morph host has regressed.
+        leftAlignButton.contentTintColor = .label
+        leftAlignButton.contextMenuTrigger = .tap
+        leftAlignButton.contextMenuItemsProvider = { [weak self] in self?.simpleItems() ?? [] }
+        rightAlignButton.contentTintColor = .label
+        rightAlignButton.contextMenuTrigger = .tap
+        rightAlignButton.contextMenuItemsProvider = { [weak self] in self?.simpleItems() ?? [] }
+        stack.addArrangedSubview(leftRightAnchorSection(
+            title: "0. Anchor test — left vs right",
+            description: "Left pill opens its menu rightward from its left edge. Right pill opens LEFTWARD from its right edge.",
+            leftContent: leftAlignButton,
+            rightContent: rightAlignButton,
+            contentHeight: 36.0
+        ))
 
         // 1. Tap-triggered ChatGPT-style mode picker.
         titlePill.contentTintColor = .label
@@ -354,6 +384,43 @@ final class SettingsExampleController: ViewController {
                 action: { [weak self] _, h in self?.report("Card: Delete"); h.dismiss() }
             ))
         ]
+    }
+
+    /// Section with two pills — one flush-left, one flush-right — for
+    /// verifying that the morph animation anchors to the correct edge
+    /// of each button.
+    private func leftRightAnchorSection(
+        title: String,
+        description: String,
+        leftContent: UIView,
+        rightContent: UIView,
+        contentHeight: CGFloat
+    ) -> UIStackView {
+        let titleLabel = UILabel()
+        titleLabel.text = title
+        titleLabel.font = .systemFont(ofSize: 15.0, weight: .semibold)
+
+        let descriptionLabel = UILabel()
+        descriptionLabel.text = description
+        descriptionLabel.font = .systemFont(ofSize: 13.0, weight: .regular)
+        descriptionLabel.textColor = .secondaryLabel
+        descriptionLabel.numberOfLines = 0
+
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.alignment = .center
+        row.addArrangedSubview(leftContent)
+        row.addArrangedSubview(UIView()) // flexible spacer
+        row.addArrangedSubview(rightContent)
+        leftContent.setContentHuggingPriority(.required, for: .horizontal)
+        rightContent.setContentHuggingPriority(.required, for: .horizontal)
+        leftContent.heightAnchor.constraint(equalToConstant: contentHeight).isActive = true
+        rightContent.heightAnchor.constraint(equalToConstant: contentHeight).isActive = true
+
+        let stack = UIStackView(arrangedSubviews: [titleLabel, descriptionLabel, row])
+        stack.axis = .vertical
+        stack.spacing = 6.0
+        return stack
     }
 
     private func section(title: String, description: String, content: UIView, contentHeight: CGFloat) -> UIStackView {
