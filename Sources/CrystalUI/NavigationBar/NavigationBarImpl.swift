@@ -72,6 +72,18 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     public var layoutSuspended: Bool = false
     public var requestContainerLayout: ((ContainedViewLayoutTransition) -> Void)?
 
+    /// Amount (in points) by which the scroll-edge frost is extended
+    /// upward past the navbar's own top. Set by hosts that sit the bar
+    /// below a visual chrome element (e.g. CrystalModalController's
+    /// grabber) so the frost covers that chrome too.
+    public var edgeEffectTopExtension: CGFloat = 0.0 {
+        didSet {
+            if edgeEffectTopExtension != oldValue {
+                setNeedsLayout()
+            }
+        }
+    }
+
     // MARK: - Init
 
     public init(presentationData: NavigationBarPresentationData) {
@@ -429,15 +441,17 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 // 8pt bleed into the safe-area region on top, plus 8pt
                 // past the navbar bottom so the fade spills softly into
                 // the content area (instead of ending sharply at the
-                // navbar edge). Matters visibly when the bar is short
-                // (no status bar, e.g. inside a CrystalModalController).
+                // navbar edge). When `edgeEffectTopExtension` is set the
+                // frost starts even higher — used e.g. by the modal
+                // controller to have the frost cover its grabber strip.
                 let topInset: CGFloat = 8.0
                 let bottomBleed: CGFloat = 8.0
+                let topExtension = edgeEffectTopExtension
                 let edgeEffectFrame = CGRect(
                     x: 0.0,
-                    y: -topInset,
+                    y: -(topInset + topExtension),
                     width: size.width,
-                    height: size.height + topInset + bottomBleed
+                    height: size.height + topInset + topExtension + bottomBleed
                 )
                 transition.updateFrame(view: edgeEffect, frame: edgeEffectFrame)
                 // Fade zone = roughly the bottom third so the transparency at

@@ -170,6 +170,29 @@ public final class CrystalModalController: UIViewController {
         super.viewDidLayoutSubviews()
         layoutGlassAndContent()
         updateMaskPath()
+        applyEdgeEffectExtensionToContentNavBars()
+    }
+
+    /// Propagate the grabber strip's height into every nav bar in the
+    /// content hierarchy so their scroll-edge frost extends upward past
+    /// the navbar top and covers the grabber area — otherwise the frost
+    /// ends at the navbar edge and leaves the grabber visually
+    /// disconnected from the nav-bar chrome below it.
+    private func applyEdgeEffectExtensionToContentNavBars() {
+        applyEdgeEffectExtension(to: content)
+    }
+
+    private func applyEdgeEffectExtension(to vc: UIViewController) {
+        if let ctrl = vc as? ViewController,
+           let bar = ctrl.navigationBarView as? NavigationBarImpl
+        {
+            if bar.edgeEffectTopExtension != Self.grabberContainerHeight {
+                bar.edgeEffectTopExtension = Self.grabberContainerHeight
+            }
+        }
+        for child in vc.children {
+            applyEdgeEffectExtension(to: child)
+        }
     }
 
     /// UIKit propagates the window's full status-bar-sized top safe area
