@@ -426,7 +426,20 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 edgeEffect.isHidden = true
             } else {
                 edgeEffect.isHidden = false
-                let edgeEffectFrame = CGRect(x: 0.0, y: -8.0, width: size.width, height: size.height)
+                // Extend 8pt up into the safe-area region for bleed, and
+                // match it on the bottom so the full navbar body stays
+                // covered. A fixed y:-8 offset with size.height was losing
+                // the last 8pt of the navbar — barely noticeable for a
+                // tall (status-bar-inclusive) navbar, but visibly cropped
+                // when the bar is short (no status bar, e.g. inside a
+                // modal).
+                let edgeEffectInset: CGFloat = 8.0
+                let edgeEffectFrame = CGRect(
+                    x: 0.0,
+                    y: -edgeEffectInset,
+                    width: size.width,
+                    height: size.height + edgeEffectInset
+                )
                 transition.updateFrame(view: edgeEffect, frame: edgeEffectFrame)
                 // Fade zone = roughly the bottom third so the transparency at
                 // the nav-bar boundary is a soft ramp rather than a hard edge.
