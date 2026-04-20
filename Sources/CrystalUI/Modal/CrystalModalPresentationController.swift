@@ -68,7 +68,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         modalController?.applyCurrentDetent(detent)
         // Tint overlay reflects the current detent (stage2 → full tint).
         modalController?.applyDetentProgress(detent == .stage2 ? 1.0 : 0.0)
-        dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * (detent == .stage2 ? 1.0 : 0.0)
+        dimView.alpha = dimAlpha(forProgress: detent == .stage2 ? 1.0 : 0.0)
     }
 
     override func dismissalTransitionWillBegin() {
@@ -302,7 +302,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
         presentedView.frame = newFrame
         modalController?.applyDetentProgress(progress)
-        dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * progress
+        dimView.alpha = dimAlpha(forProgress: progress)
     }
 
     private static func rubberband(offset: CGFloat, dimension: CGFloat, coefficient: CGFloat = 0.55) -> CGFloat {
@@ -393,7 +393,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
         let targetFrame = frame(for: targetDetent, in: container.bounds)
         let targetProgress: CGFloat = targetDetent == .stage2 ? 1.0 : 0.0
-        let targetDim = (modalController?.config.dimAlphaStage2 ?? 0.25) * targetProgress
+        let targetDim = dimAlpha(forProgress: targetProgress)
 
         if !animated {
             presentedView?.frame = targetFrame
@@ -492,7 +492,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         detent = snappedDetent
         modalController?.applyCurrentDetent(snappedDetent)
         modalController?.applyDetentProgress(currentProgress)
-        dimView.alpha = (modalController?.config.dimAlphaStage2 ?? 0.25) * currentProgress
+        dimView.alpha = dimAlpha(forProgress: currentProgress)
     }
 
     private func gestureStartedInPrimaryScrollContent(_ gesture: UIGestureRecognizer) -> Bool {
@@ -531,6 +531,16 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
     private func scrollTopOffset(for sv: UIScrollView) -> CGFloat {
         return -sv.adjustedContentInset.top
+    }
+
+    /// Interpolate dim alpha between the two detents' configured values.
+    /// Progress 0 → stage1, 1 → stage2.
+    private func dimAlpha(forProgress progress: CGFloat) -> CGFloat {
+        let cfg = modalController?.config
+        let a = cfg?.dimAlphaStage1 ?? 0.25
+        let b = cfg?.dimAlphaStage2 ?? 0.4
+        let clamped = max(0.0, min(1.0, progress))
+        return a + (b - a) * clamped
     }
 
     private func transitionDistance(from stage1: CGRect, to stage2: CGRect) -> CGFloat {

@@ -45,6 +45,9 @@ public final class CrystalModalController: UIViewController {
         public var topInsetStage1: CGFloat
         public var topInsetStage2: CGFloat
         public var topCornerRadius: CGFloat
+        /// Dim alpha applied over the presenting view at stage1.
+        public var dimAlphaStage1: CGFloat
+        /// Dim alpha applied over the presenting view at stage2.
         public var dimAlphaStage2: CGFloat
         public var dimTintColor: UIColor
         /// Detents the sheet is allowed to rest at. When a single detent
@@ -63,7 +66,8 @@ public final class CrystalModalController: UIViewController {
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
             topCornerRadius: CGFloat = 38.0,
-            dimAlphaStage2: CGFloat = 0.25,
+            dimAlphaStage1: CGFloat = 0.25,
+            dimAlphaStage2: CGFloat = 0.4,
             dimTintColor: UIColor = .systemBackground,
             detents: Set<Detent> = [.stage1, .stage2],
             initialDetent: Detent? = nil
@@ -74,6 +78,7 @@ public final class CrystalModalController: UIViewController {
             self.topInsetStage1 = topInsetStage1
             self.topInsetStage2 = topInsetStage2
             self.topCornerRadius = topCornerRadius
+            self.dimAlphaStage1 = dimAlphaStage1
             self.dimAlphaStage2 = dimAlphaStage2
             self.dimTintColor = dimTintColor
             self.detents = detents.isEmpty ? [.stage1, .stage2] : detents
@@ -183,6 +188,7 @@ public final class CrystalModalController: UIViewController {
         let clamped = max(0.0, min(1.0, progress))
 
         glassBackground.glassTintColor = .init(kind: .custom(style: .default, color: config.dimTintColor.withAlphaComponent(clamped)))
+        glassBackground.contentView.backgroundColor = config.dimTintColor.withAlphaComponent(clamped)
 
         guard abs(detentProgress - clamped) > 0.0001 else { return }
         detentProgress = clamped
