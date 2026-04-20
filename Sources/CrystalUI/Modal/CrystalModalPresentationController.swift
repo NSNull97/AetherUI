@@ -180,19 +180,29 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
                     draggingDown: draggingDown,
                     draggingUp: draggingUp
                 )
+                if dragDriving, let scrollView = modalController?.primaryScrollView {
+                    // Cancel the scroll's in-progress pan so it stops
+                    // tracking this touch stream. Without this the scroll
+                    // still processes motion alongside the sheet for the
+                    // rest of the gesture — user sees the sheet expand
+                    // while the content simultaneously bounces.
+                    let scrollPan = scrollView.panGestureRecognizer
+                    if scrollPan.isEnabled {
+                        scrollPan.isEnabled = false
+                        scrollPan.isEnabled = true
+                    }
+                    // Snap the scroll back to its top so nothing is
+                    // mid-scroll when the sheet takes over.
+                    let topOffset = scrollTopOffset(for: scrollView)
+                    if scrollView.contentOffset.y != topOffset {
+                        scrollView.contentOffset.y = topOffset
+                    }
+                }
             }
 
             guard dragDriving else {
                 // Scroll handles this gesture; we stay out of the way.
                 return
-            }
-
-            // Lock scroll at its top so its own pan doesn't fight with ours.
-            if let scrollView = modalController?.primaryScrollView {
-                let topOffset = scrollTopOffset(for: scrollView)
-                if scrollView.contentOffset.y != topOffset {
-                    scrollView.contentOffset.y = topOffset
-                }
             }
 
             applyDrag(translation: translation, container: container, draggingDown: draggingDown, draggingUp: draggingUp)
