@@ -210,25 +210,46 @@ public final class EdgeEffectView: UIView {
     /// Generate a mask image for a blur view that is fully opaque at `edge`
     /// and fades to transparent over `fadeHeight` pixels toward the opposite
     /// side. Sized exactly to the blur frame so no stretching is required.
+    ///
+    /// The fade uses a cosine profile so the derivative of alpha is zero on
+    /// both ends of the fade — the transition from the solid portion into
+    /// the fade is C1-continuous, and the visible "band" that a linear
+    /// gradient produces at the solid↔fade boundary disappears. Sampled at
+    /// enough stops (32) that CGGradient's linear interpolation between
+    /// adjacent stops is indistinguishable from the true cosine curve.
     static func generateTaperedGradient(totalHeight: CGFloat, fadeHeight: CGFloat, edge: Edge) -> UIImage? {
         let height = max(1.0, totalHeight)
         let size = CGSize(width: 1.0, height: height)
+        let clampedFade = min(max(0.0, fadeHeight), height)
+        let solidHeight = max(0.0, height - clampedFade)
+
         return generateImage(size, rotatedContext: { size, context in
             context.clear(CGRect(origin: .zero, size: size))
             let colorSpace = CGColorSpaceCreateDeviceRGB()
 
+            // Cosine-sampled fade: N+1 stops from alpha 1 → 0.
+            let steps = 32
+            var fadeColors: [CGColor] = []
+            var fadeLocations: [CGFloat] = []
+            fadeColors.reserveCapacity(steps + 1)
+            fadeLocations.reserveCapacity(steps + 1)
+            for i in 0...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let alpha = 0.5 * (1.0 + cos(.pi * t))
+                fadeColors.append(UIColor.white.withAlphaComponent(alpha).cgColor)
+                fadeLocations.append(t)
+            }
+
             switch edge {
             case .top:
-                // Opaque at TOP of screen (top of image), fade to transparent
-                // toward the content area (bottom of image).
-                let solidHeight = max(0.0, height - fadeHeight)
+                // Opaque at TOP of image, fade toward BOTTOM.
                 if solidHeight > 0.0 {
                     context.setFillColor(UIColor.white.cgColor)
                     context.fill(CGRect(x: 0.0, y: 0.0, width: size.width, height: solidHeight))
                 }
-                let colors = [UIColor.white.cgColor, UIColor.white.withAlphaComponent(0.0).cgColor] as CFArray
-                var locations: [CGFloat] = [0.0, 1.0]
-                if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: &locations) {
+                if clampedFade > 0.0,
+                   let gradient = CGGradient(colorsSpace: colorSpace, colors: fadeColors as CFArray, locations: fadeLocations)
+                {
                     context.drawLinearGradient(
                         gradient,
                         start: CGPoint(x: 0.0, y: solidHeight),
@@ -237,19 +258,21 @@ public final class EdgeEffectView: UIView {
                     )
                 }
             case .bottom:
-                // Opaque at BOTTOM of screen (bottom of image), fade upward.
-                let solidHeight = max(0.0, height - fadeHeight)
+                // Opaque at BOTTOM of image, fade toward TOP. Reverse the
+                // cosine stop order (alpha goes 0 → 1 across the fade zone).
                 if solidHeight > 0.0 {
                     context.setFillColor(UIColor.white.cgColor)
-                    context.fill(CGRect(x: 0.0, y: fadeHeight, width: size.width, height: solidHeight))
+                    context.fill(CGRect(x: 0.0, y: clampedFade, width: size.width, height: solidHeight))
                 }
-                let colors = [UIColor.white.withAlphaComponent(0.0).cgColor, UIColor.white.cgColor] as CFArray
-                var locations: [CGFloat] = [0.0, 1.0]
-                if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: &locations) {
+                let reversedColors = Array(fadeColors.reversed())
+                let reversedLocations = fadeLocations.map { 1.0 - $0 }.reversed()
+                if clampedFade > 0.0,
+                   let gradient = CGGradient(colorsSpace: colorSpace, colors: reversedColors as CFArray, locations: Array(reversedLocations))
+                {
                     context.drawLinearGradient(
                         gradient,
                         start: CGPoint(x: 0.0, y: 0.0),
-                        end: CGPoint(x: 0.0, y: fadeHeight),
+                        end: CGPoint(x: 0.0, y: clampedFade),
                         options: []
                     )
                 }
