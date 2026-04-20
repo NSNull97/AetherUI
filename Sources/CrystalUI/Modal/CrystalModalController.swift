@@ -109,7 +109,15 @@ public final class CrystalModalController: UIViewController {
 
     private let glassBackground = GlassBackgroundView(style: .regular)
     private let contentContainer = UIView()
+    private let grabberContainer = UIView()
+    private let grabberView = UIView()
     private let maskLayer = CAShapeLayer()
+
+    /// Height of the grabber container area at the top of the sheet —
+    /// content is inset down by this much so its own top (e.g. a navbar
+    /// inside the content VC) doesn't collide with the grabber.
+    public static let grabberContainerHeight: CGFloat = 17.0
+    private static let grabberSize: CGSize = CGSize(width: 36.0, height: 5.0)
 
     private let modalTransitioningDelegate: CrystalModalTransitioningDelegate
 
@@ -134,7 +142,15 @@ public final class CrystalModalController: UIViewController {
         root.addSubview(glassBackground)
 
         glassBackground.contentView.addSubview(contentContainer)
+        glassBackground.contentView.addSubview(grabberContainer)
         glassBackground.glassIsInteractive = true
+
+        grabberView.backgroundColor = UIColor.label.withAlphaComponent(0.28)
+        grabberView.layer.cornerRadius = Self.grabberSize.height / 2.0
+        grabberView.layer.cornerCurve = .continuous
+        grabberView.isUserInteractionEnabled = false
+        grabberContainer.isUserInteractionEnabled = false
+        grabberContainer.addSubview(grabberView)
 
         addChild(content)
         content.view.translatesAutoresizingMaskIntoConstraints = true
@@ -219,7 +235,31 @@ public final class CrystalModalController: UIViewController {
         // the glass race ahead of (or lag behind) the root frame.
         glassBackground.frame = view.bounds
         glassBackground.update(size: view.bounds.size, cornerRadius: 0.0, transition: .immediate)
-        contentContainer.frame = view.bounds
+
+        let grabberHeight = Self.grabberContainerHeight
+        grabberContainer.frame = CGRect(
+            x: 0.0,
+            y: 0.0,
+            width: view.bounds.width,
+            height: grabberHeight
+        )
+        grabberView.frame = CGRect(
+            x: (view.bounds.width - Self.grabberSize.width) / 2.0,
+            y: (grabberHeight - Self.grabberSize.height) / 2.0,
+            width: Self.grabberSize.width,
+            height: Self.grabberSize.height
+        )
+
+        // Content sits below the grabber container — its coordinate space
+        // starts at y = grabberHeight in modal space, so anything
+        // positioned at y=0 inside the content (e.g. a navbar) appears
+        // just under the grabber.
+        contentContainer.frame = CGRect(
+            x: 0.0,
+            y: grabberHeight,
+            width: view.bounds.width,
+            height: max(0.0, view.bounds.height - grabberHeight)
+        )
         content.view.frame = contentContainer.bounds
     }
 
