@@ -426,19 +426,18 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 edgeEffect.isHidden = true
             } else {
                 edgeEffect.isHidden = false
-                // Extend 8pt up into the safe-area region for bleed, and
-                // match it on the bottom so the full navbar body stays
-                // covered. A fixed y:-8 offset with size.height was losing
-                // the last 8pt of the navbar — barely noticeable for a
-                // tall (status-bar-inclusive) navbar, but visibly cropped
-                // when the bar is short (no status bar, e.g. inside a
-                // modal).
-                let edgeEffectInset: CGFloat = 8.0
+                // 8pt bleed into the safe-area region on top, plus 8pt
+                // past the navbar bottom so the fade spills softly into
+                // the content area (instead of ending sharply at the
+                // navbar edge). Matters visibly when the bar is short
+                // (no status bar, e.g. inside a CrystalModalController).
+                let topInset: CGFloat = 8.0
+                let bottomBleed: CGFloat = 8.0
                 let edgeEffectFrame = CGRect(
                     x: 0.0,
-                    y: -edgeEffectInset,
+                    y: -topInset,
                     width: size.width,
-                    height: size.height + edgeEffectInset
+                    height: size.height + topInset + bottomBleed
                 )
                 transition.updateFrame(view: edgeEffect, frame: edgeEffectFrame)
                 // Fade zone = roughly the bottom third so the transparency at
