@@ -178,20 +178,44 @@ public final class CrystalModalController: UIViewController {
     /// the navbar top and covers the grabber area — otherwise the frost
     /// ends at the navbar edge and leaves the grabber visually
     /// disconnected from the nav-bar chrome below it.
+    ///
+    /// Walks the full view tree of `content.view` rather than only
+    /// `ViewController.navigationBarView` so it catches bars added as
+    /// plain subviews too (custom content types, manually-hosted bars,
+    /// bars injected deep in a nested VC tree, etc.). Also sweeps the
+    /// VC children chain so pushed screens inside a nav controller are
+    /// covered.
     private func applyEdgeEffectExtensionToContentNavBars() {
-        applyEdgeEffectExtension(to: content)
+        applyEdgeEffectExtension(toSubtreeOf: content.view)
+        applyEdgeEffectExtensionToChildVCs(of: content)
     }
 
-    private func applyEdgeEffectExtension(to vc: UIViewController) {
+    private func applyEdgeEffectExtensionToChildVCs(of vc: UIViewController) {
         if let ctrl = vc as? ViewController,
            let bar = ctrl.navigationBarView as? NavigationBarImpl
         {
-            if bar.edgeEffectTopExtension != Self.grabberContainerHeight {
-                bar.edgeEffectTopExtension = Self.grabberContainerHeight
-            }
+            setGrabberExtension(on: bar)
         }
         for child in vc.children {
-            applyEdgeEffectExtension(to: child)
+            if child.isViewLoaded {
+                applyEdgeEffectExtension(toSubtreeOf: child.view)
+            }
+            applyEdgeEffectExtensionToChildVCs(of: child)
+        }
+    }
+
+    private func applyEdgeEffectExtension(toSubtreeOf view: UIView) {
+        if let bar = view as? NavigationBarImpl {
+            setGrabberExtension(on: bar)
+        }
+        for sub in view.subviews {
+            applyEdgeEffectExtension(toSubtreeOf: sub)
+        }
+    }
+
+    private func setGrabberExtension(on bar: NavigationBarImpl) {
+        if bar.edgeEffectTopExtension != Self.grabberContainerHeight {
+            bar.edgeEffectTopExtension = Self.grabberContainerHeight
         }
     }
 
