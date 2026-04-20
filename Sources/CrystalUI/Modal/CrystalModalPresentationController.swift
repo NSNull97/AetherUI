@@ -10,6 +10,8 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
     private var dragStartFrame: CGRect = .zero
     private var dragStartDetent: CrystalModalController.Detent = .stage1
     private var dragDriving: Bool = false
+    private var dragScrollAtStart: Bool = true
+    private var dragStartedInScrollContent: Bool = false
     private var settleAnimating: Bool = false
 
     // Settle animation state — driven manually via CADisplayLink so every
@@ -62,9 +64,6 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
         pan.delegate = self
         presentedView?.addGestureRecognizer(pan)
         panGesture = pan
-        if let scrollView = modalController?.primaryScrollView {
-            scrollView.panGestureRecognizer.require(toFail: pan)
-        }
 
         modalController?.applyCurrentDetent(detent)
         // Tint overlay reflects the current detent (stage2 → full tint).
@@ -160,13 +159,42 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
             cancelSettleAnimationIfNeeded(container: container)
             dragStartFrame = presentedView.frame
             dragStartDetent = nearestDetent(to: presentedView.frame, in: container.bounds)
-            dragDriving = true
+            dragStartedInScrollContent = gestureStartedInPrimaryScrollContent(gesture)
+            if let scrollView = modalController?.primaryScrollView {
+                dragScrollAtStart = isPrimaryScrollViewAtTop(scrollView)
+            } else {
+                dragScrollAtStart = true
+            }
+            // Driving decision is deferred to `.changed` — we need the
+            // drag direction before deciding whether scroll or sheet owns
+            // this gesture.
+            dragDriving = false
 
         case .changed:
-            guard dragDriving else { return }
             let translation = gesture.translation(in: container)
             let draggingDown = translation.y > 0
             let draggingUp = translation.y < 0
+
+            if !dragDriving {
+                dragDriving = shouldSheetDrive(
+                    draggingDown: draggingDown,
+                    draggingUp: draggingUp
+                )
+            }
+
+            guard dragDriving else {
+                // Scroll handles this gesture; we stay out of the way.
+                return
+            }
+
+            // Lock scroll at its top so its own pan doesn't fight with ours.
+            if let scrollView = modalController?.primaryScrollView {
+                let topOffset = scrollTopOffset(for: scrollView)
+                if scrollView.contentOffset.y != topOffset {
+                    scrollView.contentOffset.y = topOffset
+                }
+            }
+
             applyDrag(translation: translation, container: container, draggingDown: draggingDown, draggingUp: draggingUp)
 
         case .ended, .cancelled, .failed:
@@ -180,6 +208,35 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
         default:
             break
+        }
+    }
+
+    /// Decide at the first `.changed` whether the sheet should own this
+    /// pan or leave it to the scroll view. Sheet drives when:
+    /// - the touch started outside the primary scroll view, or
+    /// - there is no primary scroll view at all, or
+    /// - at stage1, the drag is upward (to stage2) OR downward AND the
+    ///   scroll was at its top when the drag began, or
+    /// - at stage2, the drag is downward AND the scroll was at its top.
+    /// Otherwise scroll owns the gesture.
+    private func shouldSheetDrive(draggingDown: Bool, draggingUp: Bool) -> Bool {
+        if !dragStartedInScrollContent { return true }
+        guard modalController?.primaryScrollView != nil else { return true }
+        switch dragStartDetent {
+        case .stage1:
+            if draggingUp {
+                // Expand-drag always beats scroll at stage1 (the sheet is
+                // the natural handle, not the content).
+                return allowedDetents.contains(.stage2) || allowedDetents == [.stage1]
+            }
+            // Downward: only take the gesture when scroll is at the top
+            // (otherwise user is scrolling the content back up).
+            return dragScrollAtStart
+        case .stage2:
+            if draggingUp {
+                return false
+            }
+            return dragScrollAtStart
         }
     }
 
@@ -520,25 +577,25 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
               let view = pan.view else {
             return true
         }
+        // Require a mostly-vertical initial motion — horizontal swipes
+        // (e.g. cell swipe actions) shouldn't wake up the sheet pan.
         let velocity = pan.velocity(in: view)
-        guard abs(velocity.y) >= abs(velocity.x) else {
-            return false
-        }
-        guard gestureStartedInPrimaryScrollContent(pan),
-              let scrollView = modalController?.primaryScrollView else {
-            return true
-        }
-
-        let atTop = isPrimaryScrollViewAtTop(scrollView)
-        switch detent {
-        case .stage1:
-            return atTop
-        case .stage2:
-            return velocity.y > 0.0 && atTop
-        }
+        return abs(velocity.y) >= abs(velocity.x)
     }
 
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Run alongside the primary scroll view's pan so its touch stream
+        // is never pre-empted. We decide per-drag inside `handlePan`
+        // whether the sheet or the scroll actually drives — and when the
+        // sheet drives we pin the scroll's contentOffset at its top so
+        // both recognizers can coexist without fighting each other.
+        if let scrollView = modalController?.primaryScrollView,
+           other === scrollView.panGestureRecognizer {
+            return true
+        }
         return false
     }
 }
