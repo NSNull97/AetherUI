@@ -703,6 +703,41 @@ public final class CrystalWindow: UIWindow {
         // Gesture state is handled via the began/moved/ended callbacks
     }
 
+    /// Physically shift the native keyboard view vertically by `offset`
+    /// points (positive = keyboard slides further down off-screen).
+    /// Mirrors `KeyboardManager.updateInteractiveInputOffset` from
+    /// Telegram-iOS: we mutate the `UIInputSetHostView`'s `layer.bounds`
+    /// origin, which visually translates the keyboard content without
+    /// requiring `resignFirstResponder` first.
+    ///
+    /// When called with an animated transition, we also add an additive
+    /// offset animation on the layer so the transition from the previous
+    /// bounds to the new one interpolates smoothly (matches upstream's
+    /// `animateOffsetAdditive` call).
+    private func updateInteractiveKeyboardOffset(
+        _ offset: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        completion: (() -> Void)? = nil
+    ) {
+        guard let keyboardView = CrystalKeyboardAccess.keyboardView() else {
+            completion?()
+            return
+        }
+        let previousBounds = keyboardView.bounds
+        let updatedBounds = CGRect(origin: CGPoint(x: 0.0, y: -offset), size: previousBounds.size)
+        keyboardView.layer.bounds = updatedBounds
+
+        if transition.isAnimated {
+            transition.animateOffsetAdditive(
+                layer: keyboardView.layer,
+                offset: previousBounds.minY - updatedBounds.minY,
+                completion: { _ in completion?() }
+            )
+        } else {
+            completion?()
+        }
+    }
+
     // MARK: - Layout Update Batching
 
     private func updateLayout(_ update: (inout UpdatingLayout) -> Void) {
@@ -768,15 +803,23 @@ public final class CrystalWindow: UIWindow {
         if !previousInputOffset.isEqual(to: updatedInputOffset) {
             let isHiding = pending.transition.isAnimated
                 && pending.layout.upperKeyboardInputPositionBound == pending.layout.size.height
-            if isHiding {
-                // Animate keyboard offset to fully hidden, then resign first responder
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, isHiding else { return }
-                    self.updateLayout {
-                        $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
-                    }
-                    self._rootController.view.findFirstResponder()?.resignFirstResponder()
+            // Move the native keyboard window's keyboard view in lockstep
+            // with the layout change so the keyboard actually follows the
+            // user's finger (rather than just the layout reacting while
+            // the keyboard stays pinned). Port of Telegram-iOS
+            // `KeyboardManager.updateInteractiveInputOffset`.
+            updateInteractiveKeyboardOffset(
+                updatedInputOffset,
+                transition: pending.transition
+            ) { [weak self] in
+                guard let self, isHiding else { return }
+                // Once the drag-out animation finishes, clear the interactive
+                // bound and resign first responder — UIKit will tear down
+                // the keyboard naturally from the off-screen position.
+                self.updateLayout {
+                    $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
                 }
+                self._rootController.view.findFirstResponder()?.resignFirstResponder()
             }
         }
 
