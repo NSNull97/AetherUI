@@ -22,7 +22,7 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 title: "Диалоги",
                 rows: [
                     ("ActionSheet", "кнопки / чекбоксы / свитчи / текст", { ActionSheetDemoController() }),
-                    ("Alert", "title + message + кнопки", { AlertDemoController() }),
+                    ("Alert", "title + message + кнопки + поле", { AlertDemoController() }),
                     ("Tooltip", "указывает на view", { TooltipDemoController() }),
                     ("Toast / Snackbar", "snackbar внизу", { ToastDemoController() })
                 ]
@@ -31,6 +31,22 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 title: "Диалоги",
                 image: UIImage(systemName: "bubble.left.and.bubble.right"),
                 selectedImage: UIImage(systemName: "bubble.left.and.bubble.right.fill")
+            )
+        )
+
+        let glass = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Glass",
+                rows: [
+                    ("GlassButton", "icon / title / icon+title / лифт", { GlassButtonDemoController() }),
+                    ("Context Menu", "morph + preview + submenu", { ContextMenuDemoController() }),
+                    ("NavigationBar Search", "title ↔ search pill", { NavigationBarSearchDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Glass",
+                image: UIImage(systemName: "drop"),
+                selectedImage: UIImage(systemName: "drop.fill")
             )
         )
 
@@ -71,7 +87,7 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 style: .liquidGlass
             )
         )
-        tabs.setControllers([dialogs, states, navigation], selectedIndex: 0)
+        tabs.setControllers([dialogs, glass, states, navigation], selectedIndex: 0)
 
         window.contentController = tabs
         window.makeKeyAndVisible()

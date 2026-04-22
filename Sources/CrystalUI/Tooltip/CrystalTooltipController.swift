@@ -89,19 +89,20 @@ public final class CrystalTooltipController {
     }
 
     /// Show pointing at the given source view. `sourceRect` defaults to the
-    /// source view's bounds. Tooltip mounts into the source view's window so
-    /// it floats above modals. Placement: prefers ABOVE the source unless
+    /// source view's bounds. Placement: prefers ABOVE the source unless
     /// there's no room, then falls back BELOW.
     public func present(from sourceView: UIView, sourceRect: CGRect? = nil) {
-        // Mount on the source view's window rather than the top VC's view —
-        // tooltips should outlive modal boundaries so a source deep inside a
-        // presented sheet still gets a tooltip above the sheet chrome.
+        // Mount on the source view's window — a tooltip should float above
+        // tab bars / nav bars / modal sheets regardless of what the source
+        // is nested in. Frame-based attach (not auto-layout) so the first
+        // layoutSubviews has valid bounds before place(pointingTo:) reads
+        // them for card positioning.
         guard let window = sourceView.window else { return }
         dismiss(animated: false)
         hostView = window
 
         let rect = sourceRect ?? sourceView.bounds
-        let globalRect = sourceView.convert(rect, to: nil)
+        let windowRect = sourceView.convert(rect, to: window)
 
         let root = CrystalTooltipRootView(content: content, theme: theme)
         root.onTapOutside = { [weak self] in self?.dismiss(animated: true) }
@@ -109,8 +110,9 @@ public final class CrystalTooltipController {
         root.frame = window.bounds
         root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(root)
-        window.layoutIfNeeded()
-        root.place(pointingTo: globalRect)
+        root.setNeedsLayout()
+        root.layoutIfNeeded()
+        root.place(pointingTo: windowRect)
         root.animateIn()
         rootView = root
 

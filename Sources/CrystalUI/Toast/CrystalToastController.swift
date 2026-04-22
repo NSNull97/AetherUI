@@ -113,9 +113,13 @@ public final class CrystalToastController {
     }
 
     /// Present anchored to a specific parent view. If `parent` is nil, the
-    /// top-most presented view controller's view is used.
+    /// window of the top-most view controller is used — mounting on the
+    /// window (not on a controller view) guarantees the toast floats above
+    /// nav bars, tab bars, and modal sheets.
     public func present(in parent: UIView? = nil) {
-        let target = parent ?? Self.topViewController()?.view
+        let target: UIView?
+        if let parent { target = parent }
+        else { target = Self.topViewController()?.view.window ?? Self.topViewController()?.view }
         guard let target else { return }
 
         dismiss(animated: false)
@@ -127,18 +131,16 @@ public final class CrystalToastController {
             handler()
             self?.dismiss(animated: true)
         }
-        root.translatesAutoresizingMaskIntoConstraints = false
+        // Use explicit frame + autoresizing rather than constraints. Auto-
+        // layout on a freshly-attached window child doesn't always resolve
+        // synchronously before layoutIfNeeded — causing the card to compute
+        // at a zero bounds and never appear. Frame-based attach + explicit
+        // setNeedsLayout gives us a deterministic first frame.
+        root.frame = target.bounds
+        root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         target.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: target.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: target.trailingAnchor),
-            root.topAnchor.constraint(equalTo: target.topAnchor),
-            root.bottomAnchor.constraint(equalTo: target.bottomAnchor)
-        ])
-        // Force a synchronous layout so the card has a valid frame before
-        // the slide-up animation runs (otherwise animateIn reads a zero
-        // frame and the card never appears).
-        target.layoutIfNeeded()
+        root.setNeedsLayout()
+        root.layoutIfNeeded()
         root.animateIn()
         rootView = root
 
@@ -168,7 +170,15 @@ public final class CrystalToastController {
     /// Walk the connected-scenes graph to the top-most visible view
     /// controller (respecting modals). Returns nil when called before any
     /// window is attached — caller should guard.
-    private static func topViewController() -> UIViewController? {
+    /// Walk the window → rootViewController graph to the view controller
+    /// whose `.view` is the correct place to mount an overlay:
+    /// - A CrystalTabBarController (or UITabBarController) → drill into the
+    ///   selected child controller so the overlay stays above the visible
+    ///   tab's content and respects its nav bar / tab bar safe areas.
+    /// - A UINavigationController → drill to its topViewController.
+    /// - Any controller with a presentedViewController → drill into the
+    ///   presented (so overlays on top of modals work).
+    static func topViewController() -> UIViewController? {
         for scene in UIApplication.shared.connectedScenes where scene.activationState == .foregroundActive {
             guard let ws = scene as? UIWindowScene else { continue }
             let window: UIWindow?
@@ -177,8 +187,28 @@ public final class CrystalToastController {
             } else {
                 window = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first
             }
-            guard var vc = window?.rootViewController else { continue }
-            while let presented = vc.presentedViewController { vc = presented }
+            guard var vc: UIViewController = window?.rootViewController else { continue }
+            var guardCounter = 0
+            while guardCounter < 20 {
+                guardCounter += 1
+                if let presented = vc.presentedViewController {
+                    vc = presented
+                    continue
+                }
+                if let tab = vc as? CrystalTabBarController, let current = tab.currentController {
+                    vc = current
+                    continue
+                }
+                if let tab = vc as? UITabBarController, let sel = tab.selectedViewController {
+                    vc = sel
+                    continue
+                }
+                if let nav = vc as? UINavigationController, let top = nav.topViewController {
+                    vc = top
+                    continue
+                }
+                break
+            }
             return vc
         }
         return nil

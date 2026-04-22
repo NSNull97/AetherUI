@@ -1,7 +1,7 @@
 import UIKit
 import CrystalUI
 
-final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
     func scene(
@@ -14,57 +14,69 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = CrystalWindow(windowScene: windowScene)
         window.backgroundColor = .systemBackground
 
-        // Native-iOS shape:
-        //   CrystalTabBarController  (window root, owns tab bar, no nav bar)
-        //     └─ CrystalNavigationController per tab
-        //         └─ root screen (plus any pushed details)
-        //
-        // Each tab's navigation controller manages its own stack and its
-        // own nav bar. Push/pop inside a tab slides the screen + its bar
-        // together; the tab bar stays visible.
+        // Tab layout: one tab per theme area, each with its own nav
+        // controller so push/pop is isolated. Each tab's root is a simple
+        // list controller that routes into per-component demos.
+        let dialogs = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Диалоги",
+                rows: [
+                    ("ActionSheet", "кнопки / чекбоксы / свитчи / текст", { ActionSheetDemoController() }),
+                    ("Alert", "title + message + кнопки + поле", { AlertDemoController() }),
+                    ("Tooltip", "указывает на view", { TooltipDemoController() }),
+                    ("Toast / Snackbar", "snackbar внизу", { ToastDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Диалоги",
+                image: UIImage(systemName: "bubble.left.and.bubble.right"),
+                selectedImage: UIImage(systemName: "bubble.left.and.bubble.right.fill")
+            )
+        )
 
-        func makeTab(_ root: ViewController, tabBarItem: UITabBarItem) -> CrystalNavigationController {
-            root.tabBarItem = tabBarItem
-            let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
-            nav.setViewControllers([root], animated: false)
-            // Propagate the tab bar item onto the nav controller itself —
-            // that's the controller the tab bar sees and renders for.
-            nav.tabBarItem = tabBarItem
-            return nav
-        }
+        let glass = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Glass",
+                rows: [
+                    ("GlassButton", "icon / title / icon+title / лифт", { GlassButtonDemoController() }),
+                    ("Context Menu", "morph + preview + submenu", { ContextMenuDemoController() }),
+                    ("NavigationBar Search", "title ↔ search pill", { NavigationBarSearchDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Glass",
+                image: UIImage(systemName: "drop"),
+                selectedImage: UIImage(systemName: "drop.fill")
+            )
+        )
 
-        let contacts = makeTab(
-            ContactsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Контакты",
-                image: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+        let states = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Состояния",
+                rows: [
+                    ("Content State", "loading / empty / error", { ContentStateDemoController() }),
+                    ("Skeletons", "shimmer-плейсхолдеры", { SkeletonDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Состояния",
+                image: UIImage(systemName: "square.stack"),
+                selectedImage: UIImage(systemName: "square.stack.fill")
             )
         )
-        let calls = makeTab(
-            CallsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Звонки",
-                image: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
-        )
-        let chatsRoot = ChatListExampleController()
-        let chats = makeTab(
-            chatsRoot,
-            tabBarItem: UITabBarItem(
-                title: "Чаты",
-                image: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
-        )
-        chats.tabBarItem.badgeValue = "4"
-        let settings = makeTab(
-            SettingsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Menu",
-                image: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
+
+        let navigation = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Навигация",
+                rows: [
+                    ("Toolbar", "нижняя панель кнопок", { ToolbarDemoController() }),
+                    ("Modal", "bottom-sheet detents", { ModalDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Навигация",
+                image: UIImage(systemName: "square.grid.3x3"),
+                selectedImage: UIImage(systemName: "square.grid.3x3.fill")
             )
         )
 
@@ -75,32 +87,18 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 style: .liquidGlass
             )
         )
-        tabs.setControllers([contacts, calls, chats, settings], selectedIndex: 2)
-        tabs.searchShowcase = TabBarView.SearchShowcase(
-            icon: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))!,
-            action: { [weak tabs] in tabs?.activateSearch() }
-        )
+        tabs.setControllers([dialogs, glass, states, navigation], selectedIndex: 0)
 
         window.contentController = tabs
         window.makeKeyAndVisible()
         self.window = window
+    }
 
-        // Demo-only: auto-push a detail screen after launch so screenshots can
-        // verify the back-button glass capsule layout without UI automation.
-        if ProcessInfo.processInfo.environment["TG_NAV_DEMO_PUSH"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chatsRoot] in
-                guard let chatsRoot else { return }
-                chatsRoot.push(ChatDetailExampleController(title: "Pool Duck"))
-            }
-        }
-
-        if ProcessInfo.processInfo.environment["TG_NAV_DEMO_MODAL"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chats] in
-                let content = StickerPackModalController()
-                let modal = CrystalModalController(content: content)
-                modal.primaryScrollView = content.collectionView
-                chats?.present(modal, animated: true)
-            }
-        }
+    private static func makeTab(root: ViewController, item: UITabBarItem) -> CrystalNavigationController {
+        root.tabBarItem = item
+        let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
+        nav.setViewControllers([root], animated: false)
+        nav.tabBarItem = item
+        return nav
     }
 }

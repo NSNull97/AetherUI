@@ -209,29 +209,18 @@ final class TooltipDemoController: ShowcaseDemoController {
     override var demoTitle: String { "Tooltip" }
     private weak var lastTip: CrystalTooltipController?
 
-    /// Weak refs to the per-row source buttons so the handler closures can
-    /// pass them as the tooltip `from:` argument without walking the stack
-    /// hierarchy (which would race layout on first tap).
-    private weak var textSource: UIView?
-    private weak var iconSource: UIView?
-    private weak var attrSource: UIView?
-
     override func buildDemo() {
-        let b1 = addButton("Текст") { [weak self] in
-            guard let self, let src = self.textSource else { return }
-            self.lastTip = self.presentTip(from: src, content: .text("Подсказка о первой кнопке"))
+        addButton("Текст (выше кнопки)") { [weak self] in
+            guard let self, let button = self.stack.arrangedSubviews.first else { return }
+            self.lastTip = self.presentTip(from: button, content: .text("Подсказка о первой кнопке"))
         }
-        textSource = b1
-
-        let b2 = addButton("Иконка + текст") { [weak self] in
-            guard let self, let src = self.iconSource else { return }
+        addButton("Иконка + текст") { [weak self] in
+            guard let self, self.stack.arrangedSubviews.count > 1 else { return }
             let icon = UIImage(systemName: "lightbulb.fill") ?? UIImage()
-            self.lastTip = self.presentTip(from: src, content: .iconAndText(icon, "С иконкой"))
+            self.lastTip = self.presentTip(from: self.stack.arrangedSubviews[1], content: .iconAndText(icon, "С иконкой"))
         }
-        iconSource = b2
-
-        let b3 = addButton("Attributed") { [weak self] in
-            guard let self, let src = self.attrSource else { return }
+        addButton("Attributed") { [weak self] in
+            guard let self, self.stack.arrangedSubviews.count > 2 else { return }
             let attr = NSMutableAttributedString(
                 string: "Нажмите ",
                 attributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.white]
@@ -244,9 +233,8 @@ final class TooltipDemoController: ShowcaseDemoController {
                 string: ", чтобы продолжить",
                 attributes: [.font: UIFont.systemFont(ofSize: 14), .foregroundColor: UIColor.white]
             ))
-            self.lastTip = self.presentTip(from: src, content: .attributedText(attr))
+            self.lastTip = self.presentTip(from: self.stack.arrangedSubviews[2], content: .attributedText(attr))
         }
-        attrSource = b3
     }
 
     private func presentTip(from view: UIView, content: CrystalTooltipContent) -> CrystalTooltipController {

@@ -1,9 +1,9 @@
 import UIKit
 
-/// UIAlertController-style modal with title, message, and up to N buttons.
-/// API-compatible port of Telegram-iOS TextAlertController minus the
-/// ASDisplayKit / Signal deps. Buttons stack vertically when there are 3+;
-/// two buttons lay out side-by-side horizontally like UIAlertController.
+/// iOS 26-style alert dialog: title + message + optional text field + one
+/// or more pill-shaped action buttons (primary blue CTA, grey secondary,
+/// grey/red destructive). Two-button pairs lay out side-by-side; 3+
+/// actions stack vertically.
 open class CrystalAlertController: UIViewController {
     public var theme: CrystalAlertTheme {
         didSet { rootView?.applyTheme(theme) }
@@ -12,13 +12,18 @@ open class CrystalAlertController: UIViewController {
     public let alertTitle: String?
     public let alertMessage: String?
     public let actions: [CrystalAlertAction]
-    /// Tap outside the alert card dismisses. Matches Telegram-iOS
-    /// `contentNode.dismissOnOutsideTap`. Default `false`.
+    public let textFieldConfigs: [CrystalAlertTextField]
+
+    /// Tap outside the card dismisses. Default `false` — matches UIKit.
     public var dismissOnOutsideTap: Bool = false
 
-    /// Fires once when the alert goes away. `true` if the user dismissed via
-    /// outside-tap, `false` if via an action button.
     public var dismissed: ((Bool) -> Void)?
+
+    /// Current text of the Nth text field, or nil if index out of range.
+    /// Useful for reading input from action handlers.
+    public func textFieldValue(at index: Int) -> String? {
+        return rootView?.textFieldValue(at: index)
+    }
 
     private var isDismissed: Bool = false
     private var rootView: CrystalAlertRootView? {
@@ -29,15 +34,38 @@ open class CrystalAlertController: UIViewController {
         title: String?,
         message: String?,
         actions: [CrystalAlertAction],
+        textFields: [CrystalAlertTextField] = [],
         theme: CrystalAlertTheme = .light
     ) {
         self.alertTitle = title
         self.alertMessage = message
         self.actions = actions
+        self.textFieldConfigs = textFields
         self.theme = theme
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
-        modalTransitionStyle = .crossDissolve
+        // No crossDissolve — the root view runs its own fade + spring in
+        // animateIn(). A UIKit transition on top would render the alert
+        // once (via system dissolve) and then again via our animation,
+        // producing the "double appearance" flicker.
+        modalTransitionStyle = .coverVertical
+    }
+
+    /// Back-compat single-text-field overload.
+    public convenience init(
+        title: String?,
+        message: String?,
+        actions: [CrystalAlertAction],
+        textField: CrystalAlertTextField?,
+        theme: CrystalAlertTheme = .light
+    ) {
+        self.init(
+            title: title,
+            message: message,
+            actions: actions,
+            textFields: textField.map { [$0] } ?? [],
+            theme: theme
+        )
     }
 
     public required init?(coder: NSCoder) {
@@ -49,7 +77,8 @@ open class CrystalAlertController: UIViewController {
             theme: theme,
             title: alertTitle,
             message: alertMessage,
-            actions: actions
+            actions: actions,
+            textFields: textFieldConfigs
         )
         root.actionTriggered = { [weak self] action in
             guard let self, !self.isDismissed else { return }
@@ -90,7 +119,7 @@ open class CrystalAlertController: UIViewController {
             UIKeyCommand(action: #selector(escapePressed), input: UIKeyCommand.inputEscape),
             UIKeyCommand(action: #selector(escapePressed), input: "W", modifierFlags: .command)
         ]
-        if actions.contains(where: { $0.style == .defaultFocused }) {
+        if actions.contains(where: { $0.style == .primary }) {
             commands.append(UIKeyCommand(action: #selector(enterPressed), input: "\r"))
         }
         return commands
@@ -101,7 +130,7 @@ open class CrystalAlertController: UIViewController {
     }
 
     @objc private func enterPressed() {
-        guard let focused = actions.first(where: { $0.style == .defaultFocused && $0.enabled }) else { return }
+        guard let focused = actions.first(where: { $0.style == .primary && $0.enabled }) else { return }
         rootView?.triggerAction(focused)
     }
 }
@@ -116,48 +145,74 @@ final class CrystalAlertRootView: UIView {
     private let title: String?
     private let message: String?
     private let actions: [CrystalAlertAction]
+    private let textFieldConfigs: [CrystalAlertTextField]
 
     private let dimView = UIView()
     private let card: UIView
     private let blurView: UIVisualEffectView
     private let tintOverlay = UIView()
+
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
-    /// Horizontal separator above the button row / first button.
-    private let topSeparator = UIView()
-    /// Dividers between buttons (horizontal for 2-button row, vertical for stacked).
-    private var buttonSeparators: [UIView] = []
-    private var buttonViews: [CrystalAlertButtonView] = []
+    /// One `FieldRow` per configured text field — a pill-shaped 52pt tall
+    /// input group. Stacked vertically with 8pt between them.
+    private struct FieldRow {
+        let container: UIView
+        let label: UILabel?
+        let input: UITextField
+        let divider: UIView
+    }
+    private var fieldRows: [FieldRow] = []
+    private var buttonViews: [CrystalAlertPillButton] = []
 
-    private static let cardWidth: CGFloat = 270.0
-    private static let cardCornerRadius: CGFloat = 14.0
+    /// Tuning constants — match the iOS 26 system alert proportions from
+    /// the design reference the caller provided.
+    private static let cardWidth: CGFloat = 300.0
+    private static let cardCornerRadius: CGFloat = 28.0
     private static let horizontalPadding: CGFloat = 16.0
-    private static let topPadding: CGFloat = 19.0
-    private static let bottomPaddingBeforeButtons: CGFloat = 16.0
-    private static let buttonHeight: CGFloat = 44.0
+    private static let topPadding: CGFloat = 18.0
+    private static let titleToMessageSpacing: CGFloat = 4.0
+    private static let messageToFieldSpacing: CGFloat = 16.0
+    private static let fieldToButtonsSpacing: CGFloat = 16.0
+    private static let messageToButtonsSpacing: CGFloat = 18.0
+    private static let bottomPadding: CGFloat = 12.0
+    private static let buttonHeight: CGFloat = 50.0
+    private static let buttonSpacing: CGFloat = 8.0
+    /// Per-field pill height. User-requested 52pt (was 62pt).
+    private static let fieldHeight: CGFloat = 52.0
+    private static let fieldSpacing: CGFloat = 8.0
 
-    init(theme: CrystalAlertTheme, title: String?, message: String?, actions: [CrystalAlertAction]) {
+    init(
+        theme: CrystalAlertTheme,
+        title: String?,
+        message: String?,
+        actions: [CrystalAlertAction],
+        textFields: [CrystalAlertTextField]
+    ) {
         self.theme = theme
         self.title = title
         self.message = message
         self.actions = actions
+        self.textFieldConfigs = textFields
 
         let effect = SystemGlassEffect.make(style: .regular, isDark: theme.backgroundType == .dark)
         self.blurView = UIVisualEffectView(effect: effect)
-
         self.card = UIView()
         super.init(frame: .zero)
 
-        dimView.backgroundColor = theme.dimColor
+        // Start everything hidden so the first frame after present is
+        // already invisible — animateIn() then animates into view. This
+        // fixes the "double-appearance" flicker that a UIKit crossDissolve
+        // + our own fade were causing together.
         dimView.alpha = 0.0
+        card.alpha = 0.0
+        card.transform = CGAffineTransform(scaleX: 1.08, y: 1.08)
+
+        dimView.backgroundColor = theme.dimColor
         let tap = UITapGestureRecognizer(target: self, action: #selector(dimTapped))
         dimView.addGestureRecognizer(tap)
         addSubview(dimView)
 
-        // Corner-rounded card. On iOS 26+ UIGlassEffect paints its own
-        // refraction/specular/tint — the `tintOverlay` stays transparent so
-        // we don't double-dim. On iOS <26 the tintOverlay carries the
-        // dialog color.
         card.layer.cornerRadius = Self.cardCornerRadius
         card.layer.cornerCurve = .continuous
         card.layer.masksToBounds = true
@@ -171,25 +226,26 @@ final class CrystalAlertRootView: UIView {
         }
         card.addSubview(tintOverlay)
 
-        titleLabel.textAlignment = .center
+        titleLabel.textAlignment = .left
         titleLabel.numberOfLines = 0
         titleLabel.textColor = theme.primaryColor
-        titleLabel.font = .systemFont(ofSize: floor(theme.baseFontSize * 17.0 / 17.0), weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: floor(theme.baseFontSize), weight: .semibold)
         titleLabel.text = title
         card.addSubview(titleLabel)
 
-        messageLabel.textAlignment = .center
+        messageLabel.textAlignment = .left
         messageLabel.numberOfLines = 0
         messageLabel.textColor = theme.primaryColor
-        messageLabel.font = .systemFont(ofSize: floor(theme.baseFontSize * 13.0 / 17.0))
+        messageLabel.font = .systemFont(ofSize: floor(theme.baseFontSize * 15.0 / 17.0))
         messageLabel.text = message
         card.addSubview(messageLabel)
 
-        topSeparator.backgroundColor = theme.separatorColor
-        card.addSubview(topSeparator)
+        for config in textFields {
+            fieldRows.append(installFieldRow(config: config))
+        }
 
         for action in actions {
-            let button = CrystalAlertButtonView(action: action, theme: theme)
+            let button = CrystalAlertPillButton(action: action, theme: theme)
             button.tapped = { [weak self] a in self?.actionTriggered(a) }
             buttonViews.append(button)
             card.addSubview(button)
@@ -200,14 +256,63 @@ final class CrystalAlertRootView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private func installFieldRow(config: CrystalAlertTextField) -> FieldRow {
+        let container = UIView()
+        container.backgroundColor = theme.pillFillColor
+        container.layer.cornerRadius = 12.0
+        container.layer.cornerCurve = .continuous
+        container.layer.masksToBounds = true
+        card.addSubview(container)
+
+        var labelView: UILabel?
+        if let labelText = config.label, !labelText.isEmpty {
+            let label = UILabel()
+            label.text = labelText
+            label.font = .systemFont(ofSize: 13.0, weight: .semibold)
+            label.textColor = theme.primaryColor
+            container.addSubview(label)
+            labelView = label
+        }
+
+        let divider = UIView()
+        divider.backgroundColor = theme.separatorColor
+        container.addSubview(divider)
+
+        let field = UITextField()
+        field.placeholder = config.placeholder
+        field.text = config.initialText
+        field.isSecureTextEntry = config.isSecureTextEntry
+        field.keyboardType = config.keyboardType
+        field.textColor = theme.primaryColor
+        field.font = .systemFont(ofSize: 15.0)
+        field.borderStyle = .none
+        field.addTarget(self, action: #selector(fieldEditingChanged(_:)), for: .editingChanged)
+        container.addSubview(field)
+
+        return FieldRow(container: container, label: labelView, input: field, divider: divider)
+    }
+
+    func textFieldValue(at index: Int) -> String? {
+        guard fieldRows.indices.contains(index) else { return nil }
+        return fieldRows[index].input.text
+    }
+
     func applyTheme(_ theme: CrystalAlertTheme) {
         self.theme = theme
         dimView.backgroundColor = theme.dimColor
-        tintOverlay.backgroundColor = theme.backgroundColor
+        if GlassCompatibility.isLiquidDesignAvailable {
+            tintOverlay.backgroundColor = .clear
+        } else {
+            tintOverlay.backgroundColor = theme.backgroundColor
+        }
         titleLabel.textColor = theme.primaryColor
         messageLabel.textColor = theme.primaryColor
-        topSeparator.backgroundColor = theme.separatorColor
-        buttonSeparators.forEach { $0.backgroundColor = theme.separatorColor }
+        for row in fieldRows {
+            row.container.backgroundColor = theme.pillFillColor
+            row.label?.textColor = theme.primaryColor
+            row.input.textColor = theme.primaryColor
+            row.divider.backgroundColor = theme.separatorColor
+        }
         buttonViews.forEach { $0.applyTheme(theme) }
     }
 
@@ -226,55 +331,102 @@ final class CrystalAlertRootView: UIView {
         let cardWidth = Self.cardWidth
         let innerWidth = cardWidth - Self.horizontalPadding * 2
 
-        var contentHeight: CGFloat = 0
+        var y: CGFloat = Self.topPadding
 
-        if title != nil {
+        if let title, !title.isEmpty {
             let fit = titleLabel.sizeThatFits(CGSize(width: innerWidth, height: .greatestFiniteMagnitude))
-            contentHeight += Self.topPadding
-            titleLabel.frame = CGRect(x: Self.horizontalPadding, y: contentHeight, width: innerWidth, height: fit.height)
-            contentHeight += fit.height
-        } else {
-            contentHeight += Self.topPadding
+            titleLabel.frame = CGRect(x: Self.horizontalPadding, y: y, width: innerWidth, height: fit.height)
+            y += fit.height
         }
 
         if let message, !message.isEmpty {
+            if title?.isEmpty == false { y += Self.titleToMessageSpacing }
             let fit = messageLabel.sizeThatFits(CGSize(width: innerWidth, height: .greatestFiniteMagnitude))
-            let topGap: CGFloat = title == nil ? 0 : 4.0
-            contentHeight += topGap
-            messageLabel.frame = CGRect(x: Self.horizontalPadding, y: contentHeight, width: innerWidth, height: fit.height)
-            contentHeight += fit.height
+            messageLabel.frame = CGRect(x: Self.horizontalPadding, y: y + 4, width: innerWidth, height: fit.height)
+            y += fit.height
         }
-        contentHeight += Self.bottomPaddingBeforeButtons
 
-        // Buttons: side-by-side when exactly 2 short actions, otherwise stacked.
-        // Remove any previously-added separators so we can rebuild cleanly.
-        buttonSeparators.forEach { $0.removeFromSuperview() }
-        buttonSeparators.removeAll()
+        if !fieldRows.isEmpty {
+            y += Self.messageToFieldSpacing
+            let hInset: CGFloat = 12.0
 
-        let buttonAreaY = contentHeight
-        topSeparator.frame = CGRect(x: 0, y: buttonAreaY, width: cardWidth, height: 1.0 / UIScreen.main.scale)
+            for (index, row) in fieldRows.enumerated() {
+                row.container.frame = CGRect(
+                    x: Self.horizontalPadding,
+                    y: y,
+                    width: innerWidth,
+                    height: Self.fieldHeight
+                )
+                let contentWidth = innerWidth - hInset * 2
 
-        let buttonCount = buttonViews.count
-        let cardHeight: CGFloat
-        if buttonCount == 2 {
-            let halfWidth = cardWidth / 2
-            buttonViews[0].frame = CGRect(x: 0, y: buttonAreaY, width: halfWidth, height: Self.buttonHeight)
-            buttonViews[1].frame = CGRect(x: halfWidth, y: buttonAreaY, width: cardWidth - halfWidth, height: Self.buttonHeight)
-            let vSep = addFreshSeparator()
-            vSep.frame = CGRect(x: halfWidth, y: buttonAreaY, width: 1.0 / UIScreen.main.scale, height: Self.buttonHeight)
-            cardHeight = buttonAreaY + Self.buttonHeight
-        } else {
-            var y = buttonAreaY
-            for (index, button) in buttonViews.enumerated() {
-                button.frame = CGRect(x: 0, y: y, width: cardWidth, height: Self.buttonHeight)
-                y += Self.buttonHeight
-                if index < buttonViews.count - 1 {
-                    let sep = addFreshSeparator()
-                    sep.frame = CGRect(x: 0, y: y - 1.0 / UIScreen.main.scale, width: cardWidth, height: 1.0 / UIScreen.main.scale)
+                // When a label is present we lay it out in the top half and
+                // the text field in the bottom half, with a subtle divider
+                // between. Without a label the input centers vertically.
+                if let label = row.label {
+                    let labelHeight: CGFloat = 16.0
+                    label.frame = CGRect(
+                        x: hInset,
+                        y: 6,
+                        width: contentWidth,
+                        height: labelHeight
+                    )
+                    row.divider.frame = CGRect(
+                        x: hInset,
+                        y: 6 + labelHeight + 4,
+                        width: contentWidth,
+                        height: 1.0 / UIScreen.main.scale
+                    )
+                    row.divider.isHidden = false
+                    row.input.frame = CGRect(
+                        x: hInset,
+                        y: 6 + labelHeight + 6,
+                        width: contentWidth,
+                        height: Self.fieldHeight - (6 + labelHeight + 6) - 4
+                    )
+                } else {
+                    row.divider.isHidden = true
+                    row.input.frame = CGRect(
+                        x: hInset,
+                        y: 0,
+                        width: contentWidth,
+                        height: Self.fieldHeight
+                    )
+                }
+
+                y += Self.fieldHeight
+                if index < fieldRows.count - 1 {
+                    y += Self.fieldSpacing
                 }
             }
-            cardHeight = y
+            y += Self.fieldToButtonsSpacing
+        } else {
+            y += Self.messageToButtonsSpacing
         }
+
+        // Buttons: 2 actions lay out side-by-side; 3+ stack vertically. Each
+        // button is its own pill with an 8pt gap.
+        let buttonCount = buttonViews.count
+        if buttonCount == 2 {
+            let halfWidth = floor((innerWidth - Self.buttonSpacing) / 2)
+            buttonViews[0].frame = CGRect(x: Self.horizontalPadding, y: y, width: halfWidth, height: Self.buttonHeight)
+            buttonViews[1].frame = CGRect(
+                x: Self.horizontalPadding + halfWidth + Self.buttonSpacing,
+                y: y,
+                width: innerWidth - halfWidth - Self.buttonSpacing,
+                height: Self.buttonHeight
+            )
+            y += Self.buttonHeight
+        } else {
+            for (index, button) in buttonViews.enumerated() {
+                button.frame = CGRect(x: Self.horizontalPadding, y: y, width: innerWidth, height: Self.buttonHeight)
+                y += Self.buttonHeight
+                if index < buttonViews.count - 1 {
+                    y += Self.buttonSpacing
+                }
+            }
+        }
+        y += Self.bottomPadding
+        let cardHeight = y
 
         card.frame = CGRect(
             x: floor((size.width - cardWidth) / 2),
@@ -286,54 +438,47 @@ final class CrystalAlertRootView: UIView {
         tintOverlay.frame = card.bounds
     }
 
-    private func addFreshSeparator() -> UIView {
-        let view = UIView()
-        view.backgroundColor = theme.separatorColor
-        card.addSubview(view)
-        buttonSeparators.append(view)
-        return view
-    }
-
     // MARK: Animation
 
     func animateIn() {
+        // Initial hidden state was set in init() so the very first frame
+        // after attach is invisible — no flicker. Here we only play forward.
         layoutIfNeeded()
-        card.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
-        card.alpha = 0.0
-        dimView.alpha = 0.0
         UIView.animate(
-            withDuration: 0.22,
+            withDuration: 0.24,
             delay: 0,
-            options: [.curveEaseOut, .allowUserInteraction],
-            animations: {
-                self.dimView.alpha = 1.0
-                self.card.alpha = 1.0
-                self.card.transform = .identity
-            }
-        )
+            options: [.curveEaseOut, .allowUserInteraction]
+        ) {
+            self.dimView.alpha = 1.0
+            self.card.alpha = 1.0
+            self.card.transform = .identity
+        }
     }
 
     func animateOut(completion: @escaping () -> Void) {
         UIView.animate(
             withDuration: 0.18,
             delay: 0,
-            options: [.curveEaseIn, .beginFromCurrentState],
-            animations: {
-                self.dimView.alpha = 0.0
-                self.card.alpha = 0.0
-            },
-            completion: { _ in completion() }
-        )
+            options: [.curveEaseIn, .beginFromCurrentState]
+        ) {
+            self.dimView.alpha = 0.0
+            self.card.alpha = 0.0
+        } completion: { _ in completion() }
     }
 
     @objc private func dimTapped() {
         outsideTap()
     }
+
+    @objc private func fieldEditingChanged(_ sender: UITextField) {
+        guard let index = fieldRows.firstIndex(where: { $0.input === sender }) else { return }
+        textFieldConfigs[index].onChanged(sender.text ?? "")
+    }
 }
 
-// MARK: - Button
+// MARK: - Pill button
 
-final class CrystalAlertButtonView: UIControl {
+final class CrystalAlertPillButton: UIControl {
     var tapped: (CrystalAlertAction) -> Void = { _ in }
 
     private let action: CrystalAlertAction
@@ -344,6 +489,9 @@ final class CrystalAlertButtonView: UIControl {
         self.action = action
         self.theme = theme
         super.init(frame: .zero)
+
+        layer.cornerCurve = .continuous
+        layer.masksToBounds = true
 
         label.textAlignment = .center
         label.isUserInteractionEnabled = false
@@ -360,36 +508,53 @@ final class CrystalAlertButtonView: UIControl {
 
     func applyTheme(_ theme: CrystalAlertTheme) {
         self.theme = theme
-        let size = floor(theme.baseFontSize * 17.0 / 17.0)
-        let font: UIFont
-        switch action.style {
-        case .default:        font = .systemFont(ofSize: size)
-        case .defaultFocused: font = .systemFont(ofSize: size, weight: .semibold)
-        case .destructive:    font = .systemFont(ofSize: size)
-        }
-        let color: UIColor
+        let size: CGFloat = floor(theme.baseFontSize)
+        label.font = .systemFont(ofSize: size, weight: .semibold)
+
+        let textColor: UIColor
         if !action.enabled {
-            color = theme.disabledColor
+            textColor = theme.disabledColor
         } else {
             switch action.style {
-            case .default, .defaultFocused: color = theme.accentColor
-            case .destructive:              color = theme.destructiveColor
+            case .primary:     textColor = theme.primaryTextColor
+            case .secondary:   textColor = theme.primaryColor
+            case .destructive: textColor = theme.destructiveColor
             }
         }
-        label.font = font
-        label.textColor = color
+        label.textColor = textColor
         label.text = action.title
+
+        backgroundColor = idleBackgroundColor()
+    }
+
+    private func idleBackgroundColor() -> UIColor {
+        switch action.style {
+        case .primary:      return theme.primaryFillColor
+        case .secondary:    return theme.pillFillColor
+        case .destructive:  return theme.pillFillColor
+        }
     }
 
     override var isHighlighted: Bool {
         didSet {
-            backgroundColor = isHighlighted ? theme.highlightedItemColor : .clear
+            guard action.enabled else { return }
+            if isHighlighted {
+                let base = idleBackgroundColor()
+                // Slight darken for primary, slight lighten for grey.
+                backgroundColor = action.style == .primary
+                    ? base.withAlphaComponent(0.8)
+                    : theme.highlightedItemColor
+            } else {
+                backgroundColor = idleBackgroundColor()
+            }
         }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        label.frame = bounds
+        // Capsule — radius = half height.
+        layer.cornerRadius = bounds.height / 2
+        label.frame = bounds.insetBy(dx: 8, dy: 0)
     }
 
     @objc private func tapAction() {
