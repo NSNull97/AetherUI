@@ -17,9 +17,6 @@
 		85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */ = {isa = PBXBuildFile; productRef = DE84E8C9EFA75757CBA85F05 /* CrystalUI */; };
 		AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67979B086750BD69A85512EA /* SceneDelegate.swift */; };
 		B48B045944A8D7A98293591F /* ShowcaseAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */; };
-		D73E52D72F99063000881B74 /* ShowcaseGlassDemos.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73E52D52F99063000881B74 /* ShowcaseGlassDemos.swift */; };
-		D73E52D82F99063000881B74 /* ShowcaseHomeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73E52D62F99063000881B74 /* ShowcaseHomeController.swift */; };
-		D73E52D92F99063000881B74 /* ShowcaseDemoControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73E52D42F99063000881B74 /* ShowcaseDemoControllers.swift */; };
 		DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */; };
 		F31777F1267E57763A01C9D5 /* ShowcaseGlassDemos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2CEE69827AF78B4DCE5ABF /* ShowcaseGlassDemos.swift */; };
 		F48DAA9463CDAD7AB3431B95 /* ShowcaseHomeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */; };
@@ -39,10 +36,7 @@
 		AF990EAAEBDE00F908EE46B8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseHomeController.swift; sourceTree = "<group>"; };
 		C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListExampleController.swift; sourceTree = "<group>"; };
-		D73E52D42F99063000881B74 /* ShowcaseDemoControllers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseDemoControllers.swift; sourceTree = "<group>"; };
-		D73E52D52F99063000881B74 /* ShowcaseGlassDemos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseGlassDemos.swift; sourceTree = "<group>"; };
-		D73E52D62F99063000881B74 /* ShowcaseHomeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseHomeController.swift; sourceTree = "<group>"; };
-		DF0BD18BD916ECDB7A099607 /* Showcase.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Showcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF0BD18BD916ECDB7A099607 /* Showcase.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Showcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F6FE7BF0248FC2FF22A10D63 /* Example.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Example.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerPackModalController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -87,9 +81,6 @@
 		4F160DA0426D18FD4DFD3610 /* Example */ = {
 			isa = PBXGroup;
 			children = (
-				D73E52D42F99063000881B74 /* ShowcaseDemoControllers.swift */,
-				D73E52D52F99063000881B74 /* ShowcaseGlassDemos.swift */,
-				D73E52D62F99063000881B74 /* ShowcaseHomeController.swift */,
 				A263B39369367A3901B6B7C0 /* AppDelegate.swift */,
 				4FCF5A3C4057F95C955313DC /* ChatDetailExampleController.swift */,
 				C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */,
@@ -177,6 +168,9 @@
 					9878B5EABC7D83477291BAFC = {
 						ProvisioningStyle = Automatic;
 					};
+					AF7B460D32139ADE97D46242 = {
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 36FC72E69D906F48675C62BF /* Build configuration list for PBXProject "Example" */;
@@ -223,9 +217,6 @@
 				0313659249D2A7A4F56EBBD1 /* ChatDetailExampleController.swift in Sources */,
 				DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */,
 				38D5EB265EDF1E51D52D192D /* OtherExampleControllers.swift in Sources */,
-				D73E52D72F99063000881B74 /* ShowcaseGlassDemos.swift in Sources */,
-				D73E52D82F99063000881B74 /* ShowcaseHomeController.swift in Sources */,
-				D73E52D92F99063000881B74 /* ShowcaseDemoControllers.swift in Sources */,
 				AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */,
 				67F868D818DE9331D00ED8D4 /* StickerPackModalController.swift in Sources */,
 			);
@@ -238,11 +229,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = YES;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Showcase/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -251,7 +241,6 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.showcase;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -362,11 +351,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = YES;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Showcase/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -375,7 +363,6 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.showcase;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
