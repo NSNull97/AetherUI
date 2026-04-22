@@ -157,9 +157,9 @@ public final class TabBarView: UIView {
             searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            // Show keyboard simultaneously with the morph animation
-            searchTextField?.becomeFirstResponder()
-            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
+            // Keyboard is deliberately NOT raised here — the morph animation
+            // should play first. Tap inside the expanded field to raise it.
+            UIView.animate(withDuration: 1.0, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
                 self.searchTabCircle?.transform = .identity
@@ -172,7 +172,6 @@ public final class TabBarView: UIView {
             positionSearchViewsExpanded()
             tabBarGlassContainer.alpha = 0.0
             searchDimView?.alpha = 1.0
-            searchTextField?.becomeFirstResponder()
         }
     }
 
