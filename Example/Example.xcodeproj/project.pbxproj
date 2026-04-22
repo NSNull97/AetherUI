@@ -15,6 +15,7 @@
 		41C43241AE1620FC8A0606FF /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A263B39369367A3901B6B7C0 /* AppDelegate.swift */; };
 		67F868D818DE9331D00ED8D4 /* StickerPackModalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */; };
 		85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */ = {isa = PBXBuildFile; productRef = DE84E8C9EFA75757CBA85F05 /* CrystalUI */; };
+		99605BDC71A28F118F7A8052 /* CollectionDemoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */; };
 		AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67979B086750BD69A85512EA /* SceneDelegate.swift */; };
 		B48B045944A8D7A98293591F /* ShowcaseAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */; };
 		DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */; };
@@ -31,6 +32,7 @@
 		6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseAppDelegate.swift; sourceTree = "<group>"; };
 		6E2CEE69827AF78B4DCE5ABF /* ShowcaseGlassDemos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseGlassDemos.swift; sourceTree = "<group>"; };
 		8F23D033EDBF5E7D2A1F1B97 /* distracted-varahamihira-a41bb9 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "distracted-varahamihira-a41bb9"; path = ..; sourceTree = SOURCE_ROOT; };
+		8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionDemoController.swift; sourceTree = "<group>"; };
 		A263B39369367A3901B6B7C0 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A70CCE019BA3AE518E7FE7F3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AF990EAAEBDE00F908EE46B8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -95,6 +97,7 @@
 		507F0BFC3D6E9840223362CB /* Showcase */ = {
 			isa = PBXGroup;
 			children = (
+				8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */,
 				AF990EAAEBDE00F908EE46B8 /* Info.plist */,
 				6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */,
 				5220221CC3BAF59E918E63B9 /* ShowcaseDemoControllers.swift */,
@@ -201,6 +204,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				99605BDC71A28F118F7A8052 /* CollectionDemoController.swift in Sources */,
 				B48B045944A8D7A98293591F /* ShowcaseAppDelegate.swift in Sources */,
 				31C76CD054820E4DCD5E1255 /* ShowcaseDemoControllers.swift in Sources */,
 				F31777F1267E57763A01C9D5 /* ShowcaseGlassDemos.swift in Sources */,

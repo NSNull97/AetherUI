@@ -70,7 +70,8 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 title: "Навигация",
                 rows: [
                     ("Toolbar", "нижняя панель кнопок", { ToolbarDemoController() }),
-                    ("Modal", "bottom-sheet detents", { ModalDemoController() })
+                    ("Modal", "bottom-sheet detents", { ModalDemoController() }),
+                    ("Collection", "grid со скроллом (для тест тулбара)", { CollectionDemoController() })
                 ]
             ),
             item: UITabBarItem(
