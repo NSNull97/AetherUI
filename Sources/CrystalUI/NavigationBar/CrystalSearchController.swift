@@ -275,7 +275,8 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             close.alpha = 1
             close.transform = .identity
         } completion: { [weak self] _ in
-            self?.delegate?.searchControllerDidActivate(self!)
+            guard let self else { return }
+            self.delegate?.searchControllerDidActivate(self)
         }
     }
 
@@ -292,9 +293,10 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             self.closeButton?.alpha = 0
             self.closeButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         } completion: { [weak self] _ in
-            self?.closeButton?.removeFromSuperview()
-            self?.closeButton = nil
-            self?.delegate?.searchControllerDidDeactivate(self!)
+            guard let self else { return }
+            self.closeButton?.removeFromSuperview()
+            self.closeButton = nil
+            self.delegate?.searchControllerDidDeactivate(self)
         }
     }
 
@@ -413,7 +415,8 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             close.alpha = 1
             close.transform = .identity
         } completion: { [weak self] _ in
-            self?.delegate?.searchControllerDidActivate(self!)
+            guard let self else { return }
+            self.delegate?.searchControllerDidActivate(self)
         }
     }
 
@@ -425,13 +428,14 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
             self.closeButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             self.layoutBottomPill(in: vc.view)
         } completion: { [weak self] _ in
-            self?.textField?.removeFromSuperview()
-            self?.textField = nil
-            self?.closeButton?.removeFromSuperview()
-            self?.closeButton = nil
-            self?.bottomPillIcon?.isHidden = false
-            self?.bottomPillLabel?.isHidden = false
-            self?.delegate?.searchControllerDidDeactivate(self!)
+            guard let self else { return }
+            self.textField?.removeFromSuperview()
+            self.textField = nil
+            self.closeButton?.removeFromSuperview()
+            self.closeButton = nil
+            self.bottomPillIcon?.isHidden = false
+            self.bottomPillLabel?.isHidden = false
+            self.delegate?.searchControllerDidDeactivate(self)
         }
     }
 
