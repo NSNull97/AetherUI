@@ -168,10 +168,20 @@ public final class TabBarView: UIView {
                 initialSpringVelocity: 0.3,
                 options: [.beginFromCurrentState]
             ) {
-                // Shrink glass container to the left-edge circle.
+                // Shrink the outer container first…
                 self.tabBarGlassContainer.frame = circleFrame
-                // Move the active item to the center of that circle; fade
-                // the rest out. Lens/showcase disappear too — they'll be
+                // …then ask the container to resize its native glass
+                // subview *inside* the same animation block. `.immediate`
+                // inside UIView.animate makes the raw `view.frame = rect`
+                // setter the animation target, so UIKit's implicit
+                // animation picks it up and interpolates.
+                self.tabBarGlassContainer.update(
+                    size: circleFrame.size,
+                    isDark: self.isEffectivelyDark,
+                    transition: .immediate
+                )
+                // Move the active item to the center of the new bounds;
+                // fade the rest. Lens + showcase disappear — they'll be
                 // replaced by the search capsule in the next step.
                 for (index, view) in self.itemViews.enumerated() {
                     if index == self.selectedIndex {
@@ -186,11 +196,6 @@ public final class TabBarView: UIView {
             } completion: { _ in
                 self.isSearchAnimating = false
             }
-            tabBarGlassContainer.update(
-                size: circleFrame.size,
-                isDark: isEffectivelyDark,
-                transition: .animated(duration: 1.0, curve: .spring)
-            )
         } else {
             tabBarGlassContainer.frame = circleFrame
             tabBarGlassContainer.update(
