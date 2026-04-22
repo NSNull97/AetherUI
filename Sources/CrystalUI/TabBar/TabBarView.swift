@@ -161,6 +161,11 @@ public final class TabBarView: UIView {
         let circleFrame = activeTabCircleFrame()
 
         if animated {
+            // Animate the container's outer frame in UIView.animate AND
+            // drive the internal native-effect resize via the container's
+            // own transition — otherwise the outer border moves but the
+            // UIGlassContainerEffect inside snaps to the final size
+            // instantly (looks like "just a border morph").
             UIView.animate(
                 withDuration: 1.0,
                 delay: 0,
@@ -169,14 +174,14 @@ public final class TabBarView: UIView {
                 options: [.beginFromCurrentState]
             ) {
                 self.tabBarGlassContainer.frame = circleFrame
-                self.tabBarGlassContainer.update(
-                    size: circleFrame.size,
-                    isDark: self.isEffectivelyDark,
-                    transition: .immediate
-                )
             } completion: { _ in
                 self.isSearchAnimating = false
             }
+            tabBarGlassContainer.update(
+                size: circleFrame.size,
+                isDark: isEffectivelyDark,
+                transition: .animated(duration: 1.0, curve: .spring)
+            )
         } else {
             tabBarGlassContainer.frame = circleFrame
             tabBarGlassContainer.update(
