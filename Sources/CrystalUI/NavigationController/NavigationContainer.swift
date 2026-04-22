@@ -249,12 +249,23 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             currentController.view.endEditing(true)
 
         case .changed:
-            transitionCoordinator?.updateProgress(progress, transition: .immediate, completion: {})
+            // Mirror upstream: once the completion animation is in flight,
+            // progress updates would race the coordinator and corrupt the
+            // interpolated frames.
+            if let coordinator = transitionCoordinator, !coordinator.animatingCompletion {
+                coordinator.updateProgress(progress, transition: .immediate, completion: {})
+            }
 
         case .ended, .cancelled:
-            let shouldComplete = progress > 0.3 || velocity.x > 500
+            guard let coordinator = transitionCoordinator, !coordinator.animatingCompletion else {
+                break
+            }
+            // Thresholds match Telegram-iOS: a deliberate 20% drag OR a fast
+            // flick (>1000pt/s). The previous 30%/500pt/s was too easy to
+            // trigger accidentally during vertical-leaning drags.
+            let shouldComplete = progress > 0.2 || velocity.x > 1000
             if shouldComplete {
-                transitionCoordinator?.animateCompletion(velocity: velocity.x) { [weak self] in
+                coordinator.animateCompletion(velocity: velocity.x) { [weak self] in
                     guard let self = self else { return }
                     let removed = self.controllers.removeLast()
                     removed.view.removeFromSuperview()
@@ -262,7 +273,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                     self.controllerRemoved?(removed)
                 }
             } else {
-                transitionCoordinator?.animateCancel { [weak self] in
+                coordinator.animateCancel { [weak self] in
                     guard let self = self else { return }
                     let previousController = self.controllers[self.controllers.count - 2]
                     previousController.view.removeFromSuperview()

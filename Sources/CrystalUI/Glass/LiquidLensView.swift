@@ -255,7 +255,11 @@ public final class LiquidLensView: UIView {
             setNativeInt(on: lensView, selectorName: "setLiftedContentMode:", value: 1)
             setNativeInt(on: lensView, selectorName: "setStyle:", value: 1)
             setNativeBool(on: lensView, selectorName: "setWarpsContentBelow:", value: true)
-            lensView.setValue(UIColor(white: 0.0, alpha: 0.0), forKey: "restingBackgroundColor")
+            // Match Telegram-iOS LiquidLensView: a soft resting tint (alpha 0.1)
+            // so the capsule has a faint visible body even in the non-lifted
+            // state. Full transparency made the selection dissolve entirely
+            // when the underlying content was low-contrast.
+            lensView.setValue(UIColor(white: 0.0, alpha: 0.1), forKey: "restingBackgroundColor")
         } else {
             let legacySelectionView = GlassBackgroundView.ContentImageView()
             self.legacySelectionView = legacySelectionView

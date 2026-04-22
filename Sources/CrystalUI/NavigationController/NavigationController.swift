@@ -221,8 +221,17 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     // MARK: - Navigation Stack
 
     public func setViewControllers(_ viewControllers: [ViewController], animated: Bool = true) {
-        _viewControllers = viewControllers
-        wireControllers(viewControllers)
+        // Match Telegram-iOS: silently drop duplicates rather than letting the
+        // same controller appear twice in the stack (that guarantees broken
+        // back-stack state — a single controller can't be its own previous).
+        var deduped: [ViewController] = []
+        deduped.reserveCapacity(viewControllers.count)
+        for controller in viewControllers where !deduped.contains(where: { $0 === controller }) {
+            deduped.append(controller)
+        }
+
+        _viewControllers = deduped
+        wireControllers(deduped)
 
         if let layout = currentLayoutForComputation() {
             updateVisibleContainers(layout: layout, transition: transitionForUpdate(animated: animated))
