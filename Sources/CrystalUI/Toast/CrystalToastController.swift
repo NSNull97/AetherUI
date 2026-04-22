@@ -412,20 +412,28 @@ final class CrystalToastRootView: UIView {
     }
 
     func animateOut(completion: @escaping () -> Void) {
-        // Travel distance is computed from card.bounds (non-transformed —
-        // reflects the laid-out size only), NOT from card.frame (which is
-        // transform-aware and would return mid-flight values while
-        // animateIn is still running). Plus a safety margin so the card
-        // clears any home-indicator / safe-area overshoot.
-        //
-        // `.beginFromCurrentState` means the animation smoothly continues
-        // from wherever animateIn had the card in-flight — no "jump back
-        // to rest position then slide down" glitch.
+        // Snapshot the presentation-layer state (the *rendered* transform
+        // and opacity, valid even mid-flight through a spring). Commit
+        // that snapshot as the model-layer state and cancel all in-flight
+        // animations. This pins the card visually exactly where it is —
+        // no snap back to rest, no `beginFromCurrentState` guesswork.
+        if let presented = card.layer.presentation() {
+            let currentTransform = CATransform3DGetAffineTransform(presented.transform)
+            card.layer.removeAllAnimations()
+            card.transform = currentTransform
+            card.alpha = CGFloat(presented.opacity)
+        } else {
+            card.layer.removeAllAnimations()
+        }
+
+        // Travel target: slide the card fully below the bottom edge.
+        // Computed from bounds (size) + safe area + margin — transform
+        // independent, so the target is stable regardless of the snapshot.
         let travel = card.bounds.height + safeAreaInsets.bottom + Self.bottomMargin + 8.0
         UIView.animate(
             withDuration: 0.22,
             delay: 0,
-            options: [.curveEaseIn, .beginFromCurrentState]
+            options: [.curveEaseIn]
         ) {
             self.card.alpha = 0.0
             self.card.transform = CGAffineTransform(translationX: 0, y: travel)
