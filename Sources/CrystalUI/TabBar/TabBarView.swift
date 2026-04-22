@@ -235,7 +235,10 @@ public final class TabBarView: UIView {
         tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
         let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
         icon.tintColor = .secondaryLabel
-        icon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        // Widen the leftView beyond the icon size so there's breathing
+        // room between the magnifier glyph and the placeholder text. The
+        // icon stays horizontally centered in that wider slot.
+        icon.frame = CGRect(x: 0, y: 0, width: 36, height: 20)
         icon.contentMode = .center
         tf.leftView = icon
         tf.leftViewMode = .always
