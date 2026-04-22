@@ -142,7 +142,7 @@ final class CrystalAlertRootView: UIView {
         self.message = message
         self.actions = actions
 
-        let effect = UIBlurEffect(style: theme.backgroundType == .light ? .systemMaterialLight : .systemMaterialDark)
+        let effect = SystemGlassEffect.make(style: .regular, isDark: theme.backgroundType == .dark)
         self.blurView = UIVisualEffectView(effect: effect)
 
         self.card = UIView()
@@ -154,13 +154,21 @@ final class CrystalAlertRootView: UIView {
         dimView.addGestureRecognizer(tap)
         addSubview(dimView)
 
+        // Corner-rounded card. On iOS 26+ UIGlassEffect paints its own
+        // refraction/specular/tint — the `tintOverlay` stays transparent so
+        // we don't double-dim. On iOS <26 the tintOverlay carries the
+        // dialog color.
         card.layer.cornerRadius = Self.cardCornerRadius
         card.layer.cornerCurve = .continuous
         card.layer.masksToBounds = true
         addSubview(card)
 
         card.addSubview(blurView)
-        tintOverlay.backgroundColor = theme.backgroundColor
+        if GlassCompatibility.isLiquidDesignAvailable {
+            tintOverlay.backgroundColor = .clear
+        } else {
+            tintOverlay.backgroundColor = theme.backgroundColor
+        }
         card.addSubview(tintOverlay)
 
         titleLabel.textAlignment = .center

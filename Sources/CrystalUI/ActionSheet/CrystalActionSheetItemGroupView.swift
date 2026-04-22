@@ -2,7 +2,9 @@ import UIKit
 
 /// Visual container for a single `CrystalActionSheetItemGroup`. Stacks
 /// item views vertically, clips to a continuous-corner rounded rect, and
-/// toggles row separators so the last row has no hairline.
+/// toggles row separators so the last row has no hairline. Card surface
+/// is painted with `UIGlassEffect` on iOS 26+ (liquid glass) and falls
+/// back to a tinted `UIBlurEffect` on older systems.
 final class CrystalActionSheetItemGroupView: UIView {
     var theme: CrystalActionSheetTheme {
         didSet {
@@ -12,14 +14,22 @@ final class CrystalActionSheetItemGroupView: UIView {
 
     private(set) var itemViews: [CrystalActionSheetItemView] = []
 
+    private let blurView: UIVisualEffectView
+
     init(theme: CrystalActionSheetTheme) {
         self.theme = theme
+        self.blurView = UIVisualEffectView(
+            effect: SystemGlassEffect.make(style: .regular, isDark: theme.backgroundType == .dark)
+        )
         super.init(frame: .zero)
 
         layer.cornerRadius = 14.0
         layer.cornerCurve = .continuous
         layer.masksToBounds = true
-        backgroundColor = theme.itemBackgroundColor
+        blurView.frame = bounds
+        blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(blurView)
+        updateTheme()
     }
 
     required init?(coder: NSCoder) {
@@ -53,7 +63,14 @@ final class CrystalActionSheetItemGroupView: UIView {
     }
 
     private func updateTheme() {
-        backgroundColor = theme.itemBackgroundColor
+        // UIGlassEffect paints the card itself — skip the solid tint so
+        // refraction/specular aren't masked out. Legacy UIBlurEffect path
+        // needs the tint so rows read correctly over content behind.
+        if GlassCompatibility.isLiquidDesignAvailable {
+            backgroundColor = .clear
+        } else {
+            backgroundColor = theme.itemBackgroundColor
+        }
     }
 
     /// Layout: stack bottom-to-top with `preferredHeight(constrainedWidth:)`

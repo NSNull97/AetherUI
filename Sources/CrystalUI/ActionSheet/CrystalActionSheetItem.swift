@@ -33,7 +33,15 @@ open class CrystalActionSheetItemView: UIView {
         self.theme = theme
         super.init(frame: .zero)
 
-        backgroundView.backgroundColor = theme.itemBackgroundColor
+        // On iOS 26+ with liquid glass, the group's UIGlassEffect paints
+        // the whole card; row backgrounds stay transparent so content
+        // refraction shows through. On older iOS the row still needs its
+        // own solid tint.
+        if GlassCompatibility.isLiquidDesignAvailable {
+            backgroundView.backgroundColor = .clear
+        } else {
+            backgroundView.backgroundColor = theme.itemBackgroundColor
+        }
         backgroundView.isUserInteractionEnabled = false
         separatorView.backgroundColor = theme.separatorColor
         separatorView.isUserInteractionEnabled = false
@@ -64,7 +72,10 @@ open class CrystalActionSheetItemView: UIView {
 
     /// Called by the controller when arrow-key/enter focus lands on the row.
     open func setHighlighted(_ highlighted: Bool, animated: Bool) {
-        let color = highlighted ? theme.itemHighlightedBackgroundColor : theme.itemBackgroundColor
+        let idle: UIColor = GlassCompatibility.isLiquidDesignAvailable
+            ? .clear
+            : theme.itemBackgroundColor
+        let color = highlighted ? theme.itemHighlightedBackgroundColor : idle
         if animated && !highlighted {
             UIView.animate(withDuration: 0.3) {
                 self.backgroundView.backgroundColor = color

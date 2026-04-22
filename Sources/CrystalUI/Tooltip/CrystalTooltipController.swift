@@ -74,7 +74,7 @@ public final class CrystalTooltipController {
     public var timeout: TimeInterval = 2.0
     public var dismissed: (() -> Void)?
 
-    private weak var hostWindow: UIWindow?
+    private weak var hostView: UIView?
     private var rootView: CrystalTooltipRootView?
     private var dismissWorkItem: DispatchWorkItem?
 
@@ -89,13 +89,16 @@ public final class CrystalTooltipController {
     }
 
     /// Show pointing at the given source view. `sourceRect` defaults to the
-    /// source view's bounds — caller can pass a sub-rect (e.g. of a button
-    /// group). Placement: prefers ABOVE the source unless there's no room,
-    /// then falls back BELOW.
+    /// source view's bounds. Tooltip mounts into the source view's window so
+    /// it floats above modals. Placement: prefers ABOVE the source unless
+    /// there's no room, then falls back BELOW.
     public func present(from sourceView: UIView, sourceRect: CGRect? = nil) {
+        // Mount on the source view's window rather than the top VC's view —
+        // tooltips should outlive modal boundaries so a source deep inside a
+        // presented sheet still gets a tooltip above the sheet chrome.
         guard let window = sourceView.window else { return }
         dismiss(animated: false)
-        hostWindow = window
+        hostView = window
 
         let rect = sourceRect ?? sourceView.bounds
         let globalRect = sourceView.convert(rect, to: nil)
@@ -104,7 +107,9 @@ public final class CrystalTooltipController {
         root.onTapOutside = { [weak self] in self?.dismiss(animated: true) }
         root.onTapInside = { [weak self] in self?.dismiss(animated: true) }
         root.frame = window.bounds
+        root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         window.addSubview(root)
+        window.layoutIfNeeded()
         root.place(pointingTo: globalRect)
         root.animateIn()
         rootView = root
@@ -185,7 +190,9 @@ final class CrystalTooltipRootView: UIView {
             iconView.contentMode = .scaleAspectFit
         }
 
-        card.backgroundColor = theme.backgroundColor
+        // Card painted by UIGlassEffect on iOS 26+; falls back to the
+        // theme's solid background color on older systems. Shadow lives
+        // on the card itself so it extends below the blur view.
         card.layer.cornerRadius = theme.cornerRadius
         card.layer.cornerCurve = .continuous
         card.layer.shadowColor = theme.shadowColor.cgColor
@@ -193,6 +200,22 @@ final class CrystalTooltipRootView: UIView {
         card.layer.shadowRadius = 14.0
         card.layer.shadowOffset = CGSize(width: 0, height: 4)
         addSubview(card)
+
+        let isDark = theme.backgroundColor.isDarkApprox
+        if GlassCompatibility.isLiquidDesignAvailable {
+            card.backgroundColor = .clear
+            let blur = UIVisualEffectView(
+                effect: SystemGlassEffect.make(style: .regular, isDark: isDark)
+            )
+            blur.layer.cornerRadius = theme.cornerRadius
+            blur.layer.cornerCurve = .continuous
+            blur.layer.masksToBounds = true
+            blur.frame = card.bounds
+            blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            card.insertSubview(blur, at: 0)
+        } else {
+            card.backgroundColor = theme.backgroundColor
+        }
         if iconView.image != nil {
             card.addSubview(iconView)
         }
@@ -322,12 +345,11 @@ final class CrystalTooltipRootView: UIView {
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // Only swallow taps on the card/arrow, pass everything else through
-        // so the user can keep interacting with the UI underneath.
-        if card.frame.contains(point) {
-            return super.hitTest(point, with: event)
-        }
-        return nil
+        // Tap on the card goes to the card so its own recognizer fires;
+        // tap anywhere else lands on self so outsideTap runs (and dismisses).
+        // Tooltip is a modal-feeling overlay while shown — underlying UI
+        // taps are swallowed for the short lifetime of the tip.
+        return super.hitTest(point, with: event)
     }
 
     @objc private func cardTapped() {

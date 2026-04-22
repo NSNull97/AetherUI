@@ -98,7 +98,7 @@ public final class CrystalToastController {
     public var timeout: TimeInterval = 3.0
     public var dismissed: (() -> Void)?
 
-    private weak var hostWindow: UIWindow?
+    private weak var hostView: UIView?
     private var rootView: CrystalToastRootView?
     private var dismissWorkItem: DispatchWorkItem?
 
@@ -112,14 +112,14 @@ public final class CrystalToastController {
         self.timeout = timeout
     }
 
-    /// Present in the given window. If `window` is nil, the key window of
-    /// the active foreground scene is used.
-    public func present(in window: UIWindow? = nil) {
-        let targetWindow = window ?? Self.activeKeyWindow()
-        guard let targetWindow else { return }
+    /// Present anchored to a specific parent view. If `parent` is nil, the
+    /// top-most presented view controller's view is used.
+    public func present(in parent: UIView? = nil) {
+        let target = parent ?? Self.topViewController()?.view
+        guard let target else { return }
 
         dismiss(animated: false)
-        hostWindow = targetWindow
+        hostView = target
 
         let root = CrystalToastRootView(content: content, theme: theme)
         root.onTap = { [weak self] in self?.dismiss(animated: true) }
@@ -127,9 +127,18 @@ public final class CrystalToastController {
             handler()
             self?.dismiss(animated: true)
         }
-        root.frame = targetWindow.bounds
-        targetWindow.addSubview(root)
-        root.layoutIfNeeded()
+        root.translatesAutoresizingMaskIntoConstraints = false
+        target.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: target.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: target.trailingAnchor),
+            root.topAnchor.constraint(equalTo: target.topAnchor),
+            root.bottomAnchor.constraint(equalTo: target.bottomAnchor)
+        ])
+        // Force a synchronous layout so the card has a valid frame before
+        // the slide-up animation runs (otherwise animateIn reads a zero
+        // frame and the card never appears).
+        target.layoutIfNeeded()
         root.animateIn()
         rootView = root
 
@@ -156,14 +165,21 @@ public final class CrystalToastController {
         }
     }
 
-    private static func activeKeyWindow() -> UIWindow? {
+    /// Walk the connected-scenes graph to the top-most visible view
+    /// controller (respecting modals). Returns nil when called before any
+    /// window is attached — caller should guard.
+    private static func topViewController() -> UIViewController? {
         for scene in UIApplication.shared.connectedScenes where scene.activationState == .foregroundActive {
-            if let windowScene = scene as? UIWindowScene {
-                if let key = windowScene.windows.first(where: { $0.isKeyWindow }) {
-                    return key
-                }
-                return windowScene.windows.first
+            guard let ws = scene as? UIWindowScene else { continue }
+            let window: UIWindow?
+            if #available(iOS 15.0, *) {
+                window = ws.keyWindow ?? ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first
+            } else {
+                window = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first
             }
+            guard var vc = window?.rootViewController else { continue }
+            while let presented = vc.presentedViewController { vc = presented }
+            return vc
         }
         return nil
     }

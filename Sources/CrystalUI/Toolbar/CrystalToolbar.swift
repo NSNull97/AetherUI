@@ -118,7 +118,7 @@ public final class CrystalToolbarView: UIView {
         self.theme = theme
         self.toolbar = toolbar
         self.blurView = UIVisualEffectView(
-            effect: UIBlurEffect(style: theme.textColor == .white ? .systemMaterialDark : .systemMaterialLight)
+            effect: SystemGlassEffect.make(style: .regular, isDark: theme.textColor == .white)
         )
         super.init(frame: .zero)
 
@@ -140,7 +140,13 @@ public final class CrystalToolbarView: UIView {
     }
 
     private func applyTheme() {
-        tintView.backgroundColor = theme.backgroundColor
+        // On iOS 26+ UIGlassEffect paints the toolbar surface. Skip the
+        // solid tint so the glass refraction shows through.
+        if GlassCompatibility.isLiquidDesignAvailable {
+            tintView.backgroundColor = .clear
+        } else {
+            tintView.backgroundColor = theme.backgroundColor
+        }
         separatorView.backgroundColor = theme.separatorColor
         separatorView.isHidden = !displayTopSeparator
         updateButtons()
