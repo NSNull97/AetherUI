@@ -73,6 +73,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
 
     override func dismissalTransitionWillBegin() {
         super.dismissalTransitionWillBegin()
+        stopSettleLink()
         if let coordinator = presentingViewController.transitionCoordinator {
             coordinator.animate(alongsideTransition: { [weak self] _ in
                 self?.dimView.alpha = 0.0
