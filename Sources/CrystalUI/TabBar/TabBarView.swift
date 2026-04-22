@@ -150,65 +150,96 @@ public final class TabBarView: UIView {
     /// the animation owns it.
     private var isSearchAnimating: Bool = false
 
+    /// Holds the current morph animator so a second call to
+    /// activate/deactivate can cancel the in-flight one cleanly
+    /// instead of layering two UIKit animations on the same properties.
+    private var searchAnimator: UIViewPropertyAnimator?
+
     /// Morph: tab-bar pill → circle-button on the left with the active
-    /// tab's icon inside it (Apple Music style). The search showcase
-    /// pill and close button expand in next steps.
+    /// tab's icon inside it (Apple Music style).
+    ///
+    /// Approach: DON'T animate the container's outer frame (the native
+    /// UIGlassContainerEffect inside doesn't interpolate its glass
+    /// rendering under frame changes — looks like the bar just
+    /// disappears). Instead clip with a CAShapeLayer mask whose `path`
+    /// animates from the full pill rect to a small circle on the left.
+    /// The container visually shrinks even though its frame is unchanged.
+    /// Items inside animate independently: non-active shrink + fade,
+    /// active slides into the circle's center.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
         isSearchAnimating = true
 
-        let circleFrame = activeTabCircleFrame()
+        // Full-width pill rect, container-local coords.
+        let containerBounds = tabBarGlassContainer.bounds
+        // Small circle on the left edge, same vertical center.
+        let h = Self.searchModeHeight
+        let circleInContainer = CGRect(
+            x: 0,
+            y: (containerBounds.height - h) / 2,
+            width: h,
+            height: h
+        )
+
+        // Install a shape-layer mask whose path we can animate.
+        let mask = CAShapeLayer()
+        mask.path = UIBezierPath(
+            roundedRect: containerBounds,
+            cornerRadius: containerBounds.height / 2
+        ).cgPath
+        tabBarGlassContainer.layer.mask = mask
+
+        // Where the active item should land — center of the left circle.
+        let activeTargetCenter = CGPoint(x: circleInContainer.midX, y: circleInContainer.midY)
 
         if animated {
-            UIView.animate(
-                withDuration: 1.0,
-                delay: 0,
-                usingSpringWithDamping: 0.78,
-                initialSpringVelocity: 0.3,
-                options: [.beginFromCurrentState]
+            // Cancel any in-flight morph before starting a new one.
+            searchAnimator?.stopAnimation(true)
+
+            // Animate mask path — CABasicAnimation since UIViewPropertyAnimator
+            // can't animate CAShapeLayer.path either. Its duration/curve
+            // is kept identical to the property animator below so the two
+            // stay in lockstep visually.
+            let finalPath = UIBezierPath(ovalIn: circleInContainer).cgPath
+            let pathAnim = CABasicAnimation(keyPath: "path")
+            pathAnim.fromValue = mask.path
+            pathAnim.toValue = finalPath
+            pathAnim.duration = 1.0
+            pathAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.27, 1.0)
+            mask.path = finalPath
+            mask.add(pathAnim, forKey: "path")
+
+            let animator = UIViewPropertyAnimator(
+                duration: 1.0,
+                dampingRatio: 0.78
             ) {
-                // Shrink the outer container first…
-                self.tabBarGlassContainer.frame = circleFrame
-                // …then ask the container to resize its native glass
-                // subview *inside* the same animation block. `.immediate`
-                // inside UIView.animate makes the raw `view.frame = rect`
-                // setter the animation target, so UIKit's implicit
-                // animation picks it up and interpolates.
-                self.tabBarGlassContainer.update(
-                    size: circleFrame.size,
-                    isDark: self.isEffectivelyDark,
-                    transition: .immediate
-                )
-                // Move the active item to the center of the new bounds;
-                // fade the rest. Lens + showcase disappear — they'll be
-                // replaced by the search capsule in the next step.
                 for (index, view) in self.itemViews.enumerated() {
                     if index == self.selectedIndex {
-                        view.frame = CGRect(origin: .zero, size: circleFrame.size)
-                        view.alpha = 1.0
+                        // Keep size, shift center into the circle.
+                        view.center = activeTargetCenter
                     } else {
                         view.alpha = 0.0
+                        view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
                     }
                 }
                 self.liquidLensView.alpha = 0.0
                 self.searchShowcaseView?.alpha = 0.0
-            } completion: { _ in
-                self.isSearchAnimating = false
             }
+            animator.addCompletion { _ in
+                self.isSearchAnimating = false
+                self.searchAnimator = nil
+            }
+            animator.startAnimation()
+            searchAnimator = animator
         } else {
-            tabBarGlassContainer.frame = circleFrame
-            tabBarGlassContainer.update(
-                size: circleFrame.size,
-                isDark: isEffectivelyDark,
-                transition: .immediate
-            )
+            mask.path = UIBezierPath(ovalIn: circleInContainer).cgPath
             for (index, view) in itemViews.enumerated() {
                 if index == selectedIndex {
-                    view.frame = CGRect(origin: .zero, size: circleFrame.size)
-                    view.alpha = 1.0
+                    view.center = activeTargetCenter
                 } else {
                     view.alpha = 0.0
+                    view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
                 }
             }
             liquidLensView.alpha = 0.0
@@ -232,22 +263,60 @@ public final class TabBarView: UIView {
         isSearchActive = false
         isSearchAnimating = true
 
+        // Recompute a full-pill mask path and restore item frames. The
+        // path animation drives the visible "unfold"; the property
+        // animator unwinds the per-item translate/scale/alpha.
+        let containerBounds = tabBarGlassContainer.bounds
+        let fullPath = UIBezierPath(
+            roundedRect: containerBounds,
+            cornerRadius: containerBounds.height / 2
+        ).cgPath
+
         if animated {
-            UIView.animate(
-                withDuration: 1.0,
-                delay: 0,
-                usingSpringWithDamping: 0.78,
-                initialSpringVelocity: 0.3,
-                options: [.beginFromCurrentState]
+            searchAnimator?.stopAnimation(true)
+
+            if let mask = tabBarGlassContainer.layer.mask as? CAShapeLayer {
+                let pathAnim = CABasicAnimation(keyPath: "path")
+                pathAnim.fromValue = mask.path
+                pathAnim.toValue = fullPath
+                pathAnim.duration = 1.0
+                pathAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0.27, 1.0)
+                mask.path = fullPath
+                mask.add(pathAnim, forKey: "path")
+            }
+
+            let animator = UIViewPropertyAnimator(
+                duration: 1.0,
+                dampingRatio: 0.78
             ) {
-                // Re-run layout math — it recomputes the full-width pill
-                // frame + sub-item frames from current theme + bounds.
+                // Restore item transforms/alphas and re-run the standard
+                // layout math so the pill geometry returns to its full
+                // theme-driven frame.
+                for view in self.itemViews {
+                    view.alpha = 1.0
+                    view.transform = .identity
+                }
+                self.liquidLensView.alpha = 1.0
+                self.searchShowcaseView?.alpha = 1.0
                 self.layoutGlassBackground()
                 self.layoutItemViews()
-            } completion: { _ in
-                self.isSearchAnimating = false
             }
+            animator.addCompletion { _ in
+                self.isSearchAnimating = false
+                self.searchAnimator = nil
+                // Remove the mask once we're back to the full pill.
+                self.tabBarGlassContainer.layer.mask = nil
+            }
+            animator.startAnimation()
+            searchAnimator = animator
         } else {
+            tabBarGlassContainer.layer.mask = nil
+            for view in itemViews {
+                view.alpha = 1.0
+                view.transform = .identity
+            }
+            liquidLensView.alpha = 1.0
+            searchShowcaseView?.alpha = 1.0
             layoutGlassBackground()
             layoutItemViews()
             isSearchAnimating = false
