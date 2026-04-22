@@ -332,11 +332,19 @@ public final class TabBarView: UIView {
     private static let searchRowLift: CGFloat = 12.0
 
     /// End: capsule fills most of the width, circle at the left edge.
+    /// Capsule width depends on whether the close button is visible — if
+    /// it's hidden (field not editing yet) the capsule reclaims that
+    /// trailing space so the placeholder isn't cramped.
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2 - Self.searchRowLift
-        let spacing: CGFloat = 8.0
+        // `searchRowLift` only applies while the field is NOT editing —
+        // once the keyboard is up, the field/row should sit flush with
+        // the bottom insets so the keyboard itself (plus its safe-area
+        // handling) determines vertical placement.
+        let isEditing = searchTextField?.isFirstResponder ?? false
+        let lift = isEditing ? 0 : Self.searchRowLift
+        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2 - lift
 
         updateSearchDimFrame()
 
@@ -344,23 +352,34 @@ public final class TabBarView: UIView {
         let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
         searchTabCircle?.frame = circleFrame
 
-        // Close button (glass circle X) at the right. Alpha stays at its
-        // current value — the field-delegate flips it to 1 when editing
-        // begins, back to 0 when editing ends.
+        // Close button frame is always in its rightmost slot — only alpha
+        // changes when editing begins / ends.
         let closeFrame = CGRect(x: bounds.width - sideInset - h, y: pillY, width: h, height: h)
         searchCloseButton?.frame = closeFrame
 
-        // Capsule between circle and close button
-        let capsuleX = circleFrame.maxX + spacing
-        let capsuleWidth = max(0, closeFrame.minX - capsuleX - spacing)
-        let capsuleFrame = CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
+        let capsuleFrame = capsuleFrameExpanded(pillY: pillY, circleRight: circleFrame.maxX, closeMinX: closeFrame.minX)
         searchCapsule?.frame = capsuleFrame
         searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
                               tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
 
         // Text field inside capsule
-        searchTextField?.frame = CGRect(x: capsuleX + 8, y: pillY, width: max(0, capsuleWidth - 16), height: h)
+        searchTextField?.frame = CGRect(x: capsuleFrame.minX + 8, y: pillY, width: max(0, capsuleFrame.width - 16), height: h)
         searchTextField?.alpha = 1.0
+    }
+
+    /// Capsule's target frame given the current close-button visibility.
+    /// When close is hidden, the capsule stretches all the way to the
+    /// sideInset; when visible, it stops 8pt before the close button.
+    private func capsuleFrameExpanded(pillY: CGFloat, circleRight: CGFloat, closeMinX: CGFloat) -> CGRect {
+        let h = Self.searchModeHeight
+        let spacing: CGFloat = 8.0
+        let capsuleX = circleRight + spacing
+        let closeHidden = (searchCloseButton?.alpha ?? 0) < 0.01
+        let trailing: CGFloat = closeHidden
+            ? (bounds.width - theme.sideInset)
+            : closeMinX - spacing
+        let capsuleWidth = max(0, trailing - capsuleX)
+        return CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
     }
 
     private func updateSearchDimFrame() {
@@ -1065,6 +1084,8 @@ extension TabBarView: UITextFieldDelegate {
         UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
             close.alpha = 1.0
             close.transform = .identity
+            // Re-layout so the capsule shrinks away from the close pill.
+            self.positionSearchViewsExpanded()
         }
     }
 
@@ -1072,6 +1093,8 @@ extension TabBarView: UITextFieldDelegate {
         guard textField === searchTextField, let close = searchCloseButton else { return }
         UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
             close.alpha = 0.0
+            // Capsule stretches back to the trailing edge.
+            self.positionSearchViewsExpanded()
         }
     }
 }
