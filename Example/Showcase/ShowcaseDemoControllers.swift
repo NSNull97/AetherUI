@@ -573,3 +573,57 @@ final class ToolbarDemoController: ShowcaseDemoController {
         }
     }
 }
+
+// MARK: - Keyboard Dismiss
+
+/// Exercises the interactive keyboard-drag machinery in CrystalWindow.
+/// Focus any field, then pan down anywhere above the keyboard — the
+/// keyboard itself should follow the finger in real time, and flick
+/// past the halfway point to dismiss.
+final class KeyboardDismissDemoController: ShowcaseDemoController {
+    override var demoTitle: String { "Keyboard dismiss" }
+
+    override func buildDemo() {
+        let description = UILabel()
+        description.numberOfLines = 0
+        description.font = .systemFont(ofSize: 14)
+        description.textColor = .secondaryLabel
+        description.text = """
+        Тап в поле — поднимется клавиатура. Потом тяни ПАЛЬЦЕМ ВНИЗ \
+        от любой точки над клавиатурой (вне поля) — клавиатура должна \
+        поехать за пальцем. Отпусти ниже середины или флик'ай — \
+        закроется; отпусти выше — вернётся.
+        """
+        addPaddedView(description, height: 120)
+
+        let field1 = makeField(placeholder: "Single-line text field")
+        addPaddedView(field1, height: 48)
+
+        let field2 = makeField(placeholder: "Another field (.emailAddress)")
+        field2.keyboardType = .emailAddress
+        field2.autocapitalizationType = .none
+        addPaddedView(field2, height: 48)
+
+        let textView = UITextView()
+        textView.font = .systemFont(ofSize: 16)
+        textView.backgroundColor = .secondarySystemBackground
+        textView.layer.cornerRadius = 12
+        textView.layer.cornerCurve = .continuous
+        textView.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        textView.text = "UITextView — многострочное поле для теста. Открой клавиатуру, потом тяни вниз от любой точки над клавой."
+        addPaddedView(textView, height: 140)
+
+        addButton("Скрыть клавиатуру (programmatic)") { [weak self] in
+            self?.view.endEditing(true)
+        }
+    }
+
+    private func makeField(placeholder: String) -> UITextField {
+        let field = UITextField()
+        field.placeholder = placeholder
+        field.borderStyle = .roundedRect
+        field.font = .systemFont(ofSize: 16)
+        field.returnKeyType = .done
+        return field
+    }
+}

@@ -71,7 +71,8 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
                 rows: [
                     ("Toolbar", "нижняя панель кнопок", { ToolbarDemoController() }),
                     ("Modal", "bottom-sheet detents", { ModalDemoController() }),
-                    ("Collection", "grid со скроллом (для тест тулбара)", { CollectionDemoController() })
+                    ("Collection", "grid со скроллом (для тест тулбара)", { CollectionDemoController() }),
+                    ("Keyboard dismiss", "интерактивное закрытие пальцем", { KeyboardDismissDemoController() })
                 ]
             ),
             item: UITabBarItem(
