@@ -14,12 +14,75 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = CrystalWindow(windowScene: windowScene)
         window.backgroundColor = .systemBackground
 
-        let home = ShowcaseHomeController()
-        let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
-        nav.setViewControllers([home], animated: false)
+        // Tab layout: one tab per theme area, each with its own nav
+        // controller so push/pop is isolated. Each tab's root is a simple
+        // list controller that routes into per-component demos.
+        let dialogs = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Диалоги",
+                rows: [
+                    ("ActionSheet", "кнопки / чекбоксы / свитчи / текст", { ActionSheetDemoController() }),
+                    ("Alert", "title + message + кнопки", { AlertDemoController() }),
+                    ("Tooltip", "указывает на view", { TooltipDemoController() }),
+                    ("Toast / Snackbar", "snackbar внизу", { ToastDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Диалоги",
+                image: UIImage(systemName: "bubble.left.and.bubble.right"),
+                selectedImage: UIImage(systemName: "bubble.left.and.bubble.right.fill")
+            )
+        )
 
-        window.contentController = nav
+        let states = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Состояния",
+                rows: [
+                    ("Content State", "loading / empty / error", { ContentStateDemoController() }),
+                    ("Skeletons", "shimmer-плейсхолдеры", { SkeletonDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Состояния",
+                image: UIImage(systemName: "square.stack"),
+                selectedImage: UIImage(systemName: "square.stack.fill")
+            )
+        )
+
+        let navigation = Self.makeTab(
+            root: ShowcaseListController(
+                title: "Навигация",
+                rows: [
+                    ("Toolbar", "нижняя панель кнопок", { ToolbarDemoController() }),
+                    ("Modal", "bottom-sheet detents", { ModalDemoController() })
+                ]
+            ),
+            item: UITabBarItem(
+                title: "Навигация",
+                image: UIImage(systemName: "square.grid.3x3"),
+                selectedImage: UIImage(systemName: "square.grid.3x3.fill")
+            )
+        )
+
+        let tabs = CrystalTabBarController(
+            tabBarTheme: TabBarView.Theme(
+                tabBarSelectedIconColor: .systemBlue,
+                tabBarSelectedTextColor: .systemBlue,
+                style: .liquidGlass
+            )
+        )
+        tabs.setControllers([dialogs, states, navigation], selectedIndex: 0)
+
+        window.contentController = tabs
         window.makeKeyAndVisible()
         self.window = window
+    }
+
+    private static func makeTab(root: ViewController, item: UITabBarItem) -> CrystalNavigationController {
+        root.tabBarItem = item
+        let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
+        nav.setViewControllers([root], animated: false)
+        nav.tabBarItem = item
+        return nav
     }
 }

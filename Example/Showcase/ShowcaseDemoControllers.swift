@@ -366,6 +366,111 @@ final class SkeletonDemoController: ShowcaseDemoController {
     }
 }
 
+// MARK: - Modal
+
+final class ModalDemoController: ShowcaseDemoController {
+    override var demoTitle: String { "Modal" }
+
+    override func buildDemo() {
+        addButton("Single-detent sheet") { [weak self] in self?.presentSingle() }
+        addButton("Dual-detent sheet (half/full)") { [weak self] in self?.presentDual() }
+        addButton("Sheet со scroll-content") { [weak self] in self?.presentScrollable() }
+    }
+
+    private func presentSingle() {
+        let content = SimpleModalContent(title: "Одно положение",
+                                         message: "Swipe вниз — закроется")
+        let modal = CrystalModalController(content: content)
+        present(modal, animated: true)
+    }
+
+    private func presentDual() {
+        let content = SimpleModalContent(title: "Два detent",
+                                         message: "Потяни выше — полный экран; потяни ниже — половина.")
+        let modal = CrystalModalController(content: content)
+        present(modal, animated: true)
+    }
+
+    private func presentScrollable() {
+        let content = ScrollableModalContent()
+        let modal = CrystalModalController(content: content)
+        modal.primaryScrollView = content.scrollView
+        present(modal, animated: true)
+    }
+}
+
+private final class SimpleModalContent: UIViewController {
+    private let titleLabel = UILabel()
+    private let messageLabel = UILabel()
+
+    init(title: String, message: String) {
+        super.init(nibName: nil, bundle: nil)
+        titleLabel.text = title
+        messageLabel.text = message
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.textAlignment = .center
+        titleLabel.textColor = .label
+        messageLabel.font = .systemFont(ofSize: 15)
+        messageLabel.textAlignment = .center
+        messageLabel.textColor = .secondaryLabel
+        messageLabel.numberOfLines = 0
+
+        let stack = UIStackView(arrangedSubviews: [titleLabel, messageLabel])
+        stack.axis = .vertical
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24)
+        ])
+    }
+}
+
+private final class ScrollableModalContent: UIViewController {
+    let scrollView = UIScrollView()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        scrollView.frame = view.bounds
+        scrollView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrollView.alwaysBounceVertical = true
+        view.addSubview(scrollView)
+
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 20),
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            stack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: -40)
+        ])
+
+        for i in 1...30 {
+            let label = UILabel()
+            label.font = .systemFont(ofSize: 15)
+            label.textColor = .label
+            label.text = "Строка #\(i) — демонстрация scroll yielding в модалке"
+            label.numberOfLines = 0
+            stack.addArrangedSubview(label)
+        }
+    }
+}
+
 // MARK: - Toolbar
 
 final class ToolbarDemoController: ShowcaseDemoController {
