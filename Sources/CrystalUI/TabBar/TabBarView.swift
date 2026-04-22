@@ -145,138 +145,134 @@ public final class TabBarView: UIView {
     private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
     private var searchDimView: EdgeEffectView?               // edge-effect bg
 
-    /// While the search morph is in-flight (or sitting in its collapsed
-    /// state) layoutSubviews must not reset the glass container's frame —
-    /// the animation owns it.
-    private var isSearchAnimating: Bool = false
-
-    /// Holds the current morph animator so a second call to
-    /// activate/deactivate can cancel the in-flight one cleanly
-    /// instead of layering two UIKit animations on the same properties.
-    private var searchAnimator: UIViewPropertyAnimator?
-
-    /// Morph: tab-bar pill → circle-button on the left with the active
-    /// tab's icon inside it (Apple Music style).
+    /// Morph: pill → active-tab circle, search button → capsule with text field.
     ///
-    /// Items (including the active tab) live inside
-    /// `liquidLensView.contentView`, which itself sits inside the
-    /// glass container. When the container's bounds animate, the lens
-    /// animates along with it (autoresizing), and items follow because
-    /// we also animate the lens's own bounds.
+    /// Direct port of Telegram-iOS TabBarComponent (see
+    /// submodules/TelegramUI/Components/TabBarComponent/Sources/TabBarComponent.swift
+    /// §854–939). The key mechanism: shrink `liquidLensView` to a 48×48
+    /// square via `.update(size: 48, isCollapsed: true)` — the native
+    /// `_UILiquidLensView` handles the circle collapse internally. Items
+    /// inside fade out (non-selected) or re-center (selected). The old
+    /// fade-the-whole-container approach is gone.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
-        isSearchAnimating = true
-        tabBarGlassContainer.transform = .identity
-        tabBarGlassContainer.layer.mask = nil
+        buildSearchViews()
 
-        let circleFrame = activeTabCircleFrame()
-        let circleSize = circleFrame.size
-        let circleCenter = CGPoint(x: circleFrame.midX, y: circleFrame.midY)
+        let collapsedSize = CGSize(width: Self.collapsedLensSize, height: Self.collapsedLensSize)
+        let transition: ContainedViewLayoutTransition = animated
+            ? .animated(duration: 1.0, curve: .spring)
+            : .immediate
 
         if animated {
-            searchAnimator?.stopAnimation(true)
+            positionSearchViewsAtOrigin()
+            searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            searchCloseButton?.alpha = 0.0
+            searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
+        } else {
+            positionSearchViewsExpanded()
+            searchDimView?.alpha = 1.0
+        }
 
-            let animator = UIViewPropertyAnimator(duration: 1.0, dampingRatio: 0.78) {
-                // Shrink the glass container to a 42×42 disc, anchored
-                // at its new center (left edge + half-height).
-                self.tabBarGlassContainer.bounds = CGRect(origin: .zero, size: circleSize)
-                self.tabBarGlassContainer.center = circleCenter
-                self.tabBarGlassContainer.update(
-                    size: circleSize,
-                    isDark: self.isEffectivelyDark,
-                    transition: .immediate
+        // Shrink the lens to a 48×48 square at its current left edge —
+        // `isCollapsed: true` lets the native lens render as a circle.
+        let lensOrigin = liquidLensView.frame.origin
+        transition.updateFrame(
+            view: liquidLensView,
+            frame: CGRect(origin: lensOrigin, size: collapsedSize)
+        )
+        liquidLensView.update(
+            size: collapsedSize,
+            selectionOrigin: .zero,
+            selectionSize: collapsedSize,
+            inset: 4.0,
+            isDark: isEffectivelyDark,
+            isLifted: false,
+            isCollapsed: true,
+            transition: transition
+        )
+
+        // Re-layout items: selected centers inside the collapsed lens,
+        // others fade to alpha 0. Matches TabBarComponent §808–820.
+        for (index, itemView) in itemViews.enumerated() {
+            if index == selectedIndex {
+                transition.updateFrame(
+                    view: itemView,
+                    frame: CGRect(origin: .zero, size: collapsedSize)
                 )
+                transition.updateAlpha(view: itemView, alpha: 1.0)
+            } else {
+                transition.updateAlpha(view: itemView, alpha: 0.0)
+            }
+        }
+        for (index, selectedItemView) in selectedItemViews.enumerated() where index == selectedIndex {
+            transition.updateFrame(
+                view: selectedItemView,
+                frame: CGRect(origin: .zero, size: collapsedSize)
+            )
+        }
 
-                // Shrink the liquid lens to the circle's local bounds so
-                // items follow.
-                self.liquidLensView.frame = CGRect(origin: .zero, size: circleSize)
-
-                for (index, view) in self.itemViews.enumerated() {
-                    if index == self.selectedIndex {
-                        view.frame = CGRect(origin: .zero, size: circleSize)
-                        view.alpha = 1.0
-                    } else {
-                        view.alpha = 0.0
-                        view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-                    }
-                }
-
+        if animated {
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
+                self.positionSearchViewsExpanded()
+                self.searchCapsule?.transform = .identity
+                self.searchDimView?.alpha = 1.0
                 self.searchShowcaseView?.alpha = 0.0
             }
-            animator.addCompletion { _ in
-                self.isSearchAnimating = false
-                self.searchAnimator = nil
-            }
-            animator.startAnimation()
-            searchAnimator = animator
         } else {
-            tabBarGlassContainer.bounds = CGRect(origin: .zero, size: circleSize)
-            tabBarGlassContainer.center = circleCenter
-            tabBarGlassContainer.update(size: circleSize, isDark: isEffectivelyDark, transition: .immediate)
-            liquidLensView.frame = CGRect(origin: .zero, size: circleSize)
-            for (index, view) in itemViews.enumerated() {
-                if index == selectedIndex {
-                    view.frame = CGRect(origin: .zero, size: circleSize)
-                    view.alpha = 1.0
-                } else {
-                    view.alpha = 0.0
-                    view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
-                }
-            }
+            positionSearchViewsExpanded()
             searchShowcaseView?.alpha = 0.0
-            isSearchAnimating = false
+            searchDimView?.alpha = 1.0
         }
     }
 
-    /// Left-edge disc (in TabBarView coords), same Y row as the current
-    /// tab bar, size = search-mode height. Apple Music anchors the
-    /// collapsed tab-bar here; the search field expands to its right.
-    private func activeTabCircleFrame() -> CGRect {
-        let h = Self.searchModeHeight
-        let tabF = activeTabFrame
-        return CGRect(x: theme.sideInset, y: tabF.midY - h / 2, width: h, height: h)
-    }
+    private static let collapsedLensSize: CGFloat = 48.0
 
-    /// Reverse morph: circle → full pill.
+    /// Reverse morph: collapsed lens → full pill, capsule → small search
+    /// button, close button retracts.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
-        isSearchAnimating = true
+        searchTextField?.resignFirstResponder()
 
         if animated {
-            searchAnimator?.stopAnimation(true)
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
+                // Fade out search chrome
+                self.searchCapsule?.alpha = 0.0
+                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+                self.searchTextField?.alpha = 0.0
+                self.searchCloseButton?.alpha = 0.0
+                self.searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
+                self.searchDimView?.alpha = 0.0
+                self.searchShowcaseView?.alpha = 1.0
 
-            let animator = UIViewPropertyAnimator(duration: 1.0, dampingRatio: 0.78) {
-                // Undo the shrink transform → container bounces back
-                // to its full-width pill rendering. Re-run layout for
-                // items to reclaim their positions + clear per-item
-                // scale/alpha tweaks.
-                self.tabBarGlassContainer.transform = .identity
+                // Expand lens back to full width + restore item frames
+                // via the standard layout path.
+                self.layoutItemViews()
                 for view in self.itemViews {
                     view.alpha = 1.0
-                    view.transform = .identity
                 }
-                self.liquidLensView.alpha = 1.0
-                self.searchShowcaseView?.alpha = 1.0
-                self.layoutItemViews()
+            } completion: { _ in
+                self.teardownSearchViews()
             }
-            animator.addCompletion { _ in
-                self.isSearchAnimating = false
-                self.searchAnimator = nil
-            }
-            animator.startAnimation()
-            searchAnimator = animator
         } else {
-            tabBarGlassContainer.transform = .identity
-            for view in itemViews {
-                view.alpha = 1.0
-                view.transform = .identity
-            }
-            liquidLensView.alpha = 1.0
             searchShowcaseView?.alpha = 1.0
             layoutItemViews()
-            isSearchAnimating = false
+            for view in itemViews {
+                view.alpha = 1.0
+            }
             teardownSearchViews()
         }
     }
@@ -629,14 +625,11 @@ public final class TabBarView: UIView {
             edgeEffectView.isHidden = true
         }
 
-        // Skip the pill layout while the search morph is running or the
-        // tab bar is sitting in its collapsed circle state — the
-        // activation animation owns the glass container's frame for its
-        // lifetime. Reverting to the full-width layout here would snap
-        // the container back mid-animation.
-        if !isSearchAnimating && !isSearchActive {
-            layoutGlassBackground()
-            layoutItemViews()
+        layoutGlassBackground()
+        layoutItemViews()
+
+        if isSearchActive {
+            positionSearchViewsExpanded()
         }
     }
 
@@ -987,12 +980,6 @@ public final class TabBarView: UIView {
 
     @objc private func itemTapped(_ recognizer: UITapGestureRecognizer) {
         guard let itemView = recognizer.view else { return }
-        // In collapsed-circle search state the active tab acts as the
-        // "back to tabs" button — tap exits search.
-        if isSearchActive {
-            onSearchDismissed?()
-            return
-        }
         let index = itemView.tag
         activateItem(at: index)
     }
