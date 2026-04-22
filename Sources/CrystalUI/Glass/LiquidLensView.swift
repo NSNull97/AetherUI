@@ -179,6 +179,12 @@ public final class LiquidLensView: UIView {
 
     private var params: Params?
     private var appliedLensParams: LensParams?
+    /// Reentrancy guard + queued update. While a lifted-state native
+    /// animation is in flight further `updateLens` calls stash their params
+    /// here and the alongside-closure re-applies once the animation lands.
+    /// Port of `isApplyingLensParams` / `pendingLensParams` from upstream.
+    private var isApplyingLensParams: Bool = false
+    private var pendingLensParams: LensParams?
     private var nativeLensLiftedState: Bool?
     private var liftedDisplayLink: LiquidLensDisplayLink?
 
@@ -397,11 +403,21 @@ public final class LiquidLensView: UIView {
     }
 
     private func updateLens(params: LensParams, transition: ContainedViewLayoutTransition) {
-        appliedLensParams = params
-
         guard let lensView else {
             return
         }
+
+        // Queue updates that arrive while a previous lifted-state animation
+        // is still in flight — otherwise a fast tap-retap would trample the
+        // first animation's callback and leave isApplyingLensParams stuck
+        // true. Port of Telegram-iOS LiquidLensView.updateLens (§316-406).
+        if isApplyingLensParams {
+            pendingLensParams = params
+            return
+        }
+        isApplyingLensParams = true
+        let previousParams = appliedLensParams
+        appliedLensParams = params
 
         let liftedInset = params.isLifted ? params.liftedInset : (-params.inset)
         let lensBounds = CGRect(
@@ -413,29 +429,104 @@ public final class LiquidLensView: UIView {
         )
         let lensCenter = CGPoint(x: params.baseFrame.midX, y: params.baseFrame.midY)
 
-        if nativeLensLiftedState != params.isLifted {
-            nativeLensLiftedState = params.isLifted
-            setNativeLifted(on: lensView, value: params.isLifted, animated: transition.isAnimated)
+        if previousParams?.isLifted != params.isLifted {
             isAnimating = transition.isAnimated
-            if transition.isAnimated {
-                DispatchQueue.main.asyncAfter(deadline: .now() + transition.duration) { [weak self] in
-                    guard let self else {
-                        return
-                    }
-                    self.isAnimating = false
-                    self.isLiftedAnimationCompleted?()
-                }
-            } else {
-                isAnimating = false
-                isLiftedAnimationCompleted?()
-            }
-        }
 
-        transition.updateBounds(view: lensView, bounds: lensBounds)
-        transition.updatePosition(view: lensView, position: lensCenter)
+            // Go through the private `setLifted:animated:alongsideAnimations:completion:`
+            // selector ourselves rather than through the simple wrapper, so
+            // the bounds update runs INSIDE the same native animation block
+            // as the lift — no desync.
+            let selector = NSSelectorFromString("setLifted:animated:alongsideAnimations:completion:")
+            var didProcessUpdate = false
+            var shouldScheduleUpdate = false
+            pendingLensParams = params
+
+            if let method = lensView.method(for: selector) {
+                typealias Function = @convention(c) (AnyObject, Selector, Bool, Bool, @escaping () -> Void, (() -> Void)?) -> Void
+                let function = unsafeBitCast(method, to: Function.self)
+                function(lensView, selector, params.isLifted, transition.isAnimated, { [weak self] in
+                    // Alongside closure: resize bounds in lockstep with the
+                    // native lift animation. No additive position fix here —
+                    // setLifted path lands the center where the native
+                    // animation ends anyway.
+                    guard let self else { return }
+                    lensView.bounds = lensBounds
+                    didProcessUpdate = true
+                    if shouldScheduleUpdate {
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, let pending = self.pendingLensParams else { return }
+                            self.isApplyingLensParams = false
+                            self.pendingLensParams = nil
+                            self.updateLens(params: pending, transition: transition)
+                        }
+                    }
+                }, { [weak self] in
+                    guard let self else { return }
+                    if !self.isApplyingLensParams {
+                        self.isAnimating = false
+                    }
+                    self.isLiftedAnimationCompleted?()
+                })
+            } else {
+                // Fallback for older iOS / when setLifted isn't available —
+                // just set the bounds directly. Matches setNativeLifted's
+                // simple-selector path.
+                lensView.bounds = lensBounds
+                setNativeLifted(on: lensView, value: params.isLifted, animated: transition.isAnimated)
+                didProcessUpdate = true
+            }
+
+            if didProcessUpdate {
+                transition.updatePosition(view: lensView, position: lensCenter)
+                pendingLensParams = nil
+                isApplyingLensParams = false
+            } else {
+                // Native method invoked the alongside closure asynchronously —
+                // the closure will clear these when it runs.
+                shouldScheduleUpdate = true
+            }
+        } else {
+            // Lifted-state unchanged — no native lift animation, just resize
+            // + reposition. Needs two workarounds from upstream:
+            //   1. removeAllAnimations + direct bounds set: prevents bounds
+            //      animations from stacking when the user flicks quickly.
+            //   2. additive position animation: CoreAnimation shifts the
+            //      layer's render center when bounds width changes, so we
+            //      inject a compensating position delta to keep the lens
+            //      visually anchored.
+            let previousBounds = lensView.bounds
+            transition.updateBounds(view: lensView, bounds: lensBounds)
+            lensView.layer.removeAllAnimations()
+            lensView.bounds = lensBounds
+
+            if transition.isAnimated {
+                isAnimating = true
+            }
+            transition.updatePosition(view: lensView, position: lensCenter)
+
+            if previousBounds.width != lensBounds.width {
+                let deltaX = (lensBounds.width - previousBounds.width) * 0.5
+                let animation = CABasicAnimation(keyPath: "position")
+                animation.fromValue = NSValue(cgPoint: CGPoint(x: deltaX, y: 0.0))
+                animation.toValue = NSValue(cgPoint: .zero)
+                animation.duration = transition.isAnimated ? transition.duration : 0.2
+                animation.isAdditive = true
+                animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                lensView.layer.add(animation, forKey: "additivePositionFix")
+            }
+
+            if !transition.isAnimated {
+                isAnimating = false
+            }
+            isApplyingLensParams = false
+        }
     }
 
     private func updateLiftedLensPosition() {
+        // Skip while a native-lift animation is mid-flight; the alongside
+        // closure owns the lens transform for the duration and our per-frame
+        // center write would fight it.
+        if isApplyingLensParams { return }
         guard let lensView, let params = appliedLensParams else {
             return
         }
