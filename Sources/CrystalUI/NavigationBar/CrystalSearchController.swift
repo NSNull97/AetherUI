@@ -489,14 +489,20 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         tf.clearButtonMode = .whileEditing
         tf.delegate = self
 
-        let icon = UIImageView(image: UIImage(
+        // Wrapper that pins the icon to the LEFT edge so the "after
+        // icon" gap controls visible padding between glyph and
+        // placeholder. Matches TabBarView search field's leftView.
+        let leftViewWrapper = UIView(frame: CGRect(x: 0, y: 0, width: 28, height: 20))
+        let iconImage = UIImage(
             systemName: "magnifyingglass",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        ))
+        )
+        let icon = UIImageView(image: iconImage)
         icon.tintColor = .secondaryLabel
-        icon.frame = CGRect(x: 0, y: 0, width: 28, height: 20)
+        icon.frame = CGRect(x: 2, y: 0, width: 16, height: 20)
         icon.contentMode = .center
-        tf.leftView = icon
+        leftViewWrapper.addSubview(icon)
+        tf.leftView = leftViewWrapper
         tf.leftViewMode = .always
 
         tf.addTarget(self, action: #selector(textDidChange), for: .editingChanged)

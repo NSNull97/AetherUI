@@ -128,7 +128,9 @@ public final class CrystalActiveSearchBar: NavigationBarContentView, UITextField
         let iconY = pillY + floor((pillHeight - iconSize) / 2.0)
         transition.updateFrame(view: iconView, frame: CGRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
 
-        let textX = iconX + iconSize + 6.0
+        // Icon → text gap bumped 6 → 10pt to match CrystalSearchBarContent
+        // and the TabBar search field.
+        let textX = iconX + iconSize + 10.0
         let textWidth = max(0, pillFrame.maxX - textX - 8.0)
         let textY = pillY + floor((pillHeight - 22.0) / 2.0)
         transition.updateFrame(view: textField, frame: CGRect(x: textX, y: textY, width: textWidth, height: 22.0))

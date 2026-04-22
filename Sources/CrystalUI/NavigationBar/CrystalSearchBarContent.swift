@@ -97,7 +97,9 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
         let iconY = pillY + floor((pillHeight - iconSize) / 2.0)
         transition.updateFrame(view: iconView, frame: CGRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
 
-        let labelX = iconX + iconSize + 6.0
+        // Gap between the magnifier glyph and the placeholder label —
+        // bumped from 6 to 10 to match the TabBar search field.
+        let labelX = iconX + iconSize + 10.0
         let labelWidth = max(0, pillFrame.maxX - labelX - 10.0)
         let labelY = pillY + floor((pillHeight - 22.0) / 2.0)
         transition.updateFrame(view: placeholderLabel, frame: CGRect(x: labelX, y: labelY, width: labelWidth, height: 22.0))

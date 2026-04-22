@@ -235,8 +235,7 @@ public final class TabBarView: UIView {
         tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
         // leftView wrapper: icon pinned near the left edge, right-side
         // padding controls the visible gap before the placeholder.
-        // Dialed from 44pt down to 34pt — 44 read as overly wide.
-        let leftViewWrapper = UIView(frame: CGRect(x: 0, y: 0, width: 34, height: 20))
+        let leftViewWrapper = UIView(frame: CGRect(x: 0, y: 0, width: 28, height: 20))
         let iconImage = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium))
         let icon = UIImageView(image: iconImage)
         icon.tintColor = .secondaryLabel
