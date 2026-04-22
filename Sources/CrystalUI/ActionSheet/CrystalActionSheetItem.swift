@@ -1,0 +1,79 @@
+import UIKit
+
+public protocol CrystalActionSheetItem {
+    func makeView(theme: CrystalActionSheetTheme) -> CrystalActionSheetItemView
+    func updateView(_ view: CrystalActionSheetItemView)
+}
+
+public final class CrystalActionSheetItemGroup {
+    public let items: [CrystalActionSheetItem]
+
+    public init(items: [CrystalActionSheetItem]) {
+        self.items = items
+    }
+}
+
+// MARK: - ItemView
+
+open class CrystalActionSheetItemView: UIView {
+    public static let defaultItemHeight: CGFloat = 57.0
+
+    public let theme: CrystalActionSheetTheme
+
+    public let backgroundView = UIView()
+    /// Hairline shown below this row when it is not the last row of its
+    /// group. The group container toggles `hasSeparator` on each item.
+    public let separatorView = UIView()
+
+    public var hasSeparator: Bool = true {
+        didSet { separatorView.isHidden = !hasSeparator }
+    }
+
+    public init(theme: CrystalActionSheetTheme) {
+        self.theme = theme
+        super.init(frame: .zero)
+
+        backgroundView.backgroundColor = theme.itemBackgroundColor
+        backgroundView.isUserInteractionEnabled = false
+        separatorView.backgroundColor = theme.separatorColor
+        separatorView.isUserInteractionEnabled = false
+
+        addSubview(backgroundView)
+        addSubview(separatorView)
+    }
+
+    public required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Override in subclasses. Return preferred height for the given width.
+    open func preferredHeight(constrainedWidth: CGFloat) -> CGFloat {
+        return Self.defaultItemHeight
+    }
+
+    open override func layoutSubviews() {
+        super.layoutSubviews()
+        backgroundView.frame = bounds
+        separatorView.frame = CGRect(
+            x: 0,
+            y: bounds.height,
+            width: bounds.width,
+            height: 1.0 / UIScreen.main.scale
+        )
+    }
+
+    /// Called by the controller when arrow-key/enter focus lands on the row.
+    open func setHighlighted(_ highlighted: Bool, animated: Bool) {
+        let color = highlighted ? theme.itemHighlightedBackgroundColor : theme.itemBackgroundColor
+        if animated && !highlighted {
+            UIView.animate(withDuration: 0.3) {
+                self.backgroundView.backgroundColor = color
+            }
+        } else {
+            backgroundView.backgroundColor = color
+        }
+    }
+
+    /// Invoked when user activates the row via keyboard (Enter).
+    open func performAction() {}
+}
