@@ -465,19 +465,20 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
 
     private func wireControllers(_ viewControllers: [ViewController]) {
         let barData = NavigationBarPresentationData(theme: theme.navigationBar)
+        let layoutCallback: (ContainedViewLayoutTransition) -> Void = { [weak self] transition in
+            self?.requestLayout(transition: transition)
+        }
+        let backCallback: () -> Void = { [weak self] in
+            self?.popViewController(animated: true)
+        }
 
         for (index, controller) in viewControllers.enumerated() {
             // Ensure the controller has its own nav bar.
             if controller.navigationBarView == nil {
                 let bar = NavigationBarImpl(presentationData: barData)
                 controller.navigationBarView = bar
+                bar.backPressed = backCallback
                 if controller.isViewLoaded {
-                    bar.backPressed = { [weak self] in
-                        self?.popViewController(animated: true)
-                    }
-                    bar.requestContainerLayout = { [weak self] transition in
-                        self?.requestLayout(transition: transition)
-                    }
                     controller.view.addSubview(bar)
                 }
             }
@@ -492,23 +493,13 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
                     bar.previousItem = nil
                 }
 
-                bar.backPressed = { [weak self] in
-                    self?.popViewController(animated: true)
-                }
-                // Content view (filter bar) — set BEFORE wiring layout
-                // callback to avoid triggering a recursive layout pass.
+                // Content view (filter bar) — silence the layout callback
+                // while swapping it in so we don't trigger a recursive pass.
                 if controller.displayNavigationBar {
-                    let savedCallback = bar.requestContainerLayout
                     bar.requestContainerLayout = nil
                     bar.setContentView(controller.navigationBarContent, animated: false)
-                    bar.requestContainerLayout = savedCallback ?? { [weak self] transition in
-                        self?.requestLayout(transition: transition)
-                    }
-                } else {
-                    bar.requestContainerLayout = { [weak self] transition in
-                        self?.requestLayout(transition: transition)
-                    }
                 }
+                bar.requestContainerLayout = layoutCallback
             }
 
             if controller.parent !== self {
