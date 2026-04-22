@@ -233,14 +233,19 @@ public final class TabBarView: UIView {
         tf.alpha = 0.0
         tf.delegate = self
         tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
-        let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
+        // leftView wrapper: pin the magnifier glyph to the LEFT edge of
+        // the slot and leave a generous right-side gap before text. The
+        // previous approach (icon centered in a 36pt slot) only gave
+        // ~11pt of visual gap because half the extra width landed on
+        // the icon's left side where nothing needed padding.
+        let leftViewWrapper = UIView(frame: CGRect(x: 0, y: 0, width: 44, height: 20))
+        let iconImage = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium))
+        let icon = UIImageView(image: iconImage)
         icon.tintColor = .secondaryLabel
-        // Widen the leftView beyond the icon size so there's breathing
-        // room between the magnifier glyph and the placeholder text. The
-        // icon stays horizontally centered in that wider slot.
-        icon.frame = CGRect(x: 0, y: 0, width: 36, height: 20)
+        icon.frame = CGRect(x: 2, y: 0, width: 16, height: 20)
         icon.contentMode = .center
-        tf.leftView = icon
+        leftViewWrapper.addSubview(icon)
+        tf.leftView = leftViewWrapper
         tf.leftViewMode = .always
         addSubview(tf)
         searchTextField = tf
