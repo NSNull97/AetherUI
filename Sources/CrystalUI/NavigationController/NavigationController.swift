@@ -179,13 +179,14 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
     }
 
     private func updateContainerLayout(transition: ContainedViewLayoutTransition) {
-        // When hosted inside a CrystalModalController, there's no status
-        // bar above this nav controller — the sheet's own top edge is the
-        // visual boundary. Reporting the window's status-bar height here
-        // would make child controllers reserve a phantom gap under the
-        // sheet corner.
+        // When hosted inside a CrystalModalController the "status bar"
+        // region is reused for the grabber strip: a navbar built with
+        // statusBarHeight = grabberContainerHeight has its chrome laid
+        // out below the grabber, and its own edge-effect frost covers
+        // the grabber area naturally (no extra work). Outside a modal,
+        // use the real window status bar height.
         let statusBarHeight: CGFloat? = isHostedInModal
-            ? nil
+            ? CrystalModalController.grabberContainerHeight
             : view.window?.windowScene?.statusBarManager?.statusBarFrame.height
 
         let layout = ContainerViewLayout(
@@ -635,7 +636,7 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
         }
 
         let statusBarHeight: CGFloat? = isHostedInModal
-            ? nil
+            ? CrystalModalController.grabberContainerHeight
             : view.window?.windowScene?.statusBarManager?.statusBarFrame.height
 
         return ContainerViewLayout(

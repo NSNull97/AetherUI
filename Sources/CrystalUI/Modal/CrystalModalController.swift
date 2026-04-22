@@ -50,22 +50,6 @@ public final class CrystalModalController: UIViewController {
         /// Dim alpha applied over the presenting view at stage2.
         public var dimAlphaStage2: CGFloat
         public var dimTintColor: UIColor
-        /// Thickness (in points) of the frosted scroll-edge strip at the
-        /// top of the sheet — covers both the grabber and the natural
-        /// navbar area. Set to 0 to disable.
-        public var topEdgeEffectThickness: CGFloat
-        /// Fade-zone height at the bottom of the top edge effect where
-        /// the frost tapers from opaque to transparent.
-        public var topEdgeEffectFade: CGFloat
-        /// Uniform blur radius for the top edge effect (passed as both
-        /// the edge and fade radius on the underlying `EdgeEffectView`).
-        public var topEdgeEffectBlurRadius: CGFloat
-        /// Tint drawn over the blur at the top edge effect. Pass nil
-        /// for a pure blur with no colour fill.
-        public var topEdgeEffectTintColor: UIColor?
-        /// Alpha of the tint overlay, ignored when `topEdgeEffectTintColor`
-        /// is nil.
-        public var topEdgeEffectTintAlpha: CGFloat
         /// Detents the sheet is allowed to rest at. When a single detent
         /// is specified the sheet opens at that detent and drags toward
         /// the other detent are blocked — only a strong downward drag can
@@ -85,11 +69,6 @@ public final class CrystalModalController: UIViewController {
             dimAlphaStage1: CGFloat = 0.25,
             dimAlphaStage2: CGFloat = 0.4,
             dimTintColor: UIColor = .systemBackground,
-            topEdgeEffectThickness: CGFloat = 77.0,
-            topEdgeEffectFade: CGFloat = 28.0,
-            topEdgeEffectBlurRadius: CGFloat = 3.0,
-            topEdgeEffectTintColor: UIColor? = nil,
-            topEdgeEffectTintAlpha: CGFloat = 0.65,
             detents: Set<Detent> = [.stage1, .stage2],
             initialDetent: Detent? = nil
         ) {
@@ -102,11 +81,6 @@ public final class CrystalModalController: UIViewController {
             self.dimAlphaStage1 = dimAlphaStage1
             self.dimAlphaStage2 = dimAlphaStage2
             self.dimTintColor = dimTintColor
-            self.topEdgeEffectThickness = topEdgeEffectThickness
-            self.topEdgeEffectFade = topEdgeEffectFade
-            self.topEdgeEffectBlurRadius = topEdgeEffectBlurRadius
-            self.topEdgeEffectTintColor = topEdgeEffectTintColor
-            self.topEdgeEffectTintAlpha = topEdgeEffectTintAlpha
             self.detents = detents.isEmpty ? [.stage1, .stage2] : detents
             self.initialDetent = initialDetent
         }
@@ -135,7 +109,6 @@ public final class CrystalModalController: UIViewController {
 
     private let glassBackground = GlassBackgroundView(style: .regular)
     private let contentContainer = UIView()
-    private let topEdgeEffect = EdgeEffectView()
     private let grabberContainer = UIView()
     private let grabberView = UIView()
     private let maskLayer = CAShapeLayer()
@@ -169,12 +142,9 @@ public final class CrystalModalController: UIViewController {
         root.addSubview(glassBackground)
 
         glassBackground.contentView.addSubview(contentContainer)
-        // Top scroll-edge frost — covers the grabber strip plus the
-        // natural navbar area beneath it, then tapers into the content.
-        // Added above the content so it overlays the navbar's own
-        // backdrop; below the grabber so the pill stays fully visible.
-        topEdgeEffect.isUserInteractionEnabled = false
-        glassBackground.contentView.addSubview(topEdgeEffect)
+        // Grabber strip on top of the content. Container is transparent
+        // so whatever sits below it (navbar backdrop, scrolling content)
+        // remains visible around the pill.
         glassBackground.contentView.addSubview(grabberContainer)
         glassBackground.glassIsInteractive = true
 
@@ -188,6 +158,12 @@ public final class CrystalModalController: UIViewController {
         addChild(content)
         content.view.translatesAutoresizingMaskIntoConstraints = true
         content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Reserve the grabber strip as safe area at the top of the
+        // content. Auto-layout pinned to safeAreaLayoutGuide.topAnchor —
+        // including a nav bar inside the content — ends up below the
+        // grabber; scrollable content still spans the full sheet and
+        // scrolls *under* the grabber instead of stopping at its edge.
+        content.additionalSafeAreaInsets.top += Self.grabberContainerHeight
         contentContainer.addSubview(content.view)
         content.didMove(toParent: self)
 
@@ -283,47 +259,14 @@ public final class CrystalModalController: UIViewController {
             height: Self.grabberSize.height
         )
 
-        // Content sits below the grabber container — its coordinate space
-        // starts at y = grabberHeight in modal space, so anything
-        // positioned at y=0 inside the content (e.g. a navbar) appears
-        // just under the grabber.
-        contentContainer.frame = CGRect(
-            x: 0.0,
-            y: grabberHeight,
-            width: view.bounds.width,
-            height: max(0.0, view.bounds.height - grabberHeight)
-        )
+        // Content spans the full sheet height so scrollable content can
+        // slide *under* the grabber pill. Header chrome should anchor to
+        // `view.safeAreaLayoutGuide.topAnchor` — it receives the grabber
+        // strip as a top inset via `additionalSafeAreaInsets.top`. Nav
+        // bars inside the content already respect safe area through the
+        // hosting CrystalNavigationController.
+        contentContainer.frame = view.bounds
         content.view.frame = contentContainer.bounds
-
-        // Top scroll-edge frost covering grabber + navbar region. Runs
-        // from the modal's very top (y=0) down through the configured
-        // thickness, fading into the content beneath.
-        let thickness = config.topEdgeEffectThickness
-        if thickness > 0 {
-            if topEdgeEffect.isHidden {
-                topEdgeEffect.isHidden = false
-            }
-            let frame = CGRect(
-                x: 0.0,
-                y: 0.0,
-                width: view.bounds.width,
-                height: thickness
-            )
-            topEdgeEffect.frame = frame
-            topEdgeEffect.update(
-                content: config.topEdgeEffectTintColor,
-                blur: true,
-                alpha: config.topEdgeEffectTintAlpha,
-                rect: CGRect(origin: .zero, size: frame.size),
-                edge: .top,
-                edgeSize: min(config.topEdgeEffectFade, thickness),
-                blurRadiusAtEdge: config.topEdgeEffectBlurRadius,
-                blurRadiusAtFade: config.topEdgeEffectBlurRadius,
-                transition: .immediate
-            )
-        } else if !topEdgeEffect.isHidden {
-            topEdgeEffect.isHidden = true
-        }
     }
 
     private func updateMaskPath() {

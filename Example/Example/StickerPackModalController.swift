@@ -82,7 +82,7 @@ final class StickerPackModalController: UIViewController {
         view.addSubview(actionButton)
 
         NSLayoutConstraint.activate([
-            headerContainer.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            headerContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
             headerContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             headerContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             headerContainer.heightAnchor.constraint(equalToConstant: 44),
