@@ -112,14 +112,10 @@ public final class CrystalToastController {
         self.timeout = timeout
     }
 
-    /// Present anchored to a specific parent view. If `parent` is nil, the
-    /// window of the top-most view controller is used — mounting on the
-    /// window (not on a controller view) guarantees the toast floats above
-    /// nav bars, tab bars, and modal sheets.
+    /// Present. If `parent` is nil, mounts into the app's active key
+    /// window so the snackbar floats above every nav bar / tab bar / modal.
     public func present(in parent: UIView? = nil) {
-        let target: UIView?
-        if let parent { target = parent }
-        else { target = Self.topViewController()?.view.window ?? Self.topViewController()?.view }
+        let target: UIView? = parent ?? Self.findActiveWindow()
         guard let target else { return }
 
         dismiss(animated: false)
@@ -131,14 +127,12 @@ public final class CrystalToastController {
             handler()
             self?.dismiss(animated: true)
         }
-        // Use explicit frame + autoresizing rather than constraints. Auto-
-        // layout on a freshly-attached window child doesn't always resolve
-        // synchronously before layoutIfNeeded — causing the card to compute
-        // at a zero bounds and never appear. Frame-based attach + explicit
-        // setNeedsLayout gives us a deterministic first frame.
         root.frame = target.bounds
         root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         target.addSubview(root)
+        // Force a layout pass so the card frame is valid before animateIn
+        // reads it. setNeedsLayout + layoutIfNeeded guarantees layoutSubviews
+        // runs synchronously here, not on the next run loop turn.
         root.setNeedsLayout()
         root.layoutIfNeeded()
         root.animateIn()
@@ -170,48 +164,52 @@ public final class CrystalToastController {
     /// Walk the connected-scenes graph to the top-most visible view
     /// controller (respecting modals). Returns nil when called before any
     /// window is attached — caller should guard.
-    /// Walk the window → rootViewController graph to the view controller
-    /// whose `.view` is the correct place to mount an overlay:
-    /// - A CrystalTabBarController (or UITabBarController) → drill into the
-    ///   selected child controller so the overlay stays above the visible
-    ///   tab's content and respects its nav bar / tab bar safe areas.
-    /// - A UINavigationController → drill to its topViewController.
-    /// - Any controller with a presentedViewController → drill into the
-    ///   presented (so overlays on top of modals work).
-    static func topViewController() -> UIViewController? {
-        for scene in UIApplication.shared.connectedScenes where scene.activationState == .foregroundActive {
+    /// Return the app's active key window. Used to mount overlays that need
+    /// to float above every controller (tabs, modals, sheets). Walks
+    /// `connectedScenes` so it picks the right window in multi-scene apps.
+    static func findActiveWindow() -> UIWindow? {
+        // Prefer a foreground-active scene; fall back to any scene if the
+        // app is launched but not yet foregrounded (e.g. during startup).
+        let scenes = UIApplication.shared.connectedScenes
+        let candidates = scenes.filter { $0.activationState == .foregroundActive } + scenes.filter { $0.activationState != .foregroundActive }
+        for scene in candidates {
             guard let ws = scene as? UIWindowScene else { continue }
-            let window: UIWindow?
             if #available(iOS 15.0, *) {
-                window = ws.keyWindow ?? ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first
-            } else {
-                window = ws.windows.first(where: { $0.isKeyWindow }) ?? ws.windows.first
+                if let kw = ws.keyWindow { return kw }
             }
-            guard var vc: UIViewController = window?.rootViewController else { continue }
-            var guardCounter = 0
-            while guardCounter < 20 {
-                guardCounter += 1
-                if let presented = vc.presentedViewController {
-                    vc = presented
-                    continue
-                }
-                if let tab = vc as? CrystalTabBarController, let current = tab.currentController {
-                    vc = current
-                    continue
-                }
-                if let tab = vc as? UITabBarController, let sel = tab.selectedViewController {
-                    vc = sel
-                    continue
-                }
-                if let nav = vc as? UINavigationController, let top = nav.topViewController {
-                    vc = top
-                    continue
-                }
-                break
-            }
-            return vc
+            if let kw = ws.windows.first(where: { $0.isKeyWindow }) { return kw }
+            if let first = ws.windows.first { return first }
         }
         return nil
+    }
+
+    /// Back-compat entry point used by other CrystalUI components — still
+    /// walks down through tab bars / nav controllers to find the top-most
+    /// presented VC. Prefer `findActiveWindow` for overlay mounting.
+    static func topViewController() -> UIViewController? {
+        guard var vc: UIViewController = findActiveWindow()?.rootViewController else { return nil }
+        var guardCounter = 0
+        while guardCounter < 20 {
+            guardCounter += 1
+            if let presented = vc.presentedViewController {
+                vc = presented
+                continue
+            }
+            if let tab = vc as? CrystalTabBarController, let current = tab.currentController {
+                vc = current
+                continue
+            }
+            if let tab = vc as? UITabBarController, let sel = tab.selectedViewController {
+                vc = sel
+                continue
+            }
+            if let nav = vc as? UINavigationController, let top = nav.topViewController {
+                vc = top
+                continue
+            }
+            break
+        }
+        return vc
     }
 
     deinit {
@@ -225,6 +223,14 @@ public final class CrystalToastController {
 final class CrystalToastRootView: UIView {
     var onTap: () -> Void = {}
     var onAction: (@escaping () -> Void) -> Void = { _ in }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        // Insets propagate from window → root asynchronously after attach.
+        // Re-layout once they're real so the card doesn't sit hidden under
+        // the home indicator on the first frame.
+        setNeedsLayout()
+    }
 
     private let content: CrystalToastContent
     private let theme: CrystalToastTheme

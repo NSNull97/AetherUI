@@ -83,4 +83,31 @@ public struct CrystalAlertTheme: Equatable {
         primaryFillColor: UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0),
         primaryTextColor: .white
     )
+
+    /// System-driven theme: text / pill colors track
+    /// `UITraitCollection.userInterfaceStyle` so the alert flips between
+    /// light and dark automatically when the system appearance changes.
+    /// Colors are UIColor dynamic providers — the resolver runs every
+    /// time the view resolves its trait collection.
+    public static let system = CrystalAlertTheme(
+        backgroundType: .light,
+        backgroundColor: UIColor { tc in tc.userInterfaceStyle == .dark
+            ? UIColor(white: 0.15, alpha: 0.92)
+            : UIColor.white.withAlphaComponent(0.92) },
+        separatorColor: .separator,
+        highlightedItemColor: UIColor { tc in tc.userInterfaceStyle == .dark
+            ? UIColor(white: 0.3, alpha: 0.6)
+            : UIColor(white: 0.8, alpha: 0.6) },
+        primaryColor: .label,
+        secondaryColor: .secondaryLabel,
+        accentColor: .systemBlue,
+        destructiveColor: .systemRed,
+        disabledColor: .tertiaryLabel,
+        dimColor: UIColor { tc in tc.userInterfaceStyle == .dark
+            ? UIColor(white: 0.0, alpha: 0.5)
+            : UIColor(white: 0.0, alpha: 0.4) },
+        pillFillColor: .tertiarySystemFill,
+        primaryFillColor: .systemBlue,
+        primaryTextColor: .white
+    )
 }

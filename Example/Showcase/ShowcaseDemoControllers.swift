@@ -147,7 +147,8 @@ final class AlertDemoController: ShowcaseDemoController {
         addButton("Single — Primary OK") { [weak self] in self?.showSingle() }
         addButton("Pair — Secondary + Primary") { [weak self] in self?.showPair() }
         addButton("Stacked — Primary / Destructive / Secondary") { [weak self] in self?.showStacked() }
-        addButton("С полем ввода") { [weak self] in self?.showWithField() }
+        addButton("1 поле ввода") { [weak self] in self?.showWithField() }
+        addButton("2 поля ввода (login/password)") { [weak self] in self?.showWithTwoFields() }
     }
 
     private func showSingle() {
@@ -193,11 +194,31 @@ final class AlertDemoController: ShowcaseDemoController {
                 CrystalAlertAction(title: "Destructive", style: .destructive),
                 CrystalAlertAction(title: "Secondary", style: .secondary)
             ],
-            textField: CrystalAlertTextField(
-                label: "Value",
-                placeholder: "Value",
-                onChanged: { _ in }
-            )
+            textFields: [
+                CrystalAlertTextField(
+                    label: "Value",
+                    placeholder: "Value",
+                    onChanged: { _ in }
+                )
+            ],
+            theme: .system
+        )
+        present(alert, animated: false)
+    }
+
+    private func showWithTwoFields() {
+        let alert = CrystalAlertController(
+            title: "Войти в аккаунт",
+            message: "Введите логин и пароль.",
+            actions: [
+                CrystalAlertAction(title: "Отмена", style: .secondary),
+                CrystalAlertAction(title: "Войти", style: .primary)
+            ],
+            textFields: [
+                CrystalAlertTextField(label: "Логин", placeholder: "email@example.com", keyboardType: .emailAddress),
+                CrystalAlertTextField(label: "Пароль", placeholder: "********", isSecureTextEntry: true)
+            ],
+            theme: .system
         )
         present(alert, animated: false)
     }

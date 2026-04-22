@@ -92,12 +92,11 @@ public final class CrystalTooltipController {
     /// source view's bounds. Placement: prefers ABOVE the source unless
     /// there's no room, then falls back BELOW.
     public func present(from sourceView: UIView, sourceRect: CGRect? = nil) {
-        // Mount on the source view's window — a tooltip should float above
-        // tab bars / nav bars / modal sheets regardless of what the source
-        // is nested in. Frame-based attach (not auto-layout) so the first
-        // layoutSubviews has valid bounds before place(pointingTo:) reads
-        // them for card positioning.
-        guard let window = sourceView.window else { return }
+        // Prefer the source view's window so the tip follows that window's
+        // coordinate space. If the source isn't yet attached (rare: called
+        // before viewDidAppear), fall back to the app's active window.
+        let window = sourceView.window ?? CrystalToastController.findActiveWindow()
+        guard let window else { return }
         dismiss(animated: false)
         hostView = window
 

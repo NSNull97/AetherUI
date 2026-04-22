@@ -148,19 +148,21 @@ final class CrystalAlertRootView: UIView {
     private let textFieldConfigs: [CrystalAlertTextField]
 
     private let dimView = UIView()
-    private let card: UIView
-    private let blurView: UIVisualEffectView
+    /// Interactive liquid-glass card on iOS 26+. `glassIsInteractive = true`
+    /// opts into the native elastic deform / specular shimmer under touch.
+    /// All content is hosted inside `card.contentView`.
+    private let card: GlassBackgroundView
     private let tintOverlay = UIView()
 
     private let titleLabel = UILabel()
     private let messageLabel = UILabel()
-    /// One `FieldRow` per configured text field — a pill-shaped 52pt tall
-    /// input group. Stacked vertically with 8pt between them.
+    /// One `FieldRow` per configured text field — a 52pt pill-shaped input.
+    /// Optional caption label renders *above* the pill, not inside it, so
+    /// the pill itself is exactly the requested 52pt.
     private struct FieldRow {
+        let captionLabel: UILabel?
         let container: UIView
-        let label: UILabel?
         let input: UITextField
-        let divider: UIView
     }
     private var fieldRows: [FieldRow] = []
     private var buttonViews: [CrystalAlertPillButton] = []
@@ -195,9 +197,10 @@ final class CrystalAlertRootView: UIView {
         self.actions = actions
         self.textFieldConfigs = textFields
 
-        let effect = SystemGlassEffect.make(style: .regular, isDark: theme.backgroundType == .dark)
-        self.blurView = UIVisualEffectView(effect: effect)
-        self.card = UIView()
+        self.card = GlassBackgroundView(style: .regular)
+        self.card.glassIsInteractive = true
+        self.card.glassCornerRadius = Self.cardCornerRadius
+
         super.init(frame: .zero)
 
         // Start everything hidden so the first frame after present is
@@ -213,32 +216,33 @@ final class CrystalAlertRootView: UIView {
         dimView.addGestureRecognizer(tap)
         addSubview(dimView)
 
-        card.layer.cornerRadius = Self.cardCornerRadius
-        card.layer.cornerCurve = .continuous
-        card.layer.masksToBounds = true
+        // GlassBackgroundView clips content to its rounded shape via the
+        // native UIGlassEffect pipeline (iOS 26) / legacy layer mask
+        // fallback — we don't need to set masksToBounds manually.
         addSubview(card)
 
-        card.addSubview(blurView)
         if GlassCompatibility.isLiquidDesignAvailable {
+            // UIGlassEffect paints the card — skip solid tint so the
+            // refraction / specular show through.
             tintOverlay.backgroundColor = .clear
         } else {
             tintOverlay.backgroundColor = theme.backgroundColor
         }
-        card.addSubview(tintOverlay)
+        card.contentView.addSubview(tintOverlay)
 
         titleLabel.textAlignment = .left
         titleLabel.numberOfLines = 0
         titleLabel.textColor = theme.primaryColor
         titleLabel.font = .systemFont(ofSize: floor(theme.baseFontSize), weight: .semibold)
         titleLabel.text = title
-        card.addSubview(titleLabel)
+        card.contentView.addSubview(titleLabel)
 
         messageLabel.textAlignment = .left
         messageLabel.numberOfLines = 0
         messageLabel.textColor = theme.primaryColor
         messageLabel.font = .systemFont(ofSize: floor(theme.baseFontSize * 15.0 / 17.0))
         messageLabel.text = message
-        card.addSubview(messageLabel)
+        card.contentView.addSubview(messageLabel)
 
         for config in textFields {
             fieldRows.append(installFieldRow(config: config))
@@ -248,7 +252,7 @@ final class CrystalAlertRootView: UIView {
             let button = CrystalAlertPillButton(action: action, theme: theme)
             button.tapped = { [weak self] a in self?.actionTriggered(a) }
             buttonViews.append(button)
-            card.addSubview(button)
+            card.contentView.addSubview(button)
         }
     }
 
@@ -257,26 +261,22 @@ final class CrystalAlertRootView: UIView {
     }
 
     private func installFieldRow(config: CrystalAlertTextField) -> FieldRow {
-        let container = UIView()
-        container.backgroundColor = theme.pillFillColor
-        container.layer.cornerRadius = 12.0
-        container.layer.cornerCurve = .continuous
-        container.layer.masksToBounds = true
-        card.addSubview(container)
-
-        var labelView: UILabel?
+        var captionView: UILabel?
         if let labelText = config.label, !labelText.isEmpty {
             let label = UILabel()
             label.text = labelText
             label.font = .systemFont(ofSize: 13.0, weight: .semibold)
             label.textColor = theme.primaryColor
-            container.addSubview(label)
-            labelView = label
+            card.contentView.addSubview(label)
+            captionView = label
         }
 
-        let divider = UIView()
-        divider.backgroundColor = theme.separatorColor
-        container.addSubview(divider)
+        let container = UIView()
+        container.backgroundColor = theme.pillFillColor
+        container.layer.cornerRadius = 12.0
+        container.layer.cornerCurve = .continuous
+        container.layer.masksToBounds = true
+        card.contentView.addSubview(container)
 
         let field = UITextField()
         field.placeholder = config.placeholder
@@ -284,12 +284,12 @@ final class CrystalAlertRootView: UIView {
         field.isSecureTextEntry = config.isSecureTextEntry
         field.keyboardType = config.keyboardType
         field.textColor = theme.primaryColor
-        field.font = .systemFont(ofSize: 15.0)
+        field.font = .systemFont(ofSize: 17.0)
         field.borderStyle = .none
         field.addTarget(self, action: #selector(fieldEditingChanged(_:)), for: .editingChanged)
         container.addSubview(field)
 
-        return FieldRow(container: container, label: labelView, input: field, divider: divider)
+        return FieldRow(captionLabel: captionView, container: container, input: field)
     }
 
     func textFieldValue(at index: Int) -> String? {
@@ -309,9 +309,8 @@ final class CrystalAlertRootView: UIView {
         messageLabel.textColor = theme.primaryColor
         for row in fieldRows {
             row.container.backgroundColor = theme.pillFillColor
-            row.label?.textColor = theme.primaryColor
+            row.captionLabel?.textColor = theme.primaryColor
             row.input.textColor = theme.primaryColor
-            row.divider.backgroundColor = theme.separatorColor
         }
         buttonViews.forEach { $0.applyTheme(theme) }
     }
@@ -348,50 +347,36 @@ final class CrystalAlertRootView: UIView {
 
         if !fieldRows.isEmpty {
             y += Self.messageToFieldSpacing
-            let hInset: CGFloat = 12.0
+            let hInset: CGFloat = 14.0
+            let captionHeight: CGFloat = 18.0
+            let captionGap: CGFloat = 4.0
 
             for (index, row) in fieldRows.enumerated() {
+                // Optional caption label above the pill. Rendered at card
+                // content level (not inside the pill) so the pill stays
+                // exactly 52pt tall.
+                if let caption = row.captionLabel {
+                    caption.frame = CGRect(
+                        x: Self.horizontalPadding,
+                        y: y,
+                        width: innerWidth,
+                        height: captionHeight
+                    )
+                    y += captionHeight + captionGap
+                }
+
                 row.container.frame = CGRect(
                     x: Self.horizontalPadding,
                     y: y,
                     width: innerWidth,
                     height: Self.fieldHeight
                 )
-                let contentWidth = innerWidth - hInset * 2
-
-                // When a label is present we lay it out in the top half and
-                // the text field in the bottom half, with a subtle divider
-                // between. Without a label the input centers vertically.
-                if let label = row.label {
-                    let labelHeight: CGFloat = 16.0
-                    label.frame = CGRect(
-                        x: hInset,
-                        y: 6,
-                        width: contentWidth,
-                        height: labelHeight
-                    )
-                    row.divider.frame = CGRect(
-                        x: hInset,
-                        y: 6 + labelHeight + 4,
-                        width: contentWidth,
-                        height: 1.0 / UIScreen.main.scale
-                    )
-                    row.divider.isHidden = false
-                    row.input.frame = CGRect(
-                        x: hInset,
-                        y: 6 + labelHeight + 6,
-                        width: contentWidth,
-                        height: Self.fieldHeight - (6 + labelHeight + 6) - 4
-                    )
-                } else {
-                    row.divider.isHidden = true
-                    row.input.frame = CGRect(
-                        x: hInset,
-                        y: 0,
-                        width: contentWidth,
-                        height: Self.fieldHeight
-                    )
-                }
+                row.input.frame = CGRect(
+                    x: hInset,
+                    y: 0,
+                    width: innerWidth - hInset * 2,
+                    height: Self.fieldHeight
+                )
 
                 y += Self.fieldHeight
                 if index < fieldRows.count - 1 {
@@ -434,7 +419,7 @@ final class CrystalAlertRootView: UIView {
             width: cardWidth,
             height: cardHeight
         )
-        blurView.frame = card.bounds
+        card.update(size: card.bounds.size, cornerRadius: Self.cardCornerRadius, transition: .immediate)
         tintOverlay.frame = card.bounds
     }
 
