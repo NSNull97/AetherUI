@@ -78,6 +78,11 @@ public final class CrystalTooltipController {
     private var rootView: CrystalTooltipRootView?
     private var dismissWorkItem: DispatchWorkItem?
 
+    /// Self-pin — callers typically construct and call `present(from:)`
+    /// in one line without holding a reference. Without this set the
+    /// controller would deallocate before the user sees the tip.
+    private static var liveTooltips: [CrystalTooltipController] = []
+
     public init(
         content: CrystalTooltipContent,
         theme: CrystalTooltipTheme = .dark,
@@ -99,6 +104,10 @@ public final class CrystalTooltipController {
         guard let window else { return }
         dismiss(animated: false)
         hostView = window
+
+        if !Self.liveTooltips.contains(where: { $0 === self }) {
+            Self.liveTooltips.append(self)
+        }
 
         let rect = sourceRect ?? sourceView.bounds
         let windowRect = sourceView.convert(rect, to: window)
@@ -128,14 +137,21 @@ public final class CrystalTooltipController {
         let root = rootView
         rootView = nil
 
-        guard let root else { dismissed?(); return }
+        let unpin: () -> Void = { [weak self] in
+            guard let self else { return }
+            Self.liveTooltips.removeAll(where: { $0 === self })
+        }
+
+        guard let root else { unpin(); dismissed?(); return }
         if animated {
             root.animateOut { [weak self] in
                 root.removeFromSuperview()
+                unpin()
                 self?.dismissed?()
             }
         } else {
             root.removeFromSuperview()
+            unpin()
             dismissed?()
         }
     }

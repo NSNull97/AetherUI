@@ -102,6 +102,13 @@ public final class CrystalToastController {
     private var rootView: CrystalToastRootView?
     private var dismissWorkItem: DispatchWorkItem?
 
+    /// Self-pin set. Callers typically do
+    /// `CrystalToastController(content:).present()` without capturing the
+    /// returned controller, so we'd otherwise deallocate (and tear down
+    /// the root view) right after the initializer returns. Inserting
+    /// `self` here keeps us alive until `dismiss` clears the entry.
+    private static var liveToasts: [CrystalToastController] = []
+
     public init(
         content: CrystalToastContent,
         theme: CrystalToastTheme = .dark,
@@ -121,6 +128,11 @@ public final class CrystalToastController {
         dismiss(animated: false)
         hostView = target
 
+        // Keep self alive while on-screen — see `liveToasts` doc above.
+        if !Self.liveToasts.contains(where: { $0 === self }) {
+            Self.liveToasts.append(self)
+        }
+
         let root = CrystalToastRootView(content: content, theme: theme)
         root.onTap = { [weak self] in self?.dismiss(animated: true) }
         root.onAction = { [weak self] handler in
@@ -130,9 +142,6 @@ public final class CrystalToastController {
         root.frame = target.bounds
         root.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         target.addSubview(root)
-        // Force a layout pass so the card frame is valid before animateIn
-        // reads it. setNeedsLayout + layoutIfNeeded guarantees layoutSubviews
-        // runs synchronously here, not on the next run loop turn.
         root.setNeedsLayout()
         root.layoutIfNeeded()
         root.animateIn()
@@ -149,14 +158,21 @@ public final class CrystalToastController {
         let root = rootView
         rootView = nil
 
-        guard let root else { dismissed?(); return }
+        let unpin: () -> Void = { [weak self] in
+            guard let self else { return }
+            Self.liveToasts.removeAll(where: { $0 === self })
+        }
+
+        guard let root else { unpin(); dismissed?(); return }
         if animated {
             root.animateOut { [weak self] in
                 root.removeFromSuperview()
+                unpin()
                 self?.dismissed?()
             }
         } else {
             root.removeFromSuperview()
+            unpin()
             dismissed?()
         }
     }
@@ -223,6 +239,7 @@ public final class CrystalToastController {
 final class CrystalToastRootView: UIView {
     var onTap: () -> Void = {}
     var onAction: (@escaping () -> Void) -> Void = { _ in }
+    var cardFrame: CGRect { card.frame }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()

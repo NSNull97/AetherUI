@@ -14,8 +14,11 @@ open class CrystalAlertController: UIViewController {
     public let actions: [CrystalAlertAction]
     public let textFieldConfigs: [CrystalAlertTextField]
 
-    /// Tap outside the card dismisses. Default `false` — matches UIKit.
-    public var dismissOnOutsideTap: Bool = false
+    /// Tap outside the card dismisses. Default `true` — matches the
+    /// CrystalUI interactive-dim expectation (UIKit's UIAlertController
+    /// is `false`, but that's because UIKit forces the user to answer
+    /// the alert; our alerts are more toast-like).
+    public var dismissOnOutsideTap: Bool = true
 
     public var dismissed: ((Bool) -> Void)?
 
@@ -35,7 +38,7 @@ open class CrystalAlertController: UIViewController {
         message: String?,
         actions: [CrystalAlertAction],
         textFields: [CrystalAlertTextField] = [],
-        theme: CrystalAlertTheme = .light
+        theme: CrystalAlertTheme = .system
     ) {
         self.alertTitle = title
         self.alertMessage = message
@@ -57,7 +60,7 @@ open class CrystalAlertController: UIViewController {
         message: String?,
         actions: [CrystalAlertAction],
         textField: CrystalAlertTextField?,
-        theme: CrystalAlertTheme = .light
+        theme: CrystalAlertTheme = .system
     ) {
         self.init(
             title: title,
