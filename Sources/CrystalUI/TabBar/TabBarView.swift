@@ -158,82 +158,50 @@ public final class TabBarView: UIView {
     /// Morph: tab-bar pill → circle-button on the left with the active
     /// tab's icon inside it (Apple Music style).
     ///
-    /// Strategy: animate `transform` (scale + translate) instead of
-    /// bounds/frame. The native UIGlassContainerEffect renders its
-    /// glass at the container's *model* size and then participates in
-    /// the transform — scaling doesn't force a re-render, so the glass
-    /// smoothly shrinks under user eyes. Bounds / frame changes, by
-    /// contrast, make the effect snap to the new render target
-    /// immediately (root cause of the "just disappears" reports).
-    ///
-    /// Icons inside the container will scale alongside it — to keep
-    /// the active tab's icon at natural size we apply a compensating
-    /// inverse scale on it. Non-active items fade out.
+    /// Items (including the active tab) live inside
+    /// `liquidLensView.contentView`, which itself sits inside the
+    /// glass container. When the container's bounds animate, the lens
+    /// animates along with it (autoresizing), and items follow because
+    /// we also animate the lens's own bounds.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
         isSearchAnimating = true
-
+        tabBarGlassContainer.transform = .identity
         tabBarGlassContainer.layer.mask = nil
 
-        // Compute the transform that moves the container's left edge
-        // exactly where we want the circle to be and scales it down to
-        // search-mode height.
-        let containerOrigFrame = tabBarGlassContainer.frame
-        guard containerOrigFrame.width > 0 else {
-            isSearchAnimating = false
-            return
-        }
-        let h = Self.searchModeHeight
-        let scale = h / containerOrigFrame.height
-        // Anchor defaults to (0.5, 0.5) — center. Under that anchor, a
-        // scale shrinks the container toward its current center (180pt
-        // from the left). We want it to shrink toward the LEFT edge.
-        // Translate to place the post-scale left edge at `sideInset`
-        // and the post-scale vertical center at the original vertical
-        // center.
-        let targetLeft: CGFloat = theme.sideInset
-        let originalLeft = containerOrigFrame.minX
-        // After applying scale s to a view whose current center is at
-        // cx, the post-scale left edge = cx - (w * s)/2. To land that
-        // at `targetLeft`, we shift cx by delta = targetLeft - (cx -
-        // w*s/2). Since transform.translate moves the center, that's
-        // our tx.
-        let postScaleHalfWidth = (containerOrigFrame.width * scale) / 2
-        let currentCenterX = containerOrigFrame.midX
-        let desiredCenterX = targetLeft + postScaleHalfWidth
-        let tx = desiredCenterX - currentCenterX
-        let shrinkTransform = CGAffineTransform(translationX: tx, y: 0)
-            .scaledBy(x: scale, y: scale)
-
-        // Active item: keep visually at its native size by applying an
-        // inverse scale. Move its center to the new (scaled) center of
-        // the container's left-edge circle.
-        let inverseScale = 1.0 / scale
-        let activeCompensatingTransform = CGAffineTransform(scaleX: inverseScale, y: inverseScale)
-        // The container's own center (in TabBarView coords) after shrink:
-        let shrunkContainerCenter = CGPoint(x: desiredCenterX, y: containerOrigFrame.midY)
-        // Express that center in the container's coord space (which is
-        // NOT scaled in the model — the transform is a render-time
-        // effect, container.bounds stays original-sized).
-        let activeCenterInContainer = tabBarGlassContainer.convert(shrunkContainerCenter, from: self)
+        let circleFrame = activeTabCircleFrame()
+        let circleSize = circleFrame.size
+        let circleCenter = CGPoint(x: circleFrame.midX, y: circleFrame.midY)
 
         if animated {
             searchAnimator?.stopAnimation(true)
+
             let animator = UIViewPropertyAnimator(duration: 1.0, dampingRatio: 0.78) {
-                self.tabBarGlassContainer.transform = shrinkTransform
+                // Shrink the glass container to a 42×42 disc, anchored
+                // at its new center (left edge + half-height).
+                self.tabBarGlassContainer.bounds = CGRect(origin: .zero, size: circleSize)
+                self.tabBarGlassContainer.center = circleCenter
+                self.tabBarGlassContainer.update(
+                    size: circleSize,
+                    isDark: self.isEffectivelyDark,
+                    transition: .immediate
+                )
+
+                // Shrink the liquid lens to the circle's local bounds so
+                // items follow.
+                self.liquidLensView.frame = CGRect(origin: .zero, size: circleSize)
 
                 for (index, view) in self.itemViews.enumerated() {
                     if index == self.selectedIndex {
-                        view.center = activeCenterInContainer
-                        view.transform = activeCompensatingTransform
+                        view.frame = CGRect(origin: .zero, size: circleSize)
                         view.alpha = 1.0
                     } else {
                         view.alpha = 0.0
                         view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
                     }
                 }
-                self.liquidLensView.alpha = 0.0
+
                 self.searchShowcaseView?.alpha = 0.0
             }
             animator.addCompletion { _ in
@@ -243,18 +211,19 @@ public final class TabBarView: UIView {
             animator.startAnimation()
             searchAnimator = animator
         } else {
-            tabBarGlassContainer.transform = shrinkTransform
+            tabBarGlassContainer.bounds = CGRect(origin: .zero, size: circleSize)
+            tabBarGlassContainer.center = circleCenter
+            tabBarGlassContainer.update(size: circleSize, isDark: isEffectivelyDark, transition: .immediate)
+            liquidLensView.frame = CGRect(origin: .zero, size: circleSize)
             for (index, view) in itemViews.enumerated() {
                 if index == selectedIndex {
-                    view.center = activeCenterInContainer
-                    view.transform = activeCompensatingTransform
+                    view.frame = CGRect(origin: .zero, size: circleSize)
                     view.alpha = 1.0
                 } else {
                     view.alpha = 0.0
                     view.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
                 }
             }
-            liquidLensView.alpha = 0.0
             searchShowcaseView?.alpha = 0.0
             isSearchAnimating = false
         }
