@@ -241,12 +241,20 @@ final class CrystalToastRootView: UIView {
     var onAction: (@escaping () -> Void) -> Void = { _ in }
     var cardFrame: CGRect { card.frame }
 
+    /// While animating out, layoutSubviews must NOT reset card.frame to the
+    /// resting position — that would reset the model origin mid-animation
+    /// and the user sees a one-frame pop up before the slide-down continues.
+    private var isAnimatingOut: Bool = false
+
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         // Insets propagate from window → root asynchronously after attach.
         // Re-layout once they're real so the card doesn't sit hidden under
-        // the home indicator on the first frame.
-        setNeedsLayout()
+        // the home indicator on the first frame. Skip during dismiss —
+        // we pin the card's position there.
+        if !isAnimatingOut {
+            setNeedsLayout()
+        }
     }
 
     private let content: CrystalToastContent
@@ -322,6 +330,10 @@ final class CrystalToastRootView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+
+        // Don't touch card.frame while dismissing — the animation owns the
+        // card's position for its lifetime.
+        if isAnimatingOut { return }
 
         let size = bounds.size
         let sideInset = Self.screenMargin + safeAreaInsets.left
@@ -412,6 +424,8 @@ final class CrystalToastRootView: UIView {
     }
 
     func animateOut(completion: @escaping () -> Void) {
+        isAnimatingOut = true
+
         // Snapshot the presentation-layer state (the *rendered* transform
         // and opacity, valid even mid-flight through a spring). Commit
         // that snapshot as the model-layer state and cancel all in-flight
