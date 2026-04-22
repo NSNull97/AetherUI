@@ -319,13 +319,11 @@ public final class TabBarView: UIView {
         addSubview(close)
         searchCloseButton = close
 
-        // Circle with active tab's icon — tap to go back to tabs
-        let activeIcon = activeTabIcon()
-        let circle = GlassBarButtonView(icon: activeIcon, state: .glass)
-        circle.contentTintColor = theme.tabBarSelectedIconColor
-        circle.action = { [weak self] _ in self?.onSearchDismissed?() }
-        addSubview(circle)
-        searchTabCircle = circle
+        // searchTabCircle (separate active-tab button) is NOT created here
+        // anymore — the liquidLensView itself collapses into a 48×48
+        // circle via `isCollapsed: true` in `activateSearchMode`. That
+        // same circle carries the active tab's icon and acts as the
+        // "back to tabs" tap target.
     }
 
     private func teardownSearchViews() {
@@ -385,16 +383,15 @@ public final class TabBarView: UIView {
         searchTextField?.frame = CGRect(x: capsuleFrame.minX + 8, y: capsuleFrame.minY, width: max(0, capsuleFrame.width - 16), height: h)
         searchTextField?.alpha = 0.0
 
-        // Close button hidden at capsule right edge
-        searchCloseButton?.frame = CGRect(x: capsuleFrame.maxX - h, y: capsuleFrame.minY, width: h, height: h)
+        // Close button starts offscreen to the right — it slides in
+        // only when the text field gains focus.
+        searchCloseButton?.frame = CGRect(x: bounds.width - theme.sideInset - h, y: capsuleFrame.minY, width: h, height: h)
         searchCloseButton?.alpha = 0.0
-
-        // Circle starts at active tab's position
-        let circleFrame = CGRect(x: tabF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
-        searchTabCircle?.frame = circleFrame
+        searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
     }
 
-    /// End: capsule fills most of the width, circle at the left edge.
+    /// End state: capsule fills the width from just right of the
+    /// collapsed lens (48pt + 8pt gap) to just left of the close button.
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
@@ -403,17 +400,16 @@ public final class TabBarView: UIView {
 
         updateSearchDimFrame()
 
-        // Circle (active-tab icon) sits at the left
-        let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
-        searchTabCircle?.frame = circleFrame
+        // Left slot is occupied by the collapsed lens (48×48) — see
+        // activateSearchMode. Capsule starts to its right.
+        let circleRight = sideInset + Self.collapsedLensSize
 
-        // Close button (glass circle X) at the right
+        // Close button (glass circle X) at the right.
         let closeFrame = CGRect(x: bounds.width - sideInset - h, y: pillY, width: h, height: h)
         searchCloseButton?.frame = closeFrame
-        searchCloseButton?.alpha = 1.0
 
-        // Capsule between circle and close button
-        let capsuleX = circleFrame.maxX + spacing
+        // Capsule between circle and close button.
+        let capsuleX = circleRight + spacing
         let capsuleWidth = max(0, closeFrame.minX - capsuleX - spacing)
         let capsuleFrame = CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
         searchCapsule?.frame = capsuleFrame
