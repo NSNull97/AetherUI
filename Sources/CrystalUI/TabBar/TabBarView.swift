@@ -145,67 +145,144 @@ public final class TabBarView: UIView {
     private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
     private var searchDimView: EdgeEffectView?               // edge-effect bg
 
-    /// Morph: pill → active-tab circle, search button → capsule with text field.
+    /// Morph: tab-bar pill → active-tab circle via `liquidLensView.update(
+    /// size: 48, isCollapsed: true)`. Mirrors Telegram-iOS
+    /// TabBarComponent (§854-939 in submodules/TelegramUI/Components/
+    /// TabBarComponent/Sources/TabBarComponent.swift).
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
         buildSearchViews()
 
+        // Collapse target for the lens: 48×48 square at the left edge,
+        // same row as the existing pill. The native `_UILiquidLensView`
+        // renders itself as a circle under `isCollapsed: true`.
+        let collapsedSize = CGSize(width: 48.0, height: 48.0)
+        let lensTargetFrame = CGRect(
+            origin: CGPoint(x: theme.sideInset, y: liquidLensView.frame.minY),
+            size: collapsedSize
+        )
+
         if animated {
             positionSearchViewsAtOrigin()
-            // Start capsule and circle small for glass-morph feel
             searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            // Show keyboard simultaneously with the morph animation
-            searchTextField?.becomeFirstResponder()
-            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
+            searchTabCircle?.alpha = 0.0  // hidden — lens plays the circle role
+            searchCloseButton?.alpha = 0.0
+            searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
+
+            // Lens collapse animates via its own ContainedViewLayoutTransition.
+            // Run it OUTSIDE the UIView.animate block so its internal
+            // CATransaction isn't swallowed by the outer animation context.
+            let transition: ContainedViewLayoutTransition = .animated(duration: 1.0, curve: .spring)
+            transition.updateFrame(view: liquidLensView, frame: lensTargetFrame)
+            liquidLensView.update(
+                size: collapsedSize,
+                selectionOrigin: .zero,
+                selectionSize: collapsedSize,
+                inset: 4.0,
+                isDark: isEffectivelyDark,
+                isLifted: false,
+                isCollapsed: true,
+                transition: transition
+            )
+
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
-                self.searchTabCircle?.transform = .identity
-                self.searchCloseButton?.transform = .identity
-                self.tabBarGlassContainer.alpha = 0.0
-                self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 1.0
+                self.searchShowcaseView?.alpha = 0.0
             }
         } else {
             positionSearchViewsExpanded()
-            tabBarGlassContainer.alpha = 0.0
+            liquidLensView.frame = lensTargetFrame
+            liquidLensView.update(
+                size: collapsedSize,
+                selectionOrigin: .zero,
+                selectionSize: collapsedSize,
+                inset: 4.0,
+                isDark: isEffectivelyDark,
+                isLifted: false,
+                isCollapsed: true,
+                transition: .immediate
+            )
             searchDimView?.alpha = 1.0
-            searchTextField?.becomeFirstResponder()
+            searchShowcaseView?.alpha = 0.0
         }
     }
 
-    /// Reverse morph: capsule → search button, circle → pill.
+    /// Reverse morph: lens expands back to full pill, search chrome fades.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
         searchTextField?.resignFirstResponder()
 
+        // Restore lens to full pill. The next layoutSubviews will do the
+        // full layout pass; we trigger it now so the expansion animates
+        // via our spring-based transition.
+        let transition: ContainedViewLayoutTransition = animated
+            ? .animated(duration: 1.0, curve: .spring)
+            : .immediate
+        let fullLensFrame = fullPillLensFrame()
+        transition.updateFrame(view: liquidLensView, frame: fullLensFrame)
+        liquidLensView.update(
+            size: fullLensFrame.size,
+            selectionOrigin: selectedItemFrameInLens().origin,
+            selectionSize: selectedItemFrameInLens().size,
+            inset: 4.0,
+            isDark: isEffectivelyDark,
+            isLifted: false,
+            isCollapsed: false,
+            transition: transition
+        )
+
         if animated {
-            // Phase 1: quick fade of search elements + shrink toward origins
-            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-                // Fade + scale-down all search elements
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
                 self.searchCapsule?.alpha = 0.0
-                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
                 self.searchTextField?.alpha = 0.0
                 self.searchCloseButton?.alpha = 0.0
-                self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-                self.searchTabCircle?.alpha = 0.0
-                self.searchTabCircle?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
                 self.searchDimView?.alpha = 0.0
-
-                // Restore tab bar
-                self.tabBarGlassContainer.alpha = 1.0
-                self.tabBarGlassContainer.transform = .identity
+                self.searchShowcaseView?.alpha = 1.0
             } completion: { _ in
                 self.teardownSearchViews()
             }
         } else {
-            tabBarGlassContainer.alpha = 1.0
-            tabBarGlassContainer.transform = .identity
+            searchShowcaseView?.alpha = 1.0
             teardownSearchViews()
         }
+    }
+
+    /// Full-width lens frame at its current theme-driven position.
+    /// Mirrors the math in `layoutLiquidGlassItems` without repeating it.
+    private func fullPillLensFrame() -> CGRect {
+        let sideInset = theme.sideInset
+        let showcaseSize: CGFloat = searchShowcaseView != nil ? theme.pillHeight : 0.0
+        let showcaseFootprint = showcaseSize > 0.0 ? showcaseSize + theme.showcaseSpacing : 0.0
+        let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
+        let pillWidth = max(0.0, availableWidth - showcaseFootprint)
+        let pillY = bounds.height - theme.bottomInset - theme.pillHeight
+        return CGRect(x: 0, y: pillY, width: pillWidth, height: theme.pillHeight)
+    }
+
+    /// Selection frame (in lens-local coords) for the currently selected
+    /// tab — used as the resting selectionOrigin/Size when deactivating.
+    private func selectedItemFrameInLens() -> CGRect {
+        guard selectedIndex < itemViews.count else { return .zero }
+        let item = itemViews[selectedIndex]
+        return item.frame
     }
 
     // -- Build / teardown
