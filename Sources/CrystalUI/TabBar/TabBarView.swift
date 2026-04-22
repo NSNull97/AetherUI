@@ -231,6 +231,7 @@ public final class TabBarView: UIView {
         tf.autocapitalizationType = .none
         tf.clearButtonMode = .whileEditing
         tf.alpha = 0.0
+        tf.delegate = self
         tf.addTarget(self, action: #selector(searchTextDidChange), for: .editingChanged)
         let icon = UIImageView(image: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .medium)))
         icon.tintColor = .secondaryLabel
@@ -325,11 +326,16 @@ public final class TabBarView: UIView {
         searchTabCircle?.frame = circleFrame
     }
 
+    /// Vertical lift for the active-search row — sits a few points above
+    /// the normal tab-bar center so the close button and field don't
+    /// hug the bottom safe-area edge.
+    private static let searchRowLift: CGFloat = 12.0
+
     /// End: capsule fills most of the width, circle at the left edge.
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2
+        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2 - Self.searchRowLift
         let spacing: CGFloat = 8.0
 
         updateSearchDimFrame()
@@ -338,10 +344,11 @@ public final class TabBarView: UIView {
         let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
         searchTabCircle?.frame = circleFrame
 
-        // Close button (glass circle X) at the right
+        // Close button (glass circle X) at the right. Alpha stays at its
+        // current value — the field-delegate flips it to 1 when editing
+        // begins, back to 0 when editing ends.
         let closeFrame = CGRect(x: bounds.width - sideInset - h, y: pillY, width: h, height: h)
         searchCloseButton?.frame = closeFrame
-        searchCloseButton?.alpha = 1.0
 
         // Capsule between circle and close button
         let capsuleX = circleFrame.maxX + spacing
@@ -1047,5 +1054,24 @@ private final class TabBarItemView: UIView {
             width: badgeSize.width,
             height: badgeSize.height
         )
+    }
+}
+
+// MARK: - Search text field delegate
+
+extension TabBarView: UITextFieldDelegate {
+    public func textFieldDidBeginEditing(_ textField: UITextField) {
+        guard textField === searchTextField, let close = searchCloseButton else { return }
+        UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.2, options: [.beginFromCurrentState]) {
+            close.alpha = 1.0
+            close.transform = .identity
+        }
+    }
+
+    public func textFieldDidEndEditing(_ textField: UITextField) {
+        guard textField === searchTextField, let close = searchCloseButton else { return }
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            close.alpha = 0.0
+        }
     }
 }
