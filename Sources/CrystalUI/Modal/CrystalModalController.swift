@@ -269,6 +269,13 @@ public final class CrystalModalController: UIViewController {
         content.view.frame = contentContainer.bounds
     }
 
+    private struct MaskSignature: Equatable {
+        let bounds: CGRect
+        let topRadius: CGFloat
+        let bottomRadius: CGFloat
+    }
+    private var lastMaskSignature: MaskSignature?
+
     private func updateMaskPath() {
         let bounds = view.bounds
         let topRadius = config.topCornerRadius
@@ -280,6 +287,13 @@ public final class CrystalModalController: UIViewController {
         let stage1Radius = max(0.0, deviceRadius - config.bottomInsetStage1)
         let stage2Radius = max(0.0, deviceRadius - config.bottomInsetStage2)
         let bottomRadius = stage1Radius + (stage2Radius - stage1Radius) * detentProgress
+
+        let signature = MaskSignature(bounds: bounds, topRadius: topRadius, bottomRadius: bottomRadius)
+        if signature == lastMaskSignature {
+            return
+        }
+        lastMaskSignature = signature
+
         let newPath = Self.roundedRectPath(
             in: bounds,
             topLeftRadius: topRadius,
