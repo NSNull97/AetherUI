@@ -146,133 +146,64 @@ public final class TabBarView: UIView {
     private var searchDimView: EdgeEffectView?               // edge-effect bg
 
     /// Morph: pill → active-tab circle, search button → capsule with text field.
-    ///
-    /// Direct port of Telegram-iOS TabBarComponent (see
-    /// submodules/TelegramUI/Components/TabBarComponent/Sources/TabBarComponent.swift
-    /// §854–939). The key mechanism: shrink `liquidLensView` to a 48×48
-    /// square via `.update(size: 48, isCollapsed: true)` — the native
-    /// `_UILiquidLensView` handles the circle collapse internally. Items
-    /// inside fade out (non-selected) or re-center (selected). The old
-    /// fade-the-whole-container approach is gone.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
         buildSearchViews()
 
-        let collapsedSize = CGSize(width: Self.collapsedLensSize, height: Self.collapsedLensSize)
-        let transition: ContainedViewLayoutTransition = animated
-            ? .animated(duration: 1.0, curve: .spring)
-            : .immediate
-
         if animated {
             positionSearchViewsAtOrigin()
+            // Start capsule and circle small for glass-morph feel
             searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchCloseButton?.alpha = 0.0
-            searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
-        } else {
-            positionSearchViewsExpanded()
-            searchDimView?.alpha = 1.0
-        }
-
-        // Shrink the lens to a 48×48 square at its current left edge —
-        // `isCollapsed: true` lets the native lens render as a circle.
-        let lensOrigin = liquidLensView.frame.origin
-        transition.updateFrame(
-            view: liquidLensView,
-            frame: CGRect(origin: lensOrigin, size: collapsedSize)
-        )
-        liquidLensView.update(
-            size: collapsedSize,
-            selectionOrigin: .zero,
-            selectionSize: collapsedSize,
-            inset: 4.0,
-            isDark: isEffectivelyDark,
-            isLifted: false,
-            isCollapsed: true,
-            transition: transition
-        )
-
-        // Re-layout items: selected centers inside the collapsed lens,
-        // others fade to alpha 0. Matches TabBarComponent §808–820.
-        for (index, itemView) in itemViews.enumerated() {
-            if index == selectedIndex {
-                transition.updateFrame(
-                    view: itemView,
-                    frame: CGRect(origin: .zero, size: collapsedSize)
-                )
-                transition.updateAlpha(view: itemView, alpha: 1.0)
-            } else {
-                transition.updateAlpha(view: itemView, alpha: 0.0)
-            }
-        }
-        for (index, selectedItemView) in selectedItemViews.enumerated() where index == selectedIndex {
-            transition.updateFrame(
-                view: selectedItemView,
-                frame: CGRect(origin: .zero, size: collapsedSize)
-            )
-        }
-
-        if animated {
-            UIView.animate(
-                withDuration: 1.0,
-                delay: 0,
-                usingSpringWithDamping: 0.78,
-                initialSpringVelocity: 0.3,
-                options: [.beginFromCurrentState]
-            ) {
+            searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+            // Show keyboard simultaneously with the morph animation
+            searchTextField?.becomeFirstResponder()
+            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
+                self.searchTabCircle?.transform = .identity
+                self.searchCloseButton?.transform = .identity
+                self.tabBarGlassContainer.alpha = 0.0
+                self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 1.0
-                self.searchShowcaseView?.alpha = 0.0
             }
         } else {
             positionSearchViewsExpanded()
-            searchShowcaseView?.alpha = 0.0
+            tabBarGlassContainer.alpha = 0.0
             searchDimView?.alpha = 1.0
+            searchTextField?.becomeFirstResponder()
         }
     }
 
-    private static let collapsedLensSize: CGFloat = 48.0
-
-    /// Reverse morph: collapsed lens → full pill, capsule → small search
-    /// button, close button retracts.
+    /// Reverse morph: capsule → search button, circle → pill.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
         searchTextField?.resignFirstResponder()
 
         if animated {
-            UIView.animate(
-                withDuration: 1.0,
-                delay: 0,
-                usingSpringWithDamping: 0.78,
-                initialSpringVelocity: 0.3,
-                options: [.beginFromCurrentState]
-            ) {
-                // Fade out search chrome
+            // Phase 1: quick fade of search elements + shrink toward origins
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+                // Fade + scale-down all search elements
                 self.searchCapsule?.alpha = 0.0
-                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
                 self.searchTextField?.alpha = 0.0
                 self.searchCloseButton?.alpha = 0.0
-                self.searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
+                self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchTabCircle?.alpha = 0.0
+                self.searchTabCircle?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 0.0
-                self.searchShowcaseView?.alpha = 1.0
 
-                // Expand lens back to full width + restore item frames
-                // via the standard layout path.
-                self.layoutItemViews()
-                for view in self.itemViews {
-                    view.alpha = 1.0
-                }
+                // Restore tab bar
+                self.tabBarGlassContainer.alpha = 1.0
+                self.tabBarGlassContainer.transform = .identity
             } completion: { _ in
                 self.teardownSearchViews()
             }
         } else {
-            searchShowcaseView?.alpha = 1.0
-            layoutItemViews()
-            for view in itemViews {
-                view.alpha = 1.0
-            }
+            tabBarGlassContainer.alpha = 1.0
+            tabBarGlassContainer.transform = .identity
             teardownSearchViews()
         }
     }
@@ -319,11 +250,13 @@ public final class TabBarView: UIView {
         addSubview(close)
         searchCloseButton = close
 
-        // searchTabCircle (separate active-tab button) is NOT created here
-        // anymore — the liquidLensView itself collapses into a 48×48
-        // circle via `isCollapsed: true` in `activateSearchMode`. That
-        // same circle carries the active tab's icon and acts as the
-        // "back to tabs" tap target.
+        // Circle with active tab's icon — tap to go back to tabs
+        let activeIcon = activeTabIcon()
+        let circle = GlassBarButtonView(icon: activeIcon, state: .glass)
+        circle.contentTintColor = theme.tabBarSelectedIconColor
+        circle.action = { [weak self] _ in self?.onSearchDismissed?() }
+        addSubview(circle)
+        searchTabCircle = circle
     }
 
     private func teardownSearchViews() {
@@ -383,15 +316,16 @@ public final class TabBarView: UIView {
         searchTextField?.frame = CGRect(x: capsuleFrame.minX + 8, y: capsuleFrame.minY, width: max(0, capsuleFrame.width - 16), height: h)
         searchTextField?.alpha = 0.0
 
-        // Close button starts offscreen to the right — it slides in
-        // only when the text field gains focus.
-        searchCloseButton?.frame = CGRect(x: bounds.width - theme.sideInset - h, y: capsuleFrame.minY, width: h, height: h)
+        // Close button hidden at capsule right edge
+        searchCloseButton?.frame = CGRect(x: capsuleFrame.maxX - h, y: capsuleFrame.minY, width: h, height: h)
         searchCloseButton?.alpha = 0.0
-        searchCloseButton?.transform = CGAffineTransform(translationX: 60, y: 0)
+
+        // Circle starts at active tab's position
+        let circleFrame = CGRect(x: tabF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
+        searchTabCircle?.frame = circleFrame
     }
 
-    /// End state: capsule fills the width from just right of the
-    /// collapsed lens (48pt + 8pt gap) to just left of the close button.
+    /// End: capsule fills most of the width, circle at the left edge.
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
@@ -400,16 +334,17 @@ public final class TabBarView: UIView {
 
         updateSearchDimFrame()
 
-        // Left slot is occupied by the collapsed lens (48×48) — see
-        // activateSearchMode. Capsule starts to its right.
-        let circleRight = sideInset + Self.collapsedLensSize
+        // Circle (active-tab icon) sits at the left
+        let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
+        searchTabCircle?.frame = circleFrame
 
-        // Close button (glass circle X) at the right.
+        // Close button (glass circle X) at the right
         let closeFrame = CGRect(x: bounds.width - sideInset - h, y: pillY, width: h, height: h)
         searchCloseButton?.frame = closeFrame
+        searchCloseButton?.alpha = 1.0
 
-        // Capsule between circle and close button.
-        let capsuleX = circleRight + spacing
+        // Capsule between circle and close button
+        let capsuleX = circleFrame.maxX + spacing
         let capsuleWidth = max(0, closeFrame.minX - capsuleX - spacing)
         let capsuleFrame = CGRect(x: capsuleX, y: pillY, width: capsuleWidth, height: h)
         searchCapsule?.frame = capsuleFrame
