@@ -150,9 +150,9 @@ public final class TabBarView: UIView {
     /// the animation owns it.
     private var isSearchAnimating: Bool = false
 
-    /// Morph: tab-bar pill → circle at active-tab position.
-    /// STEP 1 (current): just shrink the glass container. Search capsule,
-    /// close button, dim overlay come in subsequent iterations.
+    /// Morph: tab-bar pill → circle-button on the left with the active
+    /// tab's icon inside it (Apple Music style). The search showcase
+    /// pill and close button expand in next steps.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
@@ -161,11 +161,6 @@ public final class TabBarView: UIView {
         let circleFrame = activeTabCircleFrame()
 
         if animated {
-            // Animate the container's outer frame in UIView.animate AND
-            // drive the internal native-effect resize via the container's
-            // own transition — otherwise the outer border moves but the
-            // UIGlassContainerEffect inside snaps to the final size
-            // instantly (looks like "just a border morph").
             UIView.animate(
                 withDuration: 1.0,
                 delay: 0,
@@ -173,7 +168,21 @@ public final class TabBarView: UIView {
                 initialSpringVelocity: 0.3,
                 options: [.beginFromCurrentState]
             ) {
+                // Shrink glass container to the left-edge circle.
                 self.tabBarGlassContainer.frame = circleFrame
+                // Move the active item to the center of that circle; fade
+                // the rest out. Lens/showcase disappear too — they'll be
+                // replaced by the search capsule in the next step.
+                for (index, view) in self.itemViews.enumerated() {
+                    if index == self.selectedIndex {
+                        view.frame = CGRect(origin: .zero, size: circleFrame.size)
+                        view.alpha = 1.0
+                    } else {
+                        view.alpha = 0.0
+                    }
+                }
+                self.liquidLensView.alpha = 0.0
+                self.searchShowcaseView?.alpha = 0.0
             } completion: { _ in
                 self.isSearchAnimating = false
             }
@@ -189,17 +198,27 @@ public final class TabBarView: UIView {
                 isDark: isEffectivelyDark,
                 transition: .immediate
             )
+            for (index, view) in itemViews.enumerated() {
+                if index == selectedIndex {
+                    view.frame = CGRect(origin: .zero, size: circleFrame.size)
+                    view.alpha = 1.0
+                } else {
+                    view.alpha = 0.0
+                }
+            }
+            liquidLensView.alpha = 0.0
+            searchShowcaseView?.alpha = 0.0
             isSearchAnimating = false
         }
     }
 
-    /// Disc-shaped target frame (in TabBarView coords) centered on the
-    /// active tab's current screen position. Height = search-mode height
-    /// (42pt) so container lands at the same Y as a future search row.
+    /// Left-edge disc (in TabBarView coords), same Y row as the current
+    /// tab bar, size = search-mode height. Apple Music anchors the
+    /// collapsed tab-bar here; the search field expands to its right.
     private func activeTabCircleFrame() -> CGRect {
         let h = Self.searchModeHeight
         let tabF = activeTabFrame
-        return CGRect(x: tabF.midX - h / 2, y: tabF.midY - h / 2, width: h, height: h)
+        return CGRect(x: theme.sideInset, y: tabF.midY - h / 2, width: h, height: h)
     }
 
     /// Reverse morph: circle → full pill.
