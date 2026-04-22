@@ -90,6 +90,18 @@ final class ShowcaseSceneDelegate: UIResponder, UIWindowSceneDelegate {
         )
         tabs.setControllers([dialogs, glass, states, navigation], selectedIndex: 0)
 
+        // Floating search pill in the tab bar. Tap → expands into a full
+        // search field (see `CrystalTabBarController.activateSearch`).
+        // Useful for fine-tuning the expansion animation.
+        let searchIcon = UIImage(
+            systemName: "magnifyingglass",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)
+        ) ?? UIImage()
+        tabs.searchShowcase = TabBarView.SearchShowcase(
+            icon: searchIcon,
+            action: { [weak tabs] in tabs?.activateSearch() }
+        )
+
         window.contentController = tabs
         window.makeKeyAndVisible()
         self.window = window

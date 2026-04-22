@@ -38,7 +38,7 @@
 		AF990EAAEBDE00F908EE46B8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseHomeController.swift; sourceTree = "<group>"; };
 		C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListExampleController.swift; sourceTree = "<group>"; };
-		DF0BD18BD916ECDB7A099607 /* Showcase.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Showcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF0BD18BD916ECDB7A099607 /* Showcase.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Showcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F6FE7BF0248FC2FF22A10D63 /* Example.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Example.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerPackModalController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -171,9 +171,6 @@
 					9878B5EABC7D83477291BAFC = {
 						ProvisioningStyle = Automatic;
 					};
-					AF7B460D32139ADE97D46242 = {
-						ProvisioningStyle = Automatic;
-					};
 				};
 			};
 			buildConfigurationList = 36FC72E69D906F48675C62BF /* Build configuration list for PBXProject "Example" */;
@@ -233,10 +230,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Showcase/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -245,6 +243,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.showcase;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -355,10 +354,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Showcase/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -367,6 +367,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.showcase;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
