@@ -145,64 +145,83 @@ public final class TabBarView: UIView {
     private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
     private var searchDimView: EdgeEffectView?               // edge-effect bg
 
-    /// Morph: pill → active-tab circle, search button → capsule with text field.
+    /// While the search morph is in-flight (or sitting in its collapsed
+    /// state) layoutSubviews must not reset the glass container's frame —
+    /// the animation owns it.
+    private var isSearchAnimating: Bool = false
+
+    /// Morph: tab-bar pill → circle at active-tab position.
+    /// STEP 1 (current): just shrink the glass container. Search capsule,
+    /// close button, dim overlay come in subsequent iterations.
     public func activateSearchMode(animated: Bool) {
         guard !isSearchActive else { return }
         isSearchActive = true
-        buildSearchViews()
+        isSearchAnimating = true
+
+        let circleFrame = activeTabCircleFrame()
 
         if animated {
-            positionSearchViewsAtOrigin()
-            // Start capsule and circle small for glass-morph feel
-            searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            // Keyboard is deliberately NOT raised here — the morph animation
-            // should play first. Tap inside the expanded field to raise it.
-            UIView.animate(withDuration: 1.0, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
-                self.positionSearchViewsExpanded()
-                self.searchCapsule?.transform = .identity
-                self.searchTabCircle?.transform = .identity
-                self.searchCloseButton?.transform = .identity
-                self.tabBarGlassContainer.alpha = 0.0
-                self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-                self.searchDimView?.alpha = 1.0
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
+                self.tabBarGlassContainer.frame = circleFrame
+                self.tabBarGlassContainer.update(
+                    size: circleFrame.size,
+                    isDark: self.isEffectivelyDark,
+                    transition: .immediate
+                )
+            } completion: { _ in
+                self.isSearchAnimating = false
             }
         } else {
-            positionSearchViewsExpanded()
-            tabBarGlassContainer.alpha = 0.0
-            searchDimView?.alpha = 1.0
+            tabBarGlassContainer.frame = circleFrame
+            tabBarGlassContainer.update(
+                size: circleFrame.size,
+                isDark: isEffectivelyDark,
+                transition: .immediate
+            )
+            isSearchAnimating = false
         }
     }
 
-    /// Reverse morph: capsule → search button, circle → pill.
+    /// Disc-shaped target frame (in TabBarView coords) centered on the
+    /// active tab's current screen position. Height = search-mode height
+    /// (42pt) so container lands at the same Y as a future search row.
+    private func activeTabCircleFrame() -> CGRect {
+        let h = Self.searchModeHeight
+        let tabF = activeTabFrame
+        return CGRect(x: tabF.midX - h / 2, y: tabF.midY - h / 2, width: h, height: h)
+    }
+
+    /// Reverse morph: circle → full pill.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
-        searchTextField?.resignFirstResponder()
+        isSearchAnimating = true
 
         if animated {
-            // Phase 1: quick fade of search elements + shrink toward origins
-            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
-                // Fade + scale-down all search elements
-                self.searchCapsule?.alpha = 0.0
-                self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
-                self.searchTextField?.alpha = 0.0
-                self.searchCloseButton?.alpha = 0.0
-                self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-                self.searchTabCircle?.alpha = 0.0
-                self.searchTabCircle?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-                self.searchDimView?.alpha = 0.0
-
-                // Restore tab bar
-                self.tabBarGlassContainer.alpha = 1.0
-                self.tabBarGlassContainer.transform = .identity
+            UIView.animate(
+                withDuration: 1.0,
+                delay: 0,
+                usingSpringWithDamping: 0.78,
+                initialSpringVelocity: 0.3,
+                options: [.beginFromCurrentState]
+            ) {
+                // Re-run layout math — it recomputes the full-width pill
+                // frame + sub-item frames from current theme + bounds.
+                self.layoutGlassBackground()
+                self.layoutItemViews()
             } completion: { _ in
-                self.teardownSearchViews()
+                self.isSearchAnimating = false
             }
         } else {
-            tabBarGlassContainer.alpha = 1.0
-            tabBarGlassContainer.transform = .identity
+            layoutGlassBackground()
+            layoutItemViews()
+            isSearchAnimating = false
             teardownSearchViews()
         }
     }
@@ -555,11 +574,14 @@ public final class TabBarView: UIView {
             edgeEffectView.isHidden = true
         }
 
-        layoutGlassBackground()
-        layoutItemViews()
-
-        if isSearchActive {
-            positionSearchViewsExpanded()
+        // Skip the pill layout while the search morph is running or the
+        // tab bar is sitting in its collapsed circle state — the
+        // activation animation owns the glass container's frame for its
+        // lifetime. Reverting to the full-width layout here would snap
+        // the container back mid-animation.
+        if !isSearchAnimating && !isSearchActive {
+            layoutGlassBackground()
+            layoutItemViews()
         }
     }
 
@@ -910,6 +932,12 @@ public final class TabBarView: UIView {
 
     @objc private func itemTapped(_ recognizer: UITapGestureRecognizer) {
         guard let itemView = recognizer.view else { return }
+        // In collapsed-circle search state the active tab acts as the
+        // "back to tabs" button — tap exits search.
+        if isSearchActive {
+            onSearchDismissed?()
+            return
+        }
         let index = itemView.tag
         activateItem(at: index)
     }
