@@ -412,11 +412,24 @@ final class CrystalToastRootView: UIView {
     }
 
     func animateOut(completion: @escaping () -> Void) {
-        let travel = bounds.height - card.frame.minY
+        // Cancel any in-flight animateIn first — reading card.frame.minY
+        // while animateIn is still running returns the in-flight
+        // transformed value, and the resulting translate target is wrong
+        // (card "jumps" instead of sliding down). Committing the final
+        // state explicitly here also prevents beginFromCurrentState from
+        // interpolating from the middle of animateIn.
+        card.layer.removeAllAnimations()
+        card.alpha = 1.0
+        card.transform = .identity
+
+        // Slide back down + fade. Compute travel from the laid-out frame
+        // (now that transform is identity) so the card moves exactly its
+        // own on-screen distance off the bottom edge.
+        let travel = max(0, bounds.height - card.frame.minY)
         UIView.animate(
             withDuration: 0.22,
             delay: 0,
-            options: [.curveEaseIn, .beginFromCurrentState]
+            options: [.curveEaseIn]
         ) {
             self.card.alpha = 0.0
             self.card.transform = CGAffineTransform(translationX: 0, y: travel)
