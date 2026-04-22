@@ -442,7 +442,11 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
                 completion?()
             }
 
-            view.bringSubviewToFront(container)
+            // bringSubviewToFront pays a z-reorder + implicit layout-invalidation
+            // cost even when the view is already on top. Skip when no-op.
+            if view.subviews.last !== container {
+                view.bringSubviewToFront(container)
+            }
         }
 
         if appearingContainer == nil {
@@ -460,7 +464,9 @@ open class CrystalNavigationController: UIViewController, UIGestureRecognizerDel
         }
         transition.updateFrame(view: minimizedContainer, frame: CGRect(origin: .zero, size: layout.size))
         minimizedContainer.updateLayout(layout, transition: transition)
-        view.bringSubviewToFront(minimizedContainer)
+        if view.subviews.last !== minimizedContainer {
+            view.bringSubviewToFront(minimizedContainer)
+        }
     }
 
     private func wireControllers(_ viewControllers: [ViewController]) {
