@@ -212,7 +212,11 @@ public final class CrystalModalController: UIViewController {
     func applyDetentProgress(_ progress: CGFloat) {
         let clamped = max(0.0, min(1.0, progress))
 
-        glassBackground.glassTintColor = .init(kind: .custom(style: .default, color: config.dimTintColor.withAlphaComponent(clamped)))
+        let minTintAlpha: CGFloat = 0.6
+        let tintAlpha = minTintAlpha + (1.0 - minTintAlpha) * clamped
+        glassBackground.glassTintColor = .init(
+            kind: .custom(style: .default, color: config.dimTintColor.withAlphaComponent(tintAlpha))
+        )
         glassBackground.contentView.backgroundColor = config.dimTintColor.withAlphaComponent(clamped)
 
         guard abs(detentProgress - clamped) > 0.0001 else { return }
