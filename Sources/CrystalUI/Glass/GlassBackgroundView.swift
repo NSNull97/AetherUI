@@ -465,10 +465,10 @@ public class GlassBackgroundView: UIView {
         // without having to manually call `update(size:cornerRadius:...)`
         // on each layout pass.
         let size = bounds.size
-        if size.width > 0, size.height > 0, lastUpdateMemo?.size != size {
+        if size.width > 0, size.height > 0 {
             let corner = glassCornerRadius ?? lastUpdateMemo?.cornerRadius ?? (size.height / 2.0)
-            let tint = lastUpdateMemo?.tintColor ?? glassTintColor
-            let interactive = lastUpdateMemo?.isInteractive ?? glassIsInteractive
+            let tint = lastUpdateMemo?.tintColor != glassTintColor ? glassTintColor : lastUpdateMemo?.tintColor ?? glassTintColor
+            let interactive = lastUpdateMemo?.isInteractive != glassIsInteractive ? glassIsInteractive : lastUpdateMemo?.isInteractive ?? glassIsInteractive
             let visible = lastUpdateMemo?.isVisible ?? true
             update(
                 size: size,

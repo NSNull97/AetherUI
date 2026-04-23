@@ -224,12 +224,13 @@ public final class GlassButton: UIView {
         layoutContent()
     }
     
+    @discardableResult
     public func update(
         cornerRadius: CGFloat,
         tintColor: GlassBackgroundView.TintColor,
-        isInteractive: Bool = false,
+        isInteractive: Bool = true,
         isVisible: Bool = true,
-    ) {
+    ) -> Self {
         self.tint = tintColor
         self.cornerRadius = cornerRadius
         
@@ -244,6 +245,8 @@ public final class GlassButton: UIView {
             isVisible: isVisible,
             transition: .immediate
         )
+        
+        return self
     }
 
     private func layoutContent() {
