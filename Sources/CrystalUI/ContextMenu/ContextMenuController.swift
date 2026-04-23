@@ -24,21 +24,29 @@ import UIKit
 public final class ContextMenuController {
     // MARK: - Animation constants
 
-    // Duration 0.26s — rise stays at ~88ms (snappy), spring gets
-    // more room to breathe (~151ms, up from 110ms).
-    //   rise  ~ 88ms   (0 → 0.34)
-    //   hold  ~ 21ms   (0.34 → 0.42)
-    //   pulse ~ 151ms  (0.42 → 1.0, peak at ~192ms)
-    private static let morphDuration: TimeInterval = 0.26
-    private static let dismissDuration: TimeInterval = 0.22
-    // `damping` feeds the cubic-bezier timing curve in
-    // `ContextMenuMorphHostView.springProgress`. 0 = big overshoot,
-    // 1 = zero overshoot (straight ease-out). 0.50 gives a light
-    // overshoot near the top-half of the curve — a subtle bounce
-    // that rises with the curve rather than a separate "spring at
-    // end" phase. Per user: "легкий спринг" + "единая, без разрывов".
-    private static let morphDamping: CGFloat = 0.85
-    private static let dismissDamping: CGFloat = 0.94    // slightly less elastic than open
+    /// Open / close timings. Tuned for the `.fluidMorph` spring — deliberately
+    /// longer than a typical tap response so the overshoot is actually visible
+    /// and the cross-fade has room to breathe. `.morph` uses the same numbers
+    /// as a convenient fallback (its internal progress driver reshapes them
+    /// into its own phase budget).
+    ///
+    ///   open    ~ 0.42s   spring with 0.72 damping → ~8% overshoot,
+    ///                     settles by ~0.36s, actions arrival curve
+    ///                     lands into place over the back half.
+    ///   dismiss ~ 0.30s   firmer (damping 0.86) so close feels decisive
+    ///                     without being stiff.
+    private static let morphDuration: TimeInterval = 0.42
+    private static let dismissDuration: TimeInterval = 0.30
+    /// `damping` is the spring's damping ratio for
+    /// `UISpringTimingParameters` (see `ContextMenuFluidMorphHostView`).
+    ///   1.0 = critically damped (no bounce, just glides in)
+    ///   0.7 = noticeable overshoot, ~one settle cycle — "fluid"
+    ///   0.5 = lots of wobble
+    /// 0.72 is the sweet spot for "tactile, playful, but not silly".
+    /// Close uses 0.86 — much firmer, just enough give to not feel
+    /// snap-to-invisibility.
+    private static let morphDamping: CGFloat = 0.72
+    private static let dismissDamping: CGFloat = 0.86
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation layer (rec: ≤0.06-0.10)
     /// Radius of the backdrop blur applied to the dim layer, in points.
@@ -51,9 +59,28 @@ public final class ContextMenuController {
     public static var dimBlurRadius: CGFloat = 2.0
     private static let menuCornerRadius: CGFloat = 27.0
 
-    /// Rubber-band stretch metrics for the WHOLE menu container.
-    private static let stretchFollow: CGFloat = 0.06
-    private static let pressScale: CGFloat = 1.012
+    // MARK: - Glass lift metrics
+    //
+    // "Glass lift" = the expressive press feedback on the menu surface
+    // (borrowed from Telegram's Display-framework `TouchEffect`). Three
+    // components:
+    //
+    //   1. Base lift — uniform scale up by `pressedSizeIncrease` on the
+    //      shorter axis, so the whole glass surface visibly rises on
+    //      press. For a 260×200 menu, 14pt on the short axis = +7%
+    //      scale — clearly visible without being cartoonish.
+    //   2. Anisotropic stretch — biased scale along the axis of the
+    //      finger's pull-direction (drag→right-bottom stretches Y and
+    //      slightly squishes X, etc.). Gives soft-body physics feel.
+    //   3. Translation — the surface shifts up to `stretchMaxOffset`
+    //      toward the finger, adding to the "drawn to the touch" feel.
+    //
+    // The old rubber-band (`stretchFollow = 0.06`, `pressScale = 1.012`)
+    // was too subtle to read as "glass lift" — it was more of a
+    // micro-nudge. Bumped to TouchEffect-style math for expressive
+    // iOS 26-style glass feedback.
+    private static let stretchPressedSizeIncrease: CGFloat = 14.0
+    private static let stretchMaxOffset: CGFloat = 10.0
 
     // MARK: - Self-retention
 
@@ -82,6 +109,33 @@ public final class ContextMenuController {
     public enum PresentationStyle {
         case morph
         case preview(verticalSpacing: CGFloat = 12.0, lift: CGFloat = 1.04)
+        /// Fresh fluid morph using `UIViewPropertyAnimator` + spring
+        /// timing on `self.frame`, corner-anchored content containers
+        /// via `autoresizingMask`, and `CABasicAnimation` for layer-
+        /// only properties (`cornerRadius` / `shadowPath`).
+        ///
+        /// Directional correctness (right-side button's menu unfolds
+        /// leftward from the button's right edge; left-side unfolds
+        /// rightward from the left edge; vertical is handled the same
+        /// way for flip-upward) is STRUCTURAL, not hand-tuned:
+        ///
+        ///   - `computeMenuFrame` pins one on-screen edge of menu to
+        ///     source (e.g. `menu.maxX == source.maxX` right-aligned).
+        ///   - The host's `frame` spring then keeps that edge
+        ///     invariant — `frame.maxX(t) = source.maxX` for all `t`,
+        ///     mathematically, because position.x(t) and bounds.w(t)
+        ///     interpolate linearly and their derivatives cancel on
+        ///     the pinned edge.
+        ///   - Content containers (source snapshot, actions view) are
+        ///     pinned to the same anchor corner via `autoresizingMask`,
+        ///     so they stay STATIONARY in absolute screen coords while
+        ///     the glass envelope grows around them.
+        ///
+        /// Net result: no left-jumping, no unfolding from the wrong
+        /// side, and the source content and actions content never
+        /// physically move in absolute coords — only the glass moves.
+        /// See `ContextMenuFluidMorphHostView`.
+        case fluidMorph
     }
 
     // MARK: - State
@@ -99,6 +153,11 @@ public final class ContextMenuController {
     /// For `.preview` style: left `nil`; `sdfHost` is used as the outer
     /// wrapper instead.
     private var morphHost: ContextMenuMorphHostView?
+    /// For `.fluidMorph` style: the minimal host with UIViewPropertyAnimator
+    /// spring driving the frame morph, and corner-anchored content.
+    /// Independent of `morphHost` so both implementations can coexist
+    /// for A/B comparison.
+    private var fluidMorphHost: ContextMenuFluidMorphHostView?
     /// For `.preview` style only: the outer wrapper holding the (static-
     /// size) glass menu. Left `nil` for `.morph` — morphHost plays that role.
     private var sdfHost: UIView?
@@ -109,9 +168,10 @@ public final class ContextMenuController {
     private var tapRecognizer: UITapGestureRecognizer?
     /// The view that plays the role of "the glass surface hit-test target"
     /// for submenu + stretch purposes. For `.morph` this is `morphHost`;
-    /// for `.preview` it's `sdfHost`. Collapsed into a single property so
-    /// downstream wiring code doesn't have to branch on presentation style.
-    private var surfaceView: UIView? { morphHost ?? sdfHost }
+    /// for `.fluidMorph` it's `fluidMorphHost`; for `.preview` it's
+    /// `sdfHost`. Collapsed into a single property so downstream wiring
+    /// code doesn't have to branch on presentation style.
+    private var surfaceView: UIView? { morphHost ?? fluidMorphHost ?? sdfHost }
     private var surfaceOverlayView: UIView? { surfaceView }
     /// Inline submenu overlay (Yandex Music style). When non-nil, the parent
     /// `actionsView` is dimmed + disabled and `submenuCard` is overlaid on
@@ -134,6 +194,13 @@ public final class ContextMenuController {
     private var sourceCornerRadius: CGFloat = 0
 
     private var isPresented: Bool = false
+    /// Whether the glass-lift stretch is currently applied to the
+    /// surface (parent menu pressed). Tracked so the first touch-down
+    /// runs as a proper spring animation (identity → lifted pose) and
+    /// subsequent drag updates just snap the transform (hi-frequency
+    /// tracking needs no additional smoothing — the UIView animation
+    /// machinery would fight the finger otherwise).
+    private var isStretchActive: Bool = false
     private var dismissHandle: ContextMenuDismissHandle?
 
     // MARK: - Init
@@ -203,6 +270,16 @@ public final class ContextMenuController {
             setupMorphStyle(
                 host: host,
                 source: source,
+                effect: effect,
+                snapshot: snapshot,
+                actionsView: actionsView,
+                sourceRectInHost: sourceRectInHost,
+                sourceCornerRadius: sourceCornerRadius,
+                menuFrame: menuFrame
+            )
+        case .fluidMorph:
+            setupFluidMorphStyle(
+                host: host,
                 effect: effect,
                 snapshot: snapshot,
                 actionsView: actionsView,
@@ -325,6 +402,58 @@ public final class ContextMenuController {
         }
     }
 
+    /// Wires up the `.fluidMorph` path:
+    ///
+    ///   1. Detect the anchor corner from source/menu geometry (which
+    ///      edges coincide — right for right-aligned, left for left-
+    ///      aligned, and similarly top vs. bottom when menu flips up).
+    ///
+    ///   2. Position the fluid host at source rect, glass fills host
+    ///      via autoresizing, and content containers are corner-pinned
+    ///      so they stay stationary in absolute coords while glass
+    ///      grows around them (see type doc on
+    ///      `ContextMenuFluidMorphHostView`).
+    ///
+    ///   3. Embed the source snapshot (filling `sourceContent`) and the
+    ///      actions view (filling `actionsContainer`). Both fill their
+    ///      parents via `[.flexibleWidth, .flexibleHeight]` — the
+    ///      parents themselves are the ones with the corner-anchor
+    ///      masks.
+    private func setupFluidMorphStyle(
+        host: UIView,
+        effect: UIVisualEffect,
+        snapshot: UIView,
+        actionsView: ContextMenuActionsView,
+        sourceRectInHost: CGRect,
+        sourceCornerRadius: CGFloat,
+        menuFrame: CGRect
+    ) {
+        let anchor = ContextMenuMorphAnchor.detect(source: sourceRectInHost, menu: menuFrame)
+
+        let fluidHost = ContextMenuFluidMorphHostView(effect: effect)
+        host.addSubview(fluidHost)
+        fluidHost.configure(metrics: ContextMenuFluidMorphHostView.Metrics(
+            sourceFrameInHost: sourceRectInHost,
+            sourceCornerRadius: sourceCornerRadius,
+            menuFrameInHost: menuFrame,
+            menuCornerRadius: ContextMenuActionsView.cornerRadius,
+            anchor: anchor
+        ))
+
+        // Snapshot fills sourceContent — parent is what's corner-anchored.
+        snapshot.frame = fluidHost.sourceContent.bounds
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        fluidHost.sourceContent.addSubview(snapshot)
+
+        // Actions view fills actionsContainer — same deal.
+        actionsView.frame = fluidHost.actionsContainer.bounds
+        actionsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        fluidHost.actionsContainer.addSubview(actionsView)
+
+        self.fluidMorphHost = fluidHost
+        self.menuContainer = fluidHost.glass
+    }
+
     /// Wires up the `.preview` path: static glass menu + a lifted snapshot
     /// of the source above it. No morph — just a spring-in and the snapshot
     /// scaling up by `lift`.
@@ -383,6 +512,7 @@ public final class ContextMenuController {
         let host = hostView
         let dim = dimView
         let morphHost = self.morphHost
+        let fluidMorphHost = self.fluidMorphHost
         let sdfHost = self.sdfHost
         let container = menuContainer
         let snapshot = snapshotView
@@ -406,6 +536,7 @@ public final class ContextMenuController {
             }
             dim?.removeFromSuperview()
             morphHost?.removeFromSuperview()
+            fluidMorphHost?.removeFromSuperview()
             sdfHost?.removeFromSuperview()
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
@@ -415,6 +546,7 @@ public final class ContextMenuController {
             self?.hostView = nil
             self?.dimView = nil
             self?.morphHost = nil
+            self?.fluidMorphHost = nil
             self?.sdfHost = nil
             self?.sdfFilter = nil
             self?.menuContainer = nil
@@ -437,6 +569,8 @@ public final class ContextMenuController {
         switch presentationStyle {
         case .morph:
             animateOutMorph(dim: dim, cleanup: cleanup)
+        case .fluidMorph:
+            animateOutFluidMorph(dim: dim, cleanup: cleanup)
         case .preview:
             if let sdfHost {
                 animateOutPreview(sdfHost: sdfHost, dim: dim, preview: previewView)
@@ -537,6 +671,8 @@ public final class ContextMenuController {
         switch presentationStyle {
         case .morph:
             animateInMorph(sourceMinSide: sourceMinSide)
+        case .fluidMorph:
+            animateInFluidMorph()
         case let .preview(_, lift):
             if let sdfHost { animateInPreview(sdfHost: sdfHost, lift: lift) }
         }
@@ -579,6 +715,53 @@ public final class ContextMenuController {
             )
             filter.animateBlur(duration: ContextMenuController.morphDuration)
         }
+    }
+
+    /// Drive the `.fluidMorph` host from source → menu via
+    /// `UIViewPropertyAnimator` + spring on `self.frame`. Cross-fade
+    /// and layer-property (corner + shadow) animations all live inside
+    /// `ContextMenuFluidMorphHostView.animateExpand`.
+    ///
+    /// The key structural property that makes this "fluid" and fixes
+    /// the old left-jump bug: both content containers inside the host
+    /// are stationary in absolute screen coords throughout the morph.
+    /// Only the glass envelope moves, revealing or clipping more of
+    /// the actions view as it springs out.
+    private func animateInFluidMorph() {
+        guard let fluidMorphHost else { return }
+        fluidMorphHost.animateExpand(
+            duration: ContextMenuController.morphDuration,
+            damping: ContextMenuController.morphDamping,
+            completion: nil
+        )
+    }
+
+    /// Reverse of `animateInFluidMorph`: spring the frame back to
+    /// source rect with a shorter duration and a less-elastic damping.
+    /// Cleanup fires on the geometry animator's completion. If the
+    /// open animation is still running, the host's own
+    /// `cancelRunningAnimators` stops it at `.current` before the
+    /// collapse starts — no teleport.
+    private func animateOutFluidMorph(
+        dim: UIView?,
+        cleanup: @escaping () -> Void
+    ) {
+        guard let fluidMorphHost else { cleanup(); return }
+
+        // Reset any active stretch transform first so the reverse morph
+        // starts from identity, not from a press-release stretch left
+        // over from the last touch.
+        fluidMorphHost.transform = .identity
+
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn], animations: {
+            dim?.alpha = 0.0
+        })
+
+        fluidMorphHost.animateCollapse(
+            duration: ContextMenuController.dismissDuration,
+            damping: ContextMenuController.dismissDamping,
+            completion: { cleanup() }
+        )
     }
 
     /// Lifted preview + below-source menu spring-in (no morph).
@@ -687,7 +870,11 @@ public final class ContextMenuController {
 
         let initialY: CGFloat
         switch presentationStyle {
-        case .morph:
+        case .morph, .fluidMorph:
+            // Both morph styles place the menu's top edge at the source's
+            // top edge (`menu.minY == source.minY`), so the morph unfolds
+            // downward from the source. The flip-to-above fallback below
+            // kicks in when the menu would overflow the bottom safe area.
             initialY = sourceRect.minY
         case let .preview(spacing, _):
             initialY = sourceRect.maxY + spacing
@@ -828,8 +1015,15 @@ public final class ContextMenuController {
         self.submenuCollapseHitView = hitView
 
         // Dim parent + disable its touches so the card / hit-view interaction
-        // model cleanly takes over.
+        // model cleanly takes over. Also fade out the parent's sliding
+        // highlight lens — `commitTouch` intentionally leaves it visible
+        // after a tap (so regular actions can dismiss the whole menu with
+        // the highlight still showing the "you tapped this row" state), but
+        // for submenu opens we need to clear it here: otherwise when the
+        // submenu closes and parent alpha returns to 1.0, a stale lens pops
+        // back into view on the submenu-trigger row.
         parentActions.isUserInteractionEnabled = false
+        parentActions.clearHighlight(animated: true)
 
         // Spring + fade-in. Card scales from 0.96 to 1.0 anchored at its
         // header center to match where the source row is — visually it pops
@@ -922,18 +1116,19 @@ public final class ContextMenuController {
 
     // MARK: - Rubber-band stretch
 
-    private func applyStretch(toContainer container: UIView, touchInActions point: CGPoint, actionsBounds: CGRect, animated: Bool) {
-        let center = CGPoint(x: actionsBounds.midX, y: actionsBounds.midY)
-        let delta = CGPoint(x: point.x - center.x, y: point.y - center.y)
-        let target = CGAffineTransform(
-            translationX: delta.x * ContextMenuController.stretchFollow,
-            y: delta.y * ContextMenuController.stretchFollow
-        ).scaledBy(x: ContextMenuController.pressScale, y: ContextMenuController.pressScale)
+    private func applyStretch(toContainer container: UIView, touchInActions point: CGPoint, actionsBounds: CGRect, animated _: Bool) {
+        let target = Self.computeStretchTransform(point: point, in: actionsBounds)
 
-        if animated {
+        // First touch-down: animate the lift-in (identity → stretched)
+        // so the surface visibly rises into place. Subsequent drag
+        // updates snap the transform because the touch events already
+        // fire at ~60-120Hz — UIView.animate at each tick would fight
+        // the finger and introduce lag.
+        if !isStretchActive {
+            isStretchActive = true
             UIView.animate(
                 withDuration: 0.28, delay: 0,
-                usingSpringWithDamping: 0.78, initialSpringVelocity: 0,
+                usingSpringWithDamping: 0.72, initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .allowUserInteraction],
                 animations: { container.transform = target },
                 completion: nil
@@ -944,6 +1139,7 @@ public final class ContextMenuController {
     }
 
     private func releaseStretch(onContainer container: UIView) {
+        isStretchActive = false
         UIView.animate(
             withDuration: 0.42, delay: 0,
             usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
@@ -951,6 +1147,72 @@ public final class ContextMenuController {
             animations: { container.transform = .identity },
             completion: nil
         )
+    }
+
+    // MARK: - Glass-lift transform math
+    //
+    // Port of Telegram Display framework's `TouchEffect.currentTransform`
+    // (see `GlassTouchEffect.swift`), adapted for the menu surface —
+    // smaller lift magnitude + translation offset because the menu is a
+    // much bigger surface than the buttons that math was tuned for.
+    //
+    // Given the finger's point in `actionsBounds` coords, returns the
+    // affine transform that positions the menu surface in its "lifted
+    // and stretched" pose:
+    //
+    //   • Base lift (uniform scale) — surface rises uniformly on press.
+    //   • Anisotropic bias along the drag direction — the side of the
+    //     surface the finger pulls gets scaled up, the perpendicular
+    //     side gets squished (soft-body physics feel).
+    //   • Translation offset up to `stretchMaxOffset` toward the
+    //     finger — surface shifts into the drag direction.
+    //
+    // Composition (read right-to-left per CGAffineTransform semantics):
+    // `translate(tx, ty) * scale(sx, sy)`. Matches the original
+    // CATransform3D stack `translate then scale`.
+    private static func computeStretchTransform(point: CGPoint, in bounds: CGRect) -> CGAffineTransform {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let stretch = CGPoint(x: point.x - center.x, y: point.y - center.y)
+
+        let w = max(1.0, bounds.width)
+        let h = max(1.0, bounds.height)
+        let aspect = w / h
+        let shorterSide = min(w, h)
+        let baseScale = 1.0 + stretchPressedSizeIncrease / shorterSide
+
+        let adjustedX = stretch.x / aspect
+        let length = sqrt(adjustedX * adjustedX + stretch.y * stretch.y)
+
+        // No directional stretch if the finger's on centre — pure lift.
+        guard length > 0.5 else {
+            return CGAffineTransform(scaleX: baseScale, y: baseScale)
+        }
+
+        let normal = CGPoint(x: adjustedX / length, y: stretch.y / length)
+        // `k` tapers the stretch off the further the finger is pulled,
+        // so the surface doesn't infinitely distort on edge-drags.
+        let k: CGFloat = -1.0 / ((length / h) / (5.0 * aspect) + 1.0) + 1.0
+        let additionalMaxScale = (h + 16.0 / aspect) / h - 1.0
+        let t = additionalMaxScale * k * aspect
+
+        let scaleX: CGFloat
+        let scaleY: CGFloat
+        if abs(normal.x) > abs(normal.y) {
+            // Horizontal-dominant drag: X stretches, Y compresses.
+            let diff = abs(normal.x) - abs(normal.y)
+            scaleX = baseScale * (1.0 + t * diff)
+            scaleY = baseScale * (1.0 / (1.0 + t * diff))
+        } else {
+            // Vertical-dominant drag: Y stretches, X compresses.
+            let diff = abs(normal.y) - abs(normal.x)
+            scaleX = baseScale * (1.0 / (1.0 + t * diff))
+            scaleY = baseScale * (1.0 + t * diff)
+        }
+
+        return CGAffineTransform(
+            translationX: normal.x * stretchMaxOffset * k,
+            y: normal.y * stretchMaxOffset * k
+        ).scaledBy(x: scaleX, y: scaleY)
     }
 }
 

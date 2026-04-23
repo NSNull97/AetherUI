@@ -31,10 +31,15 @@ final class ContextMenuActionItemView: UIView {
     static let rowHeight: CGFloat = 44.0
     static let rowHeightWithSubtitle: CGFloat = 56.0
     /// Internal horizontal inset of a row. The PARENT actions view applies
-    /// its own 16pt `contentInset` around the row container, so leaving
-    /// this at 0 means text + slot positions sit 16pt from the menu's
-    /// glass edge (no double-padding).
-    static let horizontalInset: CGFloat = 0.0
+    /// its own 16pt `contentInset` around the row container, so the total
+    /// distance from a row's icon/text to the menu's glass edge is
+    /// 16 (outer content inset) + 8 (this) = 24pt. Section headers and
+    /// the back row share this inset so everything text-bearing aligns
+    /// on the same leading edge. Separators use a smaller inset
+    /// (`ContextMenuActionsView.separatorHorizontalInset`, 4pt) so the
+    /// hairline extends slightly beyond the text column — a classic
+    /// "divider is wider than the content" pattern.
+    static let horizontalInset: CGFloat = 8.0
     static let leadingSlotWidth: CGFloat = 18.0
     static let leadingSlotSpacing: CGFloat = 12.0
     static let trailingIconSize: CGFloat = 22.0
@@ -81,9 +86,10 @@ final class ContextMenuActionItemView: UIView {
         }
         checkmarkView.image = ContextMenuActionItemView.checkmarkImage()
         submenuIndicator.image = ContextMenuActionItemView.chevronImage()
-        submenuIndicator.tintColor = .tertiaryLabel
+        submenuIndicator.contentMode = .center
+        submenuIndicator.tintColor = item.textColor == .destructive ? .systemRed : .label
 
-        titleLabel.font = .systemFont(ofSize: 17.0, weight: .regular)
+        titleLabel.font = .systemFont(ofSize: 16.0, weight: .regular)
         titleLabel.textColor = .label
         titleLabel.numberOfLines = 1
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -239,7 +245,7 @@ final class ContextMenuActionItemView: UIView {
 
     private static func chevronImage() -> UIImage? {
         if #available(iOS 13.0, *) {
-            let config = UIImage.SymbolConfiguration(pointSize: 13.0, weight: .semibold)
+            let config = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
             return UIImage(systemName: "chevron.right", withConfiguration: config)?
                 .withRenderingMode(.alwaysTemplate)
         }

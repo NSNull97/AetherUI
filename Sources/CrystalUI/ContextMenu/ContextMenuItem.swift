@@ -15,6 +15,18 @@ public enum ContextMenuItem {
     case action(ContextMenuActionItem)
     /// Thin inset hairline separator between groups.
     case separator
+    /// A horizontal strip of compact "quick action" buttons — each cell
+    /// shows its icon centred above a short title, cells are equal-width,
+    /// and the running highlight tracks under the finger the same way it
+    /// does for regular rows (sliding lens). Typically placed at the top
+    /// of the menu as a shortcut bar for the most-used actions.
+    ///
+    /// Reuses `ContextMenuActionItem` so destructive styling + enabled
+    /// state + action callbacks behave the same as regular rows. Fields
+    /// that don't apply in a compact cell (`subtitle`, `iconSide`,
+    /// `submenu`) are ignored by the cell renderer — cells don't
+    /// support nested submenus.
+    case actionRow([ContextMenuActionItem])
 }
 
 // MARK: - ContextMenuActionItem

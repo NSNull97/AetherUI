@@ -24,6 +24,17 @@ final class ContextMenuActionsView: UIView {
     static let highlightHorizontalInset: CGFloat = 0.0
     static let highlightCornerRadius: CGFloat = 20.0
     static let backRowHeight: CGFloat = 44.0
+    /// Height of an `.actionRow` strip. Delegated to the cell view's
+    /// own metric so cell height and row height never drift apart.
+    static let actionRowHeight: CGFloat = ContextMenuActionRowCellView.cellHeight
+    /// Horizontal inset applied to the separator hairline inside its
+    /// row container. Deliberately narrower than
+    /// `ContextMenuActionItemView.horizontalInset` (8pt) so the divider
+    /// extends a touch wider than the text column — the line sits
+    /// 16 (outer) + 4 (this) = 20pt from the glass edge, whereas text
+    /// sits at 24pt. Creates the classic "divider bracketing the
+    /// content" look.
+    static let separatorHorizontalInset: CGFloat = 4.0
     /// Inset applied to the content area inside the menu's glass surface.
     /// Rows + headers + separators all live inside `bounds.inset(by:)` of
     /// this. Each row's own `horizontalInset` is then set to 0 so the
@@ -87,11 +98,23 @@ final class ContextMenuActionsView: UIView {
         /// have nil; the header row has nil too (special-cased via `isHeaderRow`).
         let actionItem: ContextMenuActionItem?
         let isHeaderRow: Bool
+        /// Whether this entry is a cell inside a horizontal `.actionRow`
+        /// strip. Affects touch-tracking (cells in the same strip share
+        /// a midY so the nearest-row search has to tie-break by X) and
+        /// highlight pill sizing (smaller corner radius / tighter insets
+        /// than full-width rows).
+        let isActionRowCell: Bool
 
-        init(view: UIView, actionItem: ContextMenuActionItem?, isHeaderRow: Bool = false) {
+        init(
+            view: UIView,
+            actionItem: ContextMenuActionItem?,
+            isHeaderRow: Bool = false,
+            isActionRowCell: Bool = false
+        ) {
             self.view = view
             self.actionItem = actionItem
             self.isHeaderRow = isHeaderRow
+            self.isActionRowCell = isActionRowCell
         }
     }
 
@@ -163,9 +186,29 @@ final class ContextMenuActionsView: UIView {
             )
             y += ContextMenuActionsView.backRowHeight
         }
-        for (index, item) in items.enumerated() {
+        var entryIdx = itemsStart
+        for item in items {
             let h = heightForItem(item)
-            rowViews[itemsStart + index].view.frame = CGRect(x: 0, y: y, width: contentWidth, height: h)
+            switch item {
+            case let .actionRow(cells) where !cells.isEmpty:
+                // Horizontal strip: divide contentWidth equally across
+                // all cells. Cells touch edge-to-edge; visual separation
+                // comes from the rounded highlight pill when selected.
+                let cellWidth = contentWidth / CGFloat(cells.count)
+                var cellX: CGFloat = 0
+                for _ in cells {
+                    rowViews[entryIdx].view.frame = CGRect(
+                        x: cellX, y: y, width: cellWidth, height: h
+                    )
+                    entryIdx += 1
+                    cellX += cellWidth
+                }
+            default:
+                rowViews[entryIdx].view.frame = CGRect(
+                    x: 0, y: y, width: contentWidth, height: h
+                )
+                entryIdx += 1
+            }
             y += h
         }
 
@@ -279,7 +322,13 @@ final class ContextMenuActionsView: UIView {
         }
     }
 
-    private func clearHighlight(animated: Bool) {
+    /// Fade the sliding highlight lens out, releasing any tracked touch's
+    /// visual state. Exposed (non-private) because
+    /// `ContextMenuController` needs to call it when an inline submenu
+    /// opens — otherwise the lens stays at its last tap-down row on the
+    /// parent menu, which then becomes visible again when the parent
+    /// un-dims on submenu-close.
+    func clearHighlight(animated: Bool) {
         highlightedIndex = nil
         if animated {
             UIView.animate(
@@ -368,20 +417,32 @@ final class ContextMenuActionsView: UIView {
             return nil
         }
 
-        // Nearest tappable row by vertical distance to its midY.
-        var nearestIndex: Int? = nil
-        var nearestDistance: CGFloat = .infinity
+        // Nearest tappable row — primary sort by Y distance (matches old
+        // behaviour for regular vertical menus), tie-break by X distance
+        // so cells in a horizontal `.actionRow` strip (which all share
+        // the same midY) pick the one closest to the finger's X.
+        //
+        // Using strict <= on Y distance + <= on X distance as tie-
+        // breaker means we never accidentally pick a full-width row
+        // over a cell: cells in the same strip tie on Y with each
+        // other, not with full-width rows above/below.
+        var best: (index: Int, yDist: CGFloat, xDist: CGFloat)? = nil
         for (index, entry) in rowViews.enumerated() {
             let isTappable = entry.isHeaderRow || (entry.actionItem?.isEnabled == true)
             guard isTappable else { continue }
-            let rowMidY = entry.view.frame.midY
-            let distance = abs(pointInContent.y - rowMidY)
-            if distance < nearestDistance {
-                nearestDistance = distance
-                nearestIndex = index
+            let yDist = abs(pointInContent.y - entry.view.frame.midY)
+            let xDist = abs(pointInContent.x - entry.view.frame.midX)
+            if let current = best {
+                if yDist < current.yDist {
+                    best = (index, yDist, xDist)
+                } else if yDist == current.yDist && xDist < current.xDist {
+                    best = (index, yDist, xDist)
+                }
+            } else {
+                best = (index, yDist, xDist)
             }
         }
-        return nearestIndex
+        return best?.index
     }
 
     private func convertToContentContainer(_ point: CGPoint) -> CGPoint {
@@ -392,7 +453,14 @@ final class ContextMenuActionsView: UIView {
     }
 
     private func highlightFrame(forRowAt index: Int) -> CGRect {
-        let rowFrame = rowViews[index].view.frame
+        let entry = rowViews[index]
+        let rowFrame = entry.view.frame
+        if entry.isActionRowCell {
+            // Cells are compact and roughly square — use a tighter,
+            // more balanced inset so the pill reads as a "button
+            // highlight" rather than a full-width strip.
+            return rowFrame.insetBy(dx: 4.0, dy: 6.0)
+        }
         return rowFrame.insetBy(
             dx: ContextMenuActionsView.highlightHorizontalInset,
             dy: 2.0
@@ -409,6 +477,21 @@ final class ContextMenuActionsView: UIView {
             return ContextMenuActionItemView.rowHeight(for: action)
         case .separator:
             return ContextMenuActionsView.separatorHeight
+        case .actionRow:
+            return ContextMenuActionsView.actionRowHeight
+        }
+    }
+
+    /// How many `RowEntry` slots a given `ContextMenuItem` occupies.
+    /// Most items are 1:1 with an entry; `.actionRow` spans N entries
+    /// (one per cell) so each cell can be independently touch-targeted
+    /// and highlighted.
+    private func rowEntryCount(for item: ContextMenuItem) -> Int {
+        switch item {
+        case let .actionRow(cells):
+            return cells.count
+        default:
+            return 1
         }
     }
 
@@ -428,10 +511,16 @@ final class ContextMenuActionsView: UIView {
         for item in items {
             switch item {
             case let .header(title):
+                // Native-iOS-26-style section title: mixed case (don't
+                // uppercase — looks stale), regular weight (semibold
+                // reads as too loud for a label that's meant to recede),
+                // tertiaryLabel colour (~0.3 alpha of label) instead of
+                // secondaryLabel (~0.6) so it sits behind the action
+                // rows as quiet orientation text.
                 let label = UILabel()
-                label.text = title.uppercased()
-                label.font = .systemFont(ofSize: 12.0, weight: .semibold)
-                label.textColor = .secondaryLabel
+                label.text = title
+                label.font = .systemFont(ofSize: 13.0, weight: .regular)
+                label.textColor = .tertiaryLabel
                 let container = UIView()
                 container.isUserInteractionEnabled = false
                 container.addSubview(label)
@@ -448,20 +537,40 @@ final class ContextMenuActionsView: UIView {
                 contentContainer.addSubview(row)
                 rowViews.append(RowEntry(view: row, actionItem: action))
             case .separator:
+                // Hairline: dropped from 0.6 → 0.3 alpha so it reads as
+                // a barely-there divider, matching the native context
+                // menu aesthetic where sections are separated by
+                // presence rather than a hard line. Inset 4pt from
+                // the content area (narrower than the row's 8pt text
+                // inset) so the divider spans slightly wider than the
+                // text column it divides.
                 let container = UIView()
                 container.isUserInteractionEnabled = false
                 let line = UIView()
-                line.backgroundColor = UIColor.separator.withAlphaComponent(0.6)
+                line.backgroundColor = UIColor.separator.withAlphaComponent(0.3)
                 container.addSubview(line)
                 line.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
-                    line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: ContextMenuActionItemView.horizontalInset),
-                    line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -ContextMenuActionItemView.horizontalInset),
+                    line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: ContextMenuActionsView.separatorHorizontalInset),
+                    line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -ContextMenuActionsView.separatorHorizontalInset),
                     line.centerYAnchor.constraint(equalTo: container.centerYAnchor),
                     line.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale)
                 ])
                 contentContainer.addSubview(container)
                 rowViews.append(RowEntry(view: container, actionItem: nil))
+            case let .actionRow(cells):
+                // One `RowEntry` per cell — each cell is an independent
+                // touch target with its own frame. layoutSubviews
+                // positions them in a horizontal strip.
+                for cellItem in cells {
+                    let cellView = ContextMenuActionRowCellView(item: cellItem)
+                    contentContainer.addSubview(cellView)
+                    rowViews.append(RowEntry(
+                        view: cellView,
+                        actionItem: cellItem,
+                        isActionRowCell: true
+                    ))
+                }
             }
         }
         // Keep the highlight on top of rows so it visually sits above content.
@@ -477,10 +586,10 @@ final class ContextMenuActionsView: UIView {
         container.isUserInteractionEnabled = false
 
         let chevron = UIImageView()
-        chevron.contentMode = .scaleAspectFit
+        chevron.contentMode = .center
         chevron.tintColor = .label
         if #available(iOS 13.0, *) {
-            let config = UIImage.SymbolConfiguration(pointSize: 14.0, weight: .semibold)
+            let config = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
             chevron.image = UIImage(systemName: chevronSymbol, withConfiguration: config)?
                 .withRenderingMode(.alwaysTemplate)
         }
