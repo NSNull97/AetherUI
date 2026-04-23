@@ -56,7 +56,7 @@ public final class NavigationBarTheme {
         accentForegroundColor: UIColor = .white,
         style: NavigationBarStyle = .legacy,
         glassStyle: NavigationBarGlassStyle = .default,
-        edgeEffectAlpha: CGFloat = 0.65,
+        edgeEffectAlpha: CGFloat = 0.86,
         edgeEffectBlurRadius: CGFloat = 3.0,
         defaultContentHeight: CGFloat = 60.0
     ) {
