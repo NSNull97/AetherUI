@@ -228,7 +228,13 @@ final class TouchEffect {
         let next = State(isTracking: state.isTracking, stretchVector: state.stretchVector, touchLocation: location)
         guard state != next else { return }
         state = next
-        applyCurrentTransform(animated: animated)
+        // Touch location only drives the radial highlight position —
+        // the sublayer transform doesn't depend on it. Skipping the
+        // full `applyCurrentTransform` path prevents every touchesMoved
+        // event from removing the in-progress lift-on spring and
+        // snapping the layer to its target transform in one frame.
+        updateRadialHighlight(animated: animated)
+        appliedState = state
     }
 
     func setStretchVector(_ vector: CGPoint, animated: Bool = false) {
@@ -316,9 +322,15 @@ public final class GlassHighlightGestureRecognizer: UIGestureRecognizer, UIGestu
         if let highlightContainerView {
             touchEffect.setTouchLocation(touch.location(in: highlightContainerView), animated: false)
         }
-        touchEffect.setStretchVector(
-            CGPoint(x: location.x - initial.x, y: location.y - initial.y),
-            animated: false
-        )
+        // Ignore sub-pixel finger jitter right after touchesBegan —
+        // otherwise the tiniest drift fires setStretchVector which
+        // replaces the in-progress lift-on spring with a fresh
+        // lift-off-tuned spring (stiffer, faster), and the press-in
+        // visually finishes in ~20ms instead of the 400ms lift-on
+        // settling. Threshold matches the 5pt hysteresis Telegram
+        // uses for touch recognizers in general.
+        let delta = CGPoint(x: location.x - initial.x, y: location.y - initial.y)
+        if delta.x * delta.x + delta.y * delta.y < 25.0 { return }
+        touchEffect.setStretchVector(delta, animated: false)
     }
 }

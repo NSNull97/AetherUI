@@ -135,7 +135,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         backButtonView.isDark = theme.overallDarkAppearance
         backButtonView.usesGlassStyle = theme.style == .glass
         backButtonView.icon = NavigationBarTheme.generateBackArrowImage(color: theme.buttonColor)
-        backButtonView.addTarget(self, action: #selector(backButtonPressed), for: .touchUpInside)
+        backButtonView.action = { [weak self] in self?.backButtonPressed() }
         buttonsContainerView.addSubview(backButtonView)
 
         // Title
@@ -1022,10 +1022,13 @@ private final class BackButtonContentView: UIView {
 
 // MARK: - Back Button View
 
-final class NavigationBackButtonView: UIControl {
+final class NavigationBackButtonView: UIView {
     private let glassBackground = GlassBackgroundView(style: .regular)
     private let iconView = UIImageView()
     private let label = UILabel()
+    private var elasticRecognizer: GlassHighlightGestureRecognizer?
+
+    var action: (() -> Void)?
 
     var text: String = "" {
         didSet {
@@ -1074,21 +1077,38 @@ final class NavigationBackButtonView: UIControl {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        glassBackground.isUserInteractionEnabled = false
+        // Glass must be interactive so UIGlassEffect.isInteractive (iOS
+        // 26+) can observe finger position for the native warp.
+        glassBackground.isUserInteractionEnabled = true
         glassBackground.isHidden = true
         addSubview(glassBackground)
 
+        // Icon + label sit inside the glass content host so the warp
+        // deforms both surface and contents together (same trick as
+        // GlassButton / GlassBarButtonView).
         iconView.contentMode = .center
         iconView.tintColor = contentTintColor
         iconView.isHidden = true
-        addSubview(iconView)
+        glassBackground.contentView.addSubview(iconView)
 
         label.font = UIFont.systemFont(ofSize: 17.0)
         label.textColor = color
-        addSubview(label)
+        glassBackground.contentView.addSubview(label)
 
-        addTarget(self, action: #selector(touchDown), for: .touchDown)
-        addTarget(self, action: #selector(touchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        addGestureRecognizer(tap)
+
+        if #unavailable(iOS 26.0) {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = self
+            elastic.highlightContainerView = glassBackground.contentView
+            addGestureRecognizer(elastic)
+            self.elasticRecognizer = elastic
+        }
+    }
+
+    @objc private func handleTap() {
+        action?()
     }
 
     required init?(coder: NSCoder) {
@@ -1115,7 +1135,7 @@ final class NavigationBackButtonView: UIControl {
                 cornerRadius: bounds.height * 0.5,
                 isDark: isDark,
                 tintColor: .init(kind: .panel),
-                isInteractive: false,
+                isInteractive: true,
                 isVisible: true,
                 transition: .immediate
             )
@@ -1135,39 +1155,4 @@ final class NavigationBackButtonView: UIControl {
         }
     }
 
-    @objc private func touchDown() {
-        applyPressAnimation(pressed: true)
-    }
-
-    @objc private func touchUp() {
-        applyPressAnimation(pressed: false)
-    }
-
-    /// Glass-style press animation matching `HighlightTrackingButton` in
-    /// `GlassControlGroup`: spring-scale up to 1.15 on press, relax to 1.0 on
-    /// release. Subtle alpha dip preserves the previous "press feedback".
-    private func applyPressAnimation(pressed: Bool) {
-        let scaleKey = "transform.scale"
-        layer.removeAnimation(forKey: scaleKey)
-
-        let fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)?.floatValue
-            ?? Float(pressed ? 1.0 : 1.0)
-        let toValue: Float = pressed ? 1.0 : 1.0
-
-        let spring = CASpringAnimation(keyPath: scaleKey)
-        spring.fromValue = fromValue
-        spring.toValue = toValue
-        spring.mass = 1.0
-        spring.stiffness = pressed ? 520.0 : 480.0
-        spring.damping = pressed ? 34.0 : 22.0
-        spring.duration = spring.settlingDuration
-        spring.fillMode = .forwards
-        spring.isRemovedOnCompletion = false
-        layer.add(spring, forKey: scaleKey)
-        layer.setValue(toValue, forKeyPath: scaleKey)
-
-        UIView.animate(withDuration: pressed ? 0.1 : 0.25, animations: {
-            self.alpha = pressed ? 0.7 : 1.0
-        })
-    }
 }

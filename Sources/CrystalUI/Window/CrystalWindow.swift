@@ -703,17 +703,20 @@ public final class CrystalWindow: UIWindow {
         // Gesture state is handled via the began/moved/ended callbacks
     }
 
-    /// Physically shift the native keyboard view vertically by `offset`
-    /// points (positive = keyboard slides further down off-screen).
-    /// Mirrors `KeyboardManager.updateInteractiveInputOffset` from
-    /// Telegram-iOS: we mutate the `UIInputSetHostView`'s `layer.bounds`
-    /// origin, which visually translates the keyboard content without
-    /// requiring `resignFirstResponder` first.
+    /// Physically shift the in-process keyboard container vertically by
+    /// `offset` points (positive = keyboard slides further down).
+    /// Port of `KeyboardManager.updateInteractiveInputOffset` from
+    /// Telegram-iOS.
     ///
-    /// When called with an animated transition, we also add an additive
-    /// offset animation on the layer so the transition from the previous
-    /// bounds to the new one interpolates smoothly (matches upstream's
-    /// `animateOffsetAdditive` call).
+    /// Only visually effective on iOS ≤15, where the keys live inside
+    /// `UIInputSetHostView` in-process. iOS 16+ hoisted the keyboard
+    /// render into a separate process (`com.apple.keyboard.KeyboardManager`,
+    /// composited via `_UIRemoteKeyboardPlaceholderView` → CARemoteLayer
+    /// pinned to screen coords), so mutating the container layer shifts
+    /// only our placeholder — the real keys stay put. We still call
+    /// through on iOS 16+ so any legacy accessory view stays in sync;
+    /// real drag-tracking there requires `UIScrollView.keyboardDismissMode
+    /// = .interactive`, which talks to the keyboard process over XPC.
     private func updateInteractiveKeyboardOffset(
         _ offset: CGFloat,
         transition: ContainedViewLayoutTransition,
@@ -798,28 +801,38 @@ public final class CrystalWindow: UIWindow {
             }
         }
 
-        // Commit interactive keyboard offset
+        // Commit the interactive keyboard offset to the native keyboard
+        // container (`UIInputSetHostView` on iOS ≤15, never visible on
+        // iOS 16+ due to out-of-process rendering; see
+        // `updateInteractiveKeyboardOffset` for the full story). On
+        // iOS 16+ we skip the layer shove and still honor the commit —
+        // flick/release-past-halfway resigns first responder so the
+        // keyboard tears down via UIKit's own hide animation.
         let updatedInputOffset = inputHeightOffset(for: windowLayout)
         if !previousInputOffset.isEqual(to: updatedInputOffset) {
             let isHiding = pending.transition.isAnimated
                 && pending.layout.upperKeyboardInputPositionBound == pending.layout.size.height
-            // Move the native keyboard window's keyboard view in lockstep
-            // with the layout change so the keyboard actually follows the
-            // user's finger (rather than just the layout reacting while
-            // the keyboard stays pinned). Port of Telegram-iOS
-            // `KeyboardManager.updateInteractiveInputOffset`.
-            updateInteractiveKeyboardOffset(
-                updatedInputOffset,
-                transition: pending.transition
-            ) { [weak self] in
-                guard let self, isHiding else { return }
-                // Once the drag-out animation finishes, clear the interactive
-                // bound and resign first responder — UIKit will tear down
-                // the keyboard naturally from the off-screen position.
-                self.updateLayout {
-                    $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
+            if #available(iOS 16.0, *) {
+                if isHiding && updatedInputOffset > 0 {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.updateLayout {
+                            $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
+                        }
+                        self._rootController.view.findFirstResponder()?.resignFirstResponder()
+                    }
                 }
-                self._rootController.view.findFirstResponder()?.resignFirstResponder()
+            } else {
+                updateInteractiveKeyboardOffset(
+                    updatedInputOffset,
+                    transition: pending.transition
+                ) { [weak self] in
+                    guard let self, isHiding else { return }
+                    self.updateLayout {
+                        $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
+                    }
+                    self._rootController.view.findFirstResponder()?.resignFirstResponder()
+                }
             }
         }
 

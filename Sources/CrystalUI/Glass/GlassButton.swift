@@ -44,6 +44,7 @@ public final class GlassButton: UIView {
     private var titleLabel: UILabel?
     private var loadingIndicator: UIActivityIndicatorView?
     private var tapRecognizer: UITapGestureRecognizer?
+    private var elasticRecognizer: GlassHighlightGestureRecognizer?
 
     // MARK: - Properties
 
@@ -122,6 +123,7 @@ public final class GlassButton: UIView {
             if isEnabled == oldValue { return }
             alpha = isEnabled ? 1.0 : 0.4
             tapRecognizer?.isEnabled = isEnabled && !isLoading
+            elasticRecognizer?.isEnabled = isEnabled && !isLoading
         }
     }
 
@@ -133,6 +135,7 @@ public final class GlassButton: UIView {
         didSet {
             if isLoading == oldValue { return }
             tapRecognizer?.isEnabled = isEnabled && !isLoading
+            elasticRecognizer?.isEnabled = isEnabled && !isLoading
             updateLoadingState(animated: true)
         }
     }
@@ -177,6 +180,23 @@ public final class GlassButton: UIView {
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         addGestureRecognizer(tap)
         self.tapRecognizer = tap
+
+        // Press feedback is version-gated:
+        //   - iOS 26+: native UIGlassEffect.isInteractive does the surface
+        //     warp under the finger (handled in GlassBackgroundView.update).
+        //   - iOS ≤25: no native warp available, so attach the ported
+        //     Telegram TouchEffect — drag stretches the button via
+        //     sublayerTransform, release springs back, radial highlight
+        //     tracks the finger.
+        if #available(iOS 26.0, *) {
+            // native path
+        } else {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = self
+            elastic.highlightContainerView = glassBackground.contentView
+            addGestureRecognizer(elastic)
+            self.elasticRecognizer = elastic
+        }
     }
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

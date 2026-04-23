@@ -120,6 +120,18 @@ public final class TabBarView: UIView {
     private let edgeEffectView = EdgeEffectView()
     private var theme: Theme
 
+    /// Effective bottom offset from the tab bar's bottom edge to the
+    /// pill. Devices with a home indicator / safe area already push the
+    /// floating pill up from the hardware bezel, so `theme.bottomInset`
+    /// (25pt) sits nicely above the indicator. Older phones with
+    /// `safeAreaInsets.bottom == 0` have no such buffer — the 25pt
+    /// looks like wasted space, so we collapse it to 16pt matching
+    /// stock iOS floating-tabbar spacing on non-home-indicator devices.
+    private var effectiveBottomInset: CGFloat {
+        let raw = window?.safeAreaInsets.bottom ?? superview?.safeAreaInsets.bottom ?? safeAreaInsets.bottom
+        return raw > 0.01 ? theme.bottomInset : 16.0
+    }
+
     public var searchShowcase: SearchShowcase? {
         didSet { rebuildSearchShowcase() }
     }
@@ -290,7 +302,7 @@ public final class TabBarView: UIView {
     private var searchShowcaseFrame: CGRect {
         guard let showcase = searchShowcaseView else {
             return CGRect(x: bounds.width - theme.sideInset - theme.pillHeight,
-                          y: bounds.height - theme.bottomInset - theme.pillHeight,
+                          y: bounds.height - effectiveBottomInset - theme.pillHeight,
                           width: theme.pillHeight, height: theme.pillHeight)
         }
         return tabBarGlassContainer.convert(showcase.frame, to: self)
@@ -349,7 +361,7 @@ public final class TabBarView: UIView {
         // handling) determines vertical placement.
         let isEditing = searchTextField?.isFirstResponder ?? false
         let lift = isEditing ? 0 : Self.searchRowLift
-        let pillY = bounds.height - theme.bottomInset - h + (theme.pillHeight - h) / 2 - lift
+        let pillY = bounds.height - effectiveBottomInset - h + (theme.pillHeight - h) / 2 - lift
 
         updateSearchDimFrame()
 
@@ -492,6 +504,16 @@ public final class TabBarView: UIView {
         let lensSwipeRight = UISwipeGestureRecognizer(target: self, action: #selector(lensSwiped(_:)))
         lensSwipeRight.direction = .right
         liquidLensView.addGestureRecognizer(lensSwipeRight)
+
+        // Pre-iOS 26 elastic press feedback for the whole tab-bar glass
+        // capsule. iOS 26+ gets the native UIGlassContainerEffect warp
+        // (the container's own `isInteractive` hook).
+        if #unavailable(iOS 26.0) {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = tabBarGlassContainer
+            elastic.highlightContainerView = tabBarGlassContainer.contentView
+            tabBarGlassContainer.addGestureRecognizer(elastic)
+        }
 
         setGlassStyle(enabled: theme.enableBlur)
     }
@@ -670,7 +692,7 @@ public final class TabBarView: UIView {
         let sideInset = theme.sideInset
         let innerPadding = theme.innerPadding
         let showcaseSpacing = theme.showcaseSpacing
-        let bottomInset = theme.bottomInset
+        let bottomInset = effectiveBottomInset
 
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 

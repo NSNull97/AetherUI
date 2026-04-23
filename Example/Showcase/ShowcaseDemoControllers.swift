@@ -590,11 +590,17 @@ final class KeyboardDismissDemoController: ShowcaseDemoController {
         description.textColor = .secondaryLabel
         description.text = """
         Тап в поле — поднимется клавиатура. Потом тяни ПАЛЬЦЕМ ВНИЗ \
-        от любой точки над клавиатурой (вне поля) — клавиатура должна \
-        поехать за пальцем. Отпусти ниже середины или флик'ай — \
-        закроется; отпусти выше — вернётся.
+        из любой точки над клавиатурой (вне поля). Отпусти ниже \
+        середины / флик'ай — закроется; отпусти выше — вернётся.
+
+        На iOS 14/15 клавиатура визуально едет за пальцем (порт \
+        Telegram-iOS: shift UIInputSetHostView.layer.bounds). На iOS \
+        16+ рендер клавиш уехал в отдельный процесс (CARemoteLayer, \
+        пиновый к screen-coord), наш shift его не двигает — \
+        поэтому визуала не будет, но commit (release/flick) всё равно \
+        срабатывает.
         """
-        addPaddedView(description, height: 120)
+        addPaddedView(description, height: 220)
 
         let field1 = makeField(placeholder: "Single-line text field")
         addPaddedView(field1, height: 48)
@@ -610,7 +616,7 @@ final class KeyboardDismissDemoController: ShowcaseDemoController {
         textView.layer.cornerRadius = 12
         textView.layer.cornerCurve = .continuous
         textView.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-        textView.text = "UITextView — многострочное поле для теста. Открой клавиатуру, потом тяни вниз от любой точки над клавой."
+        textView.text = "UITextView — многострочное поле для теста."
         addPaddedView(textView, height: 140)
 
         addButton("Скрыть клавиатуру (programmatic)") { [weak self] in
