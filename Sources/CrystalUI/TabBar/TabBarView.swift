@@ -680,7 +680,17 @@ public final class TabBarView: UIView {
         let button = GlassBarButtonView(icon: config.icon, title: nil, state: .glass)
         button.contentTintColor = theme.tabBarIconColor
         button.action = { _ in config.action() }
-        tabBarGlassContainer.contentView.addSubview(button)
+        // Previously sat inside `tabBarGlassContainer.contentView` so
+        // both the tab pill and the search circle could merge via the
+        // shared `UIGlassContainerEffect` on iOS 26+. That merge made
+        // the elastic press feedback affect both at once (sublayer
+        // transform on the container ripples through everything
+        // inside). Keeping the search as a direct subview of the
+        // TabBarView scopes each press effect to its own element —
+        // tapping the pill stretches only the pill, tapping search
+        // stretches only search. Tradeoff: loses the iOS 26 glass
+        // merge between pill and search circle.
+        addSubview(button)
         searchShowcaseView = button
         setNeedsLayout()
     }
@@ -709,19 +719,19 @@ public final class TabBarView: UIView {
         let showcaseX = bounds.width - sideInset - showcaseSize
         let pillY = bounds.height - bottomInset - contentHeight
 
-        // Glass container spans from pill left edge to search right edge.
-        let containerWidth = showcaseSize > 0.0 ? (showcaseX + showcaseSize) - pillX : pillWidth
-        let containerFrame = CGRect(x: pillX, y: pillY, width: containerWidth, height: contentHeight)
+        // Glass container wraps only the pill now — the search circle
+        // lives as a direct subview of the TabBarView so its elastic
+        // press feedback can run independently (see `rebuildSearchShowcase`).
+        let containerFrame = CGRect(x: pillX, y: pillY, width: pillWidth, height: contentHeight)
         tabBarGlassContainer.frame = containerFrame
         tabBarGlassContainer.update(size: containerFrame.size, isDark: isEffectivelyDark, transition: .immediate)
 
         // Lens covers just the pill (not the search circle).
         liquidLensView.frame = CGRect(origin: .zero, size: lensSize)
 
-        // Search circle anchored to the right inside the container.
+        // Search circle positioned in TabBarView coords (sibling of container).
         if let showcase = searchShowcaseView {
-            let localX = showcaseX - pillX
-            showcase.frame = CGRect(x: localX, y: 0.0, width: showcaseSize, height: showcaseSize)
+            showcase.frame = CGRect(x: showcaseX, y: pillY, width: showcaseSize, height: showcaseSize)
         }
 
         // Tab items fill the pill width with inner side padding.
