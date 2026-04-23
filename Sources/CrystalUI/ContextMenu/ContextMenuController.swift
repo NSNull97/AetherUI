@@ -35,7 +35,7 @@ public final class ContextMenuController {
     ///                     lands into place over the back half.
     ///   dismiss ~ 0.30s   firmer (damping 0.86) so close feels decisive
     ///                     without being stiff.
-    private static let morphDuration: TimeInterval = 0.42
+    private static let morphDuration: TimeInterval = 0.55
     private static let dismissDuration: TimeInterval = 0.30
     /// `damping` is the spring's damping ratio for
     /// `UISpringTimingParameters` (see `ContextMenuFluidMorphHostView`).
@@ -262,7 +262,16 @@ public final class ContextMenuController {
         // that a shared setup path stopped paying its way.
         let isDark = source.traitCollection.userInterfaceStyle == .dark
         let effect = ContextMenuController.makeMenuEffect(isDark: isDark)
-        let snapshot = makeSourceSnapshot(source: source)
+        let snapshot = makeSourceSnapshot(
+            source: source,
+            preferRenderedImage: {
+                if case .morph = presentationStyle, #available(iOS 26.0, *) {
+                    return true
+                } else {
+                    return false
+                }
+            }()
+        )
         self.snapshotView = snapshot
 
         switch presentationStyle {
@@ -392,12 +401,15 @@ public final class ContextMenuController {
         self.morphHost = morphHost
         self.menuContainer = morphHost.glass
 
-        // SDF lens (iOS 26+): installs on the morph host's layer so the
-        // liquid refraction follows the morphing bounds. Updates per
-        // progress-tick via the `animateProgress(step:)` callback in
-        // `animateInMorph` / `animateOutMorph`.
+        // SDF lens (iOS 26+): install on the glass layer, not the
+        // morph-host layer. The host itself uses a non-default
+        // anchorPoint/position and a moving parent mask during `.morph`;
+        // on iOS 26 the private SDF displacement filter drifts in that
+        // setup and visually skews the opening toward the left. The
+        // glass layer tracks the same bounds without the extra host-level
+        // geometry, so the refraction stays aligned to the morph.
         if #available(iOS 26.0, *), let filter = LensSDFFilter() {
-            filter.install(on: morphHost.layer, size: sourceRectInHost.size, cornerRadius: sourceCornerRadius)
+            filter.install(on: morphHost.glass.layer, size: sourceRectInHost.size, cornerRadius: sourceCornerRadius)
             self.sdfFilter = filter
         }
     }
@@ -621,12 +633,21 @@ public final class ContextMenuController {
             completion: { _ in cleanup() }
         )
 
-        // SDF lens displacement during the shrink — small tail wobble that
-        // sells the "liquid stretches back" feeling without overdoing it.
+        // SDF lens displacement during the shrink — ramps from the
+        // settled persistent lens height up to a close-time peak and
+        // stays there while the menu collapses. Starts from the
+        // open-time `toHeight` to avoid snapping the lens to zero
+        // before the close animation begins.
         if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
-            let minSide = min(sourceRectInHost.width, sourceRectInHost.height)
+            let menuMinSide: CGFloat = {
+                guard let metrics = morphHost.metrics else {
+                    return min(sourceRectInHost.width, sourceRectInHost.height)
+                }
+                return min(metrics.expandedFrame.width, metrics.expandedFrame.height)
+            }()
             filter.animateDisplacement(
-                fromHeight: 0.001, toHeight: minSide * 0.18,
+                fromHeight: 0.001,
+                toHeight: menuMinSide * 0.25,
                 duration: ContextMenuController.dismissDuration
             )
             filter.animateBlur(duration: ContextMenuController.dismissDuration)
@@ -704,13 +725,36 @@ public final class ContextMenuController {
             completion: nil
         )
 
-        // SDF wobble (iOS 26 only) — extra "lens" kick layered on top of
-        // the geometric morph. The recommendation lists this as the
-        // "Premium" option; we already have the filter from previous work
-        // so it's free to keep.
+        // SDF displacement (iOS 26 only) — the heart of the "liquid
+        // glass" reading. Replaces what used to be a geometric droplet
+        // in the mask path. Scaled off the MENU's min side (not the
+        // source), because the visible glass is menu-sized for most
+        // of the morph and the lens needs to read on that surface.
+        //
+        //   fromHeight: menuMinSide * 0.30   strong distortion as the
+        //                                    shape grows, so background
+        //                                    content visibly warps
+        //                                    around the edges.
+        //   toHeight:   menuMinSide * 0.10   persistent lens on the
+        //                                    settled menu — the model
+        //                                    value is held after the
+        //                                    animation is removed, so
+        //                                    background stays refracted
+        //                                    at rest (see LensSDFFilter
+        //                                    `setValue(toHeight)` trick).
         if #available(iOS 26.0, *), let filter = sdfFilter as? LensSDFFilter {
-            filter.animateDisplacement(
-                fromHeight: sourceMinSide * 0.25, toHeight: 0.001,
+            let menuMinSide: CGFloat = {
+                guard let metrics = morphHost.metrics else { return sourceMinSide }
+                return min(metrics.expandedFrame.width, metrics.expandedFrame.height)
+            }()
+            // HOLD-then-DECAY pulse: heavy lens for ~70 % of the
+            // duration, then fades to 0 over the last 30 %. Finalises
+            // at zero — the settled menu has no residual distortion.
+            // Amplitude is the full peakHeight throughout the hold
+            // phase, so the user sees strong refraction for the whole
+            // morph rather than a brief flash.
+            filter.animateDisplacementPulse(
+                peakHeight: menuMinSide * 0.32,
                 duration: ContextMenuController.morphDuration
             )
             filter.animateBlur(duration: ContextMenuController.morphDuration)
@@ -811,8 +855,8 @@ public final class ContextMenuController {
 
     // MARK: - Source snapshot
 
-    private func makeSourceSnapshot(source: UIView) -> UIView {
-        if let snap = source.snapshotView(afterScreenUpdates: false) {
+    private func makeSourceSnapshot(source: UIView, preferRenderedImage: Bool = false) -> UIView {
+        if !preferRenderedImage, let snap = source.snapshotView(afterScreenUpdates: false) {
             snap.frame = CGRect(origin: .zero, size: source.bounds.size)
             return snap
         }
@@ -840,30 +884,46 @@ public final class ContextMenuController {
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
 
-        // Horizontal alignment: prefer the edge of the source that's
-        // closer to the nearer screen edge, so a right-side button's
-        // menu visibly unfolds LEFTWARD from the button's own right
-        // edge (and vice versa for left-side buttons). Previously the
-        // rule was purely "left-align unless it overflows", which
-        // produced menu.minX = source.minX even for buttons positioned
-        // in the right half of the screen — the animation then read
-        // as starting from the wrong side. Now we right-align as soon
-        // as the source's centre is past the host's centre, regardless
-        // of whether left-align would overflow.
-        let sourceCentreIsOnRight = sourceRect.midX > hostBounds.midX
+        // Horizontal alignment strategy, in priority order:
+        //   1. Centre-align to source if the centred rect fits on
+        //      screen — this preserves the "morph stays centred on
+        //      source" feel for central buttons. Before we fell back
+        //      to left-align here, the menu would clamp to the
+        //      screen's left edge whenever it was wider than the
+        //      source, which read as "menu always flies in from the
+        //      left" on centred sources.
+        //   2. Otherwise pick the source edge closest to the farther
+        //      screen edge (right-side source → right-align, left-
+        //      side → left-align) so the morph unfolds TOWARD the
+        //      centre of the screen rather than over the nearest
+        //      wall.
+        //   3. Final safety clamp so we never leave the safe area.
         let leftAlignedX = sourceRect.minX
         let rightAlignedX = sourceRect.maxX - menuSize.width
-        let wouldOverflowRight = leftAlignedX + menuSize.width > hostBounds.maxX - sideInset
+        let centreAlignedX = sourceRect.midX - menuSize.width / 2
+
+        let fitsLeftAligned = leftAlignedX >= sideInset
+            && leftAlignedX + menuSize.width <= hostBounds.maxX - sideInset
+        let fitsRightAligned = rightAlignedX >= sideInset
+            && rightAlignedX + menuSize.width <= hostBounds.maxX - sideInset
+        let fitsCentreAligned = centreAlignedX >= sideInset
+            && centreAlignedX + menuSize.width <= hostBounds.maxX - sideInset
+
+        let sourceCentreIsOnRight = sourceRect.midX > hostBounds.midX
 
         var x: CGFloat
-        if sourceCentreIsOnRight || wouldOverflowRight {
+        if fitsCentreAligned {
+            x = centreAlignedX
+        } else if sourceCentreIsOnRight && fitsRightAligned {
+            x = rightAlignedX
+        } else if !sourceCentreIsOnRight && fitsLeftAligned {
+            x = leftAlignedX
+        } else if fitsRightAligned {
             x = rightAlignedX
         } else {
             x = leftAlignedX
         }
         x = max(sideInset, x)
-        // Final safety clamp: if right-align still overflows left side,
-        // pin to right edge of screen minus inset.
         if x + menuSize.width > hostBounds.maxX - sideInset {
             x = hostBounds.maxX - sideInset - menuSize.width
         }

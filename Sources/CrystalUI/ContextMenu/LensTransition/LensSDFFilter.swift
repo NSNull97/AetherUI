@@ -119,7 +119,68 @@ final class LensSDFFilter {
             return (1.0 - f) * fromHeight + f * toHeight
         }
 
-        // Initial values.
+        // Model values set to 0 — after the keyframe animation is
+        // removed on completion, the displayed value reverts to 0
+        // and the lens is fully off. Used for the DISMISS path where
+        // the menu is about to go away; the open path uses
+        // `animateDisplacementPulse` instead, which has its own
+        // model-value setup so the lens finalises to zero at rest.
+        targetLayer.setValue(0.0 as NSNumber, forKeyPath: "filters.gaussianBlur.inputRadius")
+        targetLayer.setValue(0.0 as NSNumber, forKeyPath: "sublayers.sdfLayer.effect.height")
+        targetLayer.setValue(-0.001 as NSNumber, forKeyPath: "filters.displacementMap.inputAmount")
+
+        let scale = UIView.animationDurationFactor()
+
+        let heightAnim = CAKeyframeAnimation(keyPath: "sublayers.sdfLayer.effect.height")
+        heightAnim.duration = duration * scale
+        heightAnim.values = heightKeyframes.map { $0 as NSNumber }
+        heightAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        heightAnim.isRemovedOnCompletion = true
+        heightAnim.fillMode = .both
+        targetLayer.add(heightAnim, forKey: "sublayers.sdfLayer.effect.height")
+
+        let dispAnim = CAKeyframeAnimation(keyPath: "filters.displacementMap.inputAmount")
+        dispAnim.duration = duration * scale
+        dispAnim.values = heightKeyframes.map { -$0 as NSNumber }
+        dispAnim.timingFunction = CAMediaTimingFunction(name: .linear)
+        dispAnim.isRemovedOnCompletion = true
+        dispAnim.fillMode = .both
+        targetLayer.add(dispAnim, forKey: "filters.displacementMap.inputAmount")
+    }
+
+    /// Animate `effect.height` as a HOLD-then-DECAY pulse. The value
+    /// stays at `peakHeight` for the first ~70 % of the duration,
+    /// then smoothsteps down to 0 over the final 30 %. Ends cleanly
+    /// at zero — i.e. the lens finalises with no residual distortion.
+    ///
+    /// This is the right shape for the morph-OPEN choreography:
+    /// `animateDisplacement` (which uses `displacementFractionEase`)
+    /// clamps to 1 by t ≈ 0.1, so with `fromHeight > toHeight` the
+    /// peak is only visible for a flash before the curve commits to
+    /// `toHeight` and holds — the user sees the heavy lens briefly
+    /// and then something subtler. This pulse inverts that: peak
+    /// holds THROUGHOUT, then fades at the tail.
+    func animateDisplacementPulse(peakHeight: CGFloat, duration: TimeInterval) {
+        guard let targetLayer else { return }
+
+        let sampleCount = 30
+        let endIndex = CGFloat(sampleCount - 1)
+        let holdUntil: CGFloat = 0.70
+        let heightKeyframes: [CGFloat] = (0 ..< sampleCount).map { i in
+            let t = endIndex > 0 ? CGFloat(i) / endIndex : 1.0
+            let decay: CGFloat
+            if t <= holdUntil {
+                decay = 0
+            } else {
+                let localT = (t - holdUntil) / (1.0 - holdUntil)
+                decay = localT * localT * (3 - 2 * localT)
+            }
+            return peakHeight * (1.0 - decay)
+        }
+
+        // Model values at 0 (the final keyframe value). After the
+        // animation is removed, displayed value reverts to 0 — the
+        // lens finalises cleanly.
         targetLayer.setValue(0.0 as NSNumber, forKeyPath: "filters.gaussianBlur.inputRadius")
         targetLayer.setValue(0.0 as NSNumber, forKeyPath: "sublayers.sdfLayer.effect.height")
         targetLayer.setValue(-0.001 as NSNumber, forKeyPath: "filters.displacementMap.inputAmount")
