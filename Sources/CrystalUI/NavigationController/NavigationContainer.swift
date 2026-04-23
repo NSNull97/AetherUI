@@ -15,6 +15,23 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
     private var controllerViews: [UIView] = []
     private var transitionCoordinator: NavigationTransitionCoordinator?
 
+    /// True during the narrow window inside `performTransition` between
+    /// `addSubview(to.view)` and assigning `self.transitionCoordinator`.
+    /// UIKit fires `viewWillAppear` on the incoming controller synchronously
+    /// from `addSubview`, which in our base `ViewController` triggers
+    /// `bar.requestContainerLayout?(.immediate)` → `CrystalNavigationController.
+    /// requestLayout` → reentrant `setControllers` on this container.
+    /// Without this flag, that reentry sees `transitionCoordinator == nil`
+    /// and takes the non-animated path, which evicts the outgoing
+    /// controller's view from the hierarchy — leaving the outgoing screen
+    /// blank at animation start. Treat this flag as "coordinator is about
+    /// to be installed, stay out."
+    private var isInstallingTransition: Bool = false
+
+    private var isTransitionActive: Bool {
+        return transitionCoordinator != nil || isInstallingTransition
+    }
+
     public var topController: ViewController? {
         return controllers.last
     }
@@ -69,7 +86,13 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         // gesture's in-progress frame. The follow-up containerLayoutUpdated
         // call (from the same updateRootContainer site) already takes the
         // transition-aware path and forwards layout per-controller.
-        if transitionCoordinator != nil {
+        //
+        // Also bail when `isInstallingTransition` is set: we're in the
+        // narrow window of `performTransition` where `addSubview(to.view)`
+        // has fired `viewWillAppear` on the incoming controller, which
+        // cascades back into this method before the coordinator has been
+        // assigned. See the flag's declaration for the full story.
+        if isTransitionActive {
             return
         }
 
@@ -117,7 +140,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
     public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         self.validLayout = layout
 
-        if transitionCoordinator == nil {
+        if !isTransitionActive {
             updateControllerViews(layout: layout, transition: transition)
         } else {
             // A push/pop animation is in flight — the coordinator owns
@@ -162,6 +185,15 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         let frame = CGRect(origin: .zero, size: layout.size)
 
         to.view.frame = frame
+
+        // Mark the transition as "being installed" BEFORE any call that
+        // could reach the view hierarchy for `to` (including
+        // `to.containerLayoutUpdated` which lays out the bar, and
+        // `addSubview` which fires UIKit's appearance transitions). Both
+        // can cause `viewWillAppear` → `bar.requestContainerLayout` →
+        // `requestLayout` reentry into this container before the
+        // coordinator reference is assigned.
+        isInstallingTransition = true
         to.containerLayoutUpdated(layout, transition: .immediate)
 
         if push {
@@ -178,6 +210,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                 isInteractive: false
             )
             self.transitionCoordinator = coordinator
+            isInstallingTransition = false
 
             coordinator.animateCompletion { [weak self] in
                 from.view.removeFromSuperview()
@@ -196,6 +229,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                 isInteractive: false
             )
             self.transitionCoordinator = coordinator
+            isInstallingTransition = false
 
             coordinator.animateCompletion { [weak self] in
                 from.view.removeFromSuperview()
