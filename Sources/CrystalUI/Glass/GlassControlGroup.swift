@@ -87,12 +87,27 @@ public final class GlassControlGroup: UIView {
 
     // MARK: - Init
 
+    private var elasticRecognizer: GlassHighlightGestureRecognizer?
+
     public init(style: GlassBackgroundView.Style = .regular) {
         self.backgroundView = GlassBackgroundView(style: style)
 
         super.init(frame: .zero)
 
         addSubview(backgroundView)
+
+        // iOS ≤25 doesn't have UIGlassEffect.isInteractive — port the
+        // Telegram elastic touch feedback so the whole capsule (glass
+        // surface + inner buttons) stretches under the finger and
+        // springs back on release. iOS 26+ gets the native warp via
+        // `isInteractive` on the glass (see `update`).
+        if #unavailable(iOS 26.0) {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = self
+            elastic.highlightContainerView = backgroundView.contentView
+            addGestureRecognizer(elastic)
+            self.elasticRecognizer = elastic
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -326,37 +341,8 @@ final class HighlightTrackingButton: UIButton {
         didSet {
             if isHighlighted != oldValue {
                 highlightedChanged?(isHighlighted)
-                applyPressAnimation(pressed: isHighlighted)
             }
         }
-    }
-
-    /// Port of glass-press animation: spring-scale up to 1.1 on
-    /// press, relax back to 1.0 on release. Subtle but unmistakably iOS 26.
-    private func applyPressAnimation(pressed: Bool) {
-        // Use a CASpring on `transform.scale` for the natural squash feel.
-        let key = "transform.scale"
-        layer.removeAnimation(forKey: key)
-
-        let fromValue = (layer.presentation()?.value(forKeyPath: "transform.scale.x") as? NSNumber)?.floatValue
-            ?? Float(pressed ? 1.0 : 1.0)
-        let toValue: Float = pressed ? 1.0 : 1.0
-
-        let spring = CASpringAnimation(keyPath: key)
-        spring.fromValue = fromValue
-        spring.toValue = toValue
-        spring.mass = 1.0
-        spring.stiffness = pressed ? 520.0 : 480.0
-        spring.damping = pressed ? 34.0 : 22.0
-        spring.initialVelocity = 0.0
-        spring.duration = spring.settlingDuration
-        spring.fillMode = .forwards
-        spring.isRemovedOnCompletion = false
-
-        layer.add(spring, forKey: key)
-        // Set the final model value so the layer stays at the target after
-        // the animation completes.
-        layer.setValue(toValue, forKeyPath: key)
     }
 
     @objc private func tapped() {

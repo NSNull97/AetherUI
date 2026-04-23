@@ -518,11 +518,11 @@ public final class CrystalSearchController: NSObject, UITextFieldDelegate {
         btn.contentTintColor = .label
         btn.alpha = 0
         btn.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-        btn.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        btn.action = { [weak self] _ in self?.closeTapped() }
         return btn
     }
 
-    @objc private func closeTapped() {
+    private func closeTapped() {
         deactivate()
     }
 

@@ -703,6 +703,44 @@ public final class CrystalWindow: UIWindow {
         // Gesture state is handled via the began/moved/ended callbacks
     }
 
+    /// Physically shift the in-process keyboard container vertically by
+    /// `offset` points (positive = keyboard slides further down).
+    /// Port of `KeyboardManager.updateInteractiveInputOffset` from
+    /// Telegram-iOS.
+    ///
+    /// Only visually effective on iOS ≤15, where the keys live inside
+    /// `UIInputSetHostView` in-process. iOS 16+ hoisted the keyboard
+    /// render into a separate process (`com.apple.keyboard.KeyboardManager`,
+    /// composited via `_UIRemoteKeyboardPlaceholderView` → CARemoteLayer
+    /// pinned to screen coords), so mutating the container layer shifts
+    /// only our placeholder — the real keys stay put. We still call
+    /// through on iOS 16+ so any legacy accessory view stays in sync;
+    /// real drag-tracking there requires `UIScrollView.keyboardDismissMode
+    /// = .interactive`, which talks to the keyboard process over XPC.
+    private func updateInteractiveKeyboardOffset(
+        _ offset: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        completion: (() -> Void)? = nil
+    ) {
+        guard let keyboardView = CrystalKeyboardAccess.keyboardView() else {
+            completion?()
+            return
+        }
+        let previousBounds = keyboardView.bounds
+        let updatedBounds = CGRect(origin: CGPoint(x: 0.0, y: -offset), size: previousBounds.size)
+        keyboardView.layer.bounds = updatedBounds
+
+        if transition.isAnimated {
+            transition.animateOffsetAdditive(
+                layer: keyboardView.layer,
+                offset: previousBounds.minY - updatedBounds.minY,
+                completion: { _ in completion?() }
+            )
+        } else {
+            completion?()
+        }
+    }
+
     // MARK: - Layout Update Batching
 
     private func updateLayout(_ update: (inout UpdatingLayout) -> Void) {
@@ -763,14 +801,32 @@ public final class CrystalWindow: UIWindow {
             }
         }
 
-        // Commit interactive keyboard offset
+        // Commit the interactive keyboard offset to the native keyboard
+        // container (`UIInputSetHostView` on iOS ≤15, never visible on
+        // iOS 16+ due to out-of-process rendering; see
+        // `updateInteractiveKeyboardOffset` for the full story). On
+        // iOS 16+ we skip the layer shove and still honor the commit —
+        // flick/release-past-halfway resigns first responder so the
+        // keyboard tears down via UIKit's own hide animation.
         let updatedInputOffset = inputHeightOffset(for: windowLayout)
         if !previousInputOffset.isEqual(to: updatedInputOffset) {
             let isHiding = pending.transition.isAnimated
                 && pending.layout.upperKeyboardInputPositionBound == pending.layout.size.height
-            if isHiding {
-                // Animate keyboard offset to fully hidden, then resign first responder
-                DispatchQueue.main.async { [weak self] in
+            if #available(iOS 16.0, *) {
+                if isHiding && updatedInputOffset > 0 {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.updateLayout {
+                            $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
+                        }
+                        self._rootController.view.findFirstResponder()?.resignFirstResponder()
+                    }
+                }
+            } else {
+                updateInteractiveKeyboardOffset(
+                    updatedInputOffset,
+                    transition: pending.transition
+                ) { [weak self] in
                     guard let self, isHiding else { return }
                     self.updateLayout {
                         $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)

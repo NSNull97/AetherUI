@@ -2,7 +2,16 @@ import UIKit
 
 /// Glass-styled bar button with multiple display states.
 /// Pure UIKit implementation.
-public final class GlassBarButtonView: UIControl {
+///
+/// **Why UIView, not UIControl:** iOS 26+ `UIGlassEffect.isInteractive`
+/// needs the underlying `UIVisualEffectView` to receive touches so it
+/// can observe finger position for the native liquid-surface warp. A
+/// UIControl host swallows touches into its own tracking pipeline
+/// before the effect view can see them, which kills the press feedback.
+/// So we use a plain UIView + `UITapGestureRecognizer` and keep
+/// `glassBackground.isUserInteractionEnabled = true` — matches
+/// `GlassButton`'s design.
+public final class GlassBarButtonView: UIView {
     // MARK: - Types
 
     public enum DisplayState {
@@ -22,6 +31,7 @@ public final class GlassBarButtonView: UIControl {
 
     private var displayState: DisplayState = .glass
     public var action: ((UIView) -> Void)?
+    private var elasticRecognizer: GlassHighlightGestureRecognizer?
 
     /// Provider for a long-press context menu. When this returns a non-empty
     /// list, the button attaches a long-press gesture that presents a
@@ -60,30 +70,7 @@ public final class GlassBarButtonView: UIControl {
         }
     }
 
-    /// Touch feedback. Two flavours:
-    ///   - `.glass` / `.tintedGlass`: subtle elastic press — scale 0.97 + a
-    ///     small alpha dip 1.0→0.92, sprung. The native UIGlassEffect's
-    ///     `.isInteractive` is also enabled (when iOS 26+ is available),
-    ///     so on real glass surfaces the lens deformation kicks in on top.
-    ///   - `.generic`: stronger pop — scale 0.92, alpha 0.7. Same as before.
-    override public var isHighlighted: Bool {
-        didSet {
-            let isGlass = (displayState == .glass || displayState == .tintedGlass)
-            let pressedScale: CGFloat = isGlass ? 0.97 : 0.92
-            let pressedAlpha: CGFloat = isGlass ? 0.92 : 0.7
-            let duration: TimeInterval = isHighlighted ? 0.12 : 0.32
-            let damping: CGFloat = isGlass ? 0.7 : 0.9
-            UIView.animate(
-                withDuration: duration, delay: 0,
-                usingSpringWithDamping: damping, initialSpringVelocity: 0.0,
-                options: [.allowUserInteraction, .beginFromCurrentState],
-                animations: {
-                    self.transform = self.isHighlighted ? CGAffineTransform(scaleX: pressedScale, y: pressedScale) : .identity
-                    self.alpha = self.isHighlighted ? pressedAlpha : 1.0
-                }
-            )
-        }
-    }
+    private var tapRecognizer: UITapGestureRecognizer?
 
     // MARK: - Init
 
@@ -94,11 +81,20 @@ public final class GlassBarButtonView: UIControl {
 
         super.init(frame: .zero)
 
-        glassBackground.isUserInteractionEnabled = false
+        // Keep interaction ON on the glass so iOS 26+
+        // UIGlassEffect.isInteractive can observe finger position for
+        // the native surface warp. Tap dispatch goes via a
+        // UITapGestureRecognizer on self (below).
+        glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
+        // Content sits inside the glass's own content host so
+        // UIGlassEffect's warp deforms both surface and icon in
+        // lockstep — otherwise only the glass jelly wobbles while
+        // the icon stays pinned (barely visible). Same trick as
+        // GlassButton.
         contentContainer.isUserInteractionEnabled = false
-        addSubview(contentContainer)
+        glassBackground.contentView.addSubview(contentContainer)
 
         if let icon = icon {
             let imageView = UIImageView(image: icon.withRenderingMode(.alwaysTemplate))
@@ -119,13 +115,27 @@ public final class GlassBarButtonView: UIControl {
             self.titleLabel = label
         }
 
-        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        addGestureRecognizer(tap)
+        self.tapRecognizer = tap
 
         let long = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         long.minimumPressDuration = 0.35
         long.cancelsTouchesInView = false
         addGestureRecognizer(long)
         self.longPressRecognizer = long
+
+        // Press feedback: iOS 26+ uses UIGlassEffect.isInteractive (see
+        // layoutSubviews), iOS ≤25 gets the ported Telegram TouchEffect
+        // — drag stretches the button, release springs back, radial
+        // highlight tracks the finger.
+        if #unavailable(iOS 26.0) {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = self
+            elastic.highlightContainerView = glassBackground.contentView
+            addGestureRecognizer(elastic)
+            self.elasticRecognizer = elastic
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -194,10 +204,9 @@ public final class GlassBarButtonView: UIControl {
     @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
         guard contextMenuTrigger == .longPress, recognizer.state == .began else { return }
         guard let items = contextMenuItemsProvider?(), !items.isEmpty else { return }
-        // Suppress the accompanying touch-up action so a single long-press only
-        // opens the menu instead of firing the regular tap handler afterwards.
-        isHighlighted = false
-        cancelTracking(with: nil)
+        // Suppress the tap so a single long-press opens only the menu.
+        tapRecognizer?.isEnabled = false
+        DispatchQueue.main.async { [weak self] in self?.tapRecognizer?.isEnabled = true }
         presentContextMenu(items: items)
     }
 

@@ -65,7 +65,7 @@ public final class CrystalModalController: UIViewController {
             bottomInsetStage2: CGFloat = 0.0,
             topInsetStage1: CGFloat = UIScreenHeight / 2,
             topInsetStage2: CGFloat = 10.0,
-            topCornerRadius: CGFloat = 38.0,
+            topCornerRadius: CGFloat = 39.0,
             dimAlphaStage1: CGFloat = 0.25,
             dimAlphaStage2: CGFloat = 0.4,
             dimTintColor: UIColor = .systemBackground,
@@ -231,7 +231,7 @@ public final class CrystalModalController: UIViewController {
         if let presentation = presentationController as? CrystalModalPresentationController {
             return presentation.deviceCornerRadius
         }
-        return 39.0
+        return 39
     }
 
     private func layoutGlassAndContent() {
@@ -278,15 +278,31 @@ public final class CrystalModalController: UIViewController {
 
     private func updateMaskPath() {
         let bounds = view.bounds
-        let topRadius = config.topCornerRadius
         // Concentric bottom: subtract the sheet's distance from the screen
         // bottom from the device radius so the sheet's bottom corner nests
         // into the device chamfer. That distance interpolates between the
         // two detents' bottom insets via detentProgress.
         let deviceRadius = deviceCornerRadius()
-        let stage1Radius = max(0.0, deviceRadius - config.bottomInsetStage1)
-        let stage2Radius = max(0.0, deviceRadius - config.bottomInsetStage2)
-        let bottomRadius = stage1Radius + (stage2Radius - stage1Radius) * detentProgress
+        let stage1BottomRadius = max(0.0, deviceRadius - config.bottomInsetStage1)
+        let stage2BottomRadius = max(0.0, deviceRadius - config.bottomInsetStage2)
+        let bottomRadius = stage1BottomRadius + (stage2BottomRadius - stage1BottomRadius) * detentProgress
+
+        // Top corners depend purely on whether the physical screen has a
+        // chamfer — OS version doesn't matter.
+        //   - `deviceRadius > 0` (iPhone X and newer): the sheet's top
+        //     matches the device's own corner radius (read via the private
+        //     `_displayCornerRadius`), so the sheet nests concentrically
+        //     into the screen bezel at every detent.
+        //   - `deviceRadius == 0` (pre-iPhone X, iPad, anything without
+        //     a chamfer): interpolate `config.topCornerRadius` at stage1
+        //     down to 0 at stage2. A rounded sheet top floating above a
+        //     flat screen edge reads as detached at full-height.
+        let topRadius: CGFloat
+        if deviceRadius > 0 {
+            topRadius = deviceRadius
+        } else {
+            topRadius = config.topCornerRadius * (1.0 - detentProgress)
+        }
 
         let signature = MaskSignature(bounds: bounds, topRadius: topRadius, bottomRadius: bottomRadius)
         if signature == lastMaskSignature {

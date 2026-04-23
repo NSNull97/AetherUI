@@ -34,7 +34,7 @@ final class CrystalModalPresentationController: UIPresentationController, UIGest
            value > 0 {
             return value
         }
-        return 38.0
+        return 39
     }()
 
     private var modalController: CrystalModalController? {

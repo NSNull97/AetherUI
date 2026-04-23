@@ -64,6 +64,15 @@ public final class CrystalSearchBarContent: NavigationBarContentView {
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         addGestureRecognizer(tap)
+
+        // Pre-iOS 26 elastic press feedback (iOS 26+ gets the native
+        // glass surface warp via pillView's `isInteractive`).
+        if #unavailable(iOS 26.0) {
+            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+            elastic.touchEffectView = self
+            elastic.highlightContainerView = pillView.contentView
+            addGestureRecognizer(elastic)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
