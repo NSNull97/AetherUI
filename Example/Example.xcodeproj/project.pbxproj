@@ -7,41 +7,23 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0313659249D2A7A4F56EBBD1 /* ChatDetailExampleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF5A3C4057F95C955313DC /* ChatDetailExampleController.swift */; };
 		2460C7100EF7948C8D6DDB57 /* CrystalUI in Frameworks */ = {isa = PBXBuildFile; productRef = 168B3163F191F53BC7712E7A /* CrystalUI */; };
-		31C76CD054820E4DCD5E1255 /* ShowcaseDemoControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5220221CC3BAF59E918E63B9 /* ShowcaseDemoControllers.swift */; };
-		38D5EB265EDF1E51D52D192D /* OtherExampleControllers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4767295FBEA5AC5E7765A8A9 /* OtherExampleControllers.swift */; };
-		3FFEE5E6C4D39454DF5AAA14 /* ShowcaseSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E54A49EB19B4DF6EF7E85EA /* ShowcaseSceneDelegate.swift */; };
-		41C43241AE1620FC8A0606FF /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A263B39369367A3901B6B7C0 /* AppDelegate.swift */; };
-		67F868D818DE9331D00ED8D4 /* StickerPackModalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */; };
-		85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */ = {isa = PBXBuildFile; productRef = DE84E8C9EFA75757CBA85F05 /* CrystalUI */; };
-		99605BDC71A28F118F7A8052 /* CollectionDemoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */; };
-		AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67979B086750BD69A85512EA /* SceneDelegate.swift */; };
-		B48B045944A8D7A98293591F /* ShowcaseAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */; };
-		DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */; };
-		F31777F1267E57763A01C9D5 /* ShowcaseGlassDemos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E2CEE69827AF78B4DCE5ABF /* ShowcaseGlassDemos.swift */; };
-		F48DAA9463CDAD7AB3431B95 /* ShowcaseHomeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */; };
+		D712C8802FA7374B007F0BD8 /* AetherUI in Frameworks */ = {isa = PBXBuildFile; productRef = D712C87F2FA7374B007F0BD8 /* AetherUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		2E54A49EB19B4DF6EF7E85EA /* ShowcaseSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseSceneDelegate.swift; sourceTree = "<group>"; };
-		4767295FBEA5AC5E7765A8A9 /* OtherExampleControllers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherExampleControllers.swift; sourceTree = "<group>"; };
-		4FCF5A3C4057F95C955313DC /* ChatDetailExampleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailExampleController.swift; sourceTree = "<group>"; };
-		5220221CC3BAF59E918E63B9 /* ShowcaseDemoControllers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseDemoControllers.swift; sourceTree = "<group>"; };
-		67979B086750BD69A85512EA /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
-		6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseAppDelegate.swift; sourceTree = "<group>"; };
-		6E2CEE69827AF78B4DCE5ABF /* ShowcaseGlassDemos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseGlassDemos.swift; sourceTree = "<group>"; };
-		8F23D033EDBF5E7D2A1F1B97 /* distracted-varahamihira-a41bb9 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "distracted-varahamihira-a41bb9"; path = ..; sourceTree = SOURCE_ROOT; };
-		8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionDemoController.swift; sourceTree = "<group>"; };
-		A263B39369367A3901B6B7C0 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		A70CCE019BA3AE518E7FE7F3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		AF990EAAEBDE00F908EE46B8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseHomeController.swift; sourceTree = "<group>"; };
-		C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListExampleController.swift; sourceTree = "<group>"; };
+		22380EBEFC121A771EF76CA1 /* TelegramNavigationKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TelegramNavigationKit; path = ..; sourceTree = SOURCE_ROOT; };
 		DF0BD18BD916ECDB7A099607 /* Showcase.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Showcase.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F6FE7BF0248FC2FF22A10D63 /* Example.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Example.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerPackModalController.swift; sourceTree = "<group>"; };
+		F6FE7BF0248FC2FF22A10D63 /* Example.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Example.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		D712C8762FA736B6007F0BD8 /* Example */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Example;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		36E37D217D614198212C3A37 /* Frameworks */ = {
@@ -56,7 +38,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				85832E9EB068A8B91FE8D8CF /* CrystalUI in Frameworks */,
+				D712C8802FA7374B007F0BD8 /* AetherUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,7 +48,7 @@
 		12B9A666C278AB8CB5B6FA33 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				8F23D033EDBF5E7D2A1F1B97 /* distracted-varahamihira-a41bb9 */,
+				22380EBEFC121A771EF76CA1 /* TelegramNavigationKit */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -80,42 +62,21 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		4F160DA0426D18FD4DFD3610 /* Example */ = {
-			isa = PBXGroup;
-			children = (
-				A263B39369367A3901B6B7C0 /* AppDelegate.swift */,
-				4FCF5A3C4057F95C955313DC /* ChatDetailExampleController.swift */,
-				C7A6CB89EFD36D1AD1E7E228 /* ChatListExampleController.swift */,
-				A70CCE019BA3AE518E7FE7F3 /* Info.plist */,
-				4767295FBEA5AC5E7765A8A9 /* OtherExampleControllers.swift */,
-				67979B086750BD69A85512EA /* SceneDelegate.swift */,
-				FB8523E6133EF543AAF18D19 /* StickerPackModalController.swift */,
-			);
-			path = Example;
-			sourceTree = "<group>";
-		};
-		507F0BFC3D6E9840223362CB /* Showcase */ = {
-			isa = PBXGroup;
-			children = (
-				8F2E9C05EBC543A40BB483FC /* CollectionDemoController.swift */,
-				AF990EAAEBDE00F908EE46B8 /* Info.plist */,
-				6832AA72CE6A04F8CA09ECC2 /* ShowcaseAppDelegate.swift */,
-				5220221CC3BAF59E918E63B9 /* ShowcaseDemoControllers.swift */,
-				6E2CEE69827AF78B4DCE5ABF /* ShowcaseGlassDemos.swift */,
-				C5DC50837DA7DB2DD17C56BF /* ShowcaseHomeController.swift */,
-				2E54A49EB19B4DF6EF7E85EA /* ShowcaseSceneDelegate.swift */,
-			);
-			path = Showcase;
-			sourceTree = "<group>";
-		};
 		54E0667A38E60354DB90F776 = {
 			isa = PBXGroup;
 			children = (
-				4F160DA0426D18FD4DFD3610 /* Example */,
+				D712C8762FA736B6007F0BD8 /* Example */,
 				12B9A666C278AB8CB5B6FA33 /* Packages */,
-				507F0BFC3D6E9840223362CB /* Showcase */,
+				D712C87E2FA7374B007F0BD8 /* Frameworks */,
 				3031F8ABC084F8D43CC56342 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		D712C87E2FA7374B007F0BD8 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -132,9 +93,12 @@
 			);
 			dependencies = (
 			);
+			fileSystemSynchronizedGroups = (
+				D712C8762FA736B6007F0BD8 /* Example */,
+			);
 			name = Example;
 			packageProductDependencies = (
-				DE84E8C9EFA75757CBA85F05 /* CrystalUI */,
+				D712C87F2FA7374B007F0BD8 /* AetherUI */,
 			);
 			productName = Example;
 			productReference = F6FE7BF0248FC2FF22A10D63 /* Example.app */;
@@ -168,9 +132,6 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					9878B5EABC7D83477291BAFC = {
-						ProvisioningStyle = Automatic;
-					};
 					AF7B460D32139ADE97D46242 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -204,12 +165,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				99605BDC71A28F118F7A8052 /* CollectionDemoController.swift in Sources */,
-				B48B045944A8D7A98293591F /* ShowcaseAppDelegate.swift in Sources */,
-				31C76CD054820E4DCD5E1255 /* ShowcaseDemoControllers.swift in Sources */,
-				F31777F1267E57763A01C9D5 /* ShowcaseGlassDemos.swift in Sources */,
-				F48DAA9463CDAD7AB3431B95 /* ShowcaseHomeController.swift in Sources */,
-				3FFEE5E6C4D39454DF5AAA14 /* ShowcaseSceneDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -217,12 +172,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				41C43241AE1620FC8A0606FF /* AppDelegate.swift in Sources */,
-				0313659249D2A7A4F56EBBD1 /* ChatDetailExampleController.swift in Sources */,
-				DA959375CAC0ECFF630F6A27 /* ChatListExampleController.swift in Sources */,
-				38D5EB265EDF1E51D52D192D /* OtherExampleControllers.swift in Sources */,
-				AC88DDA5C7A1AF78D816D392 /* SceneDelegate.swift in Sources */,
-				67F868D818DE9331D00ED8D4 /* StickerPackModalController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -311,10 +260,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Example/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -323,6 +273,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.example;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -333,10 +284,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KR39A9FDGF;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Example/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -345,6 +297,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.telegramnavigationkit.example;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -480,9 +433,9 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = CrystalUI;
 		};
-		DE84E8C9EFA75757CBA85F05 /* CrystalUI */ = {
+		D712C87F2FA7374B007F0BD8 /* AetherUI */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = CrystalUI;
+			productName = AetherUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

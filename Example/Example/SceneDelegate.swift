@@ -1,5 +1,5 @@
 import UIKit
-import CrystalUI
+import AetherUI
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -11,96 +11,75 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let window = CrystalWindow(windowScene: windowScene)
+        let window = AetherWindow(windowScene: windowScene)
         window.backgroundColor = .systemBackground
 
         // Native-iOS shape:
-        //   CrystalTabBarController  (window root, owns tab bar, no nav bar)
-        //     └─ CrystalNavigationController per tab
+        //   AetherTabBarController  (window root, owns tab bar, no nav bar)
+        //     └─ AetherNavigationController per tab
         //         └─ root screen (plus any pushed details)
-        //
-        // Each tab's navigation controller manages its own stack and its
-        // own nav bar. Push/pop inside a tab slides the screen + its bar
-        // together; the tab bar stays visible.
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 21)
 
-        func makeTab(_ root: ViewController, tabBarItem: UITabBarItem) -> CrystalNavigationController {
-            root.tabBarItem = tabBarItem
-            let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
-            nav.setViewControllers([root], animated: false)
-            // Propagate the tab bar item onto the nav controller itself —
-            // that's the controller the tab bar sees and renders for.
-            nav.tabBarItem = tabBarItem
-            return nav
-        }
-
-        let contacts = makeTab(
-            ContactsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Контакты",
-                image: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "person.crop.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
+        let componentsTab = makeTab(
+            root: makeComponentsRoot(),
+            title: "Components",
+            symbolName: "rectangle.grid.2x2",
+            symbolConfig: symbolConfig
         )
-        let calls = makeTab(
-            CallsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Звонки",
-                image: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "phone.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
+        let statesTab = makeTab(
+            root: makeStatesRoot(),
+            title: "States",
+            symbolName: "sparkles",
+            symbolConfig: symbolConfig
         )
-        let chatsRoot = ChatListExampleController()
-        let chats = makeTab(
-            chatsRoot,
-            tabBarItem: UITabBarItem(
-                title: "Чаты",
-                image: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "message.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
+        let collectionTab = makeTab(
+            root: ListDemoController(),
+            title: "ListView",
+            symbolName: "list.bullet.rectangle",
+            symbolConfig: symbolConfig
         )
-        chats.tabBarItem.badgeValue = "4"
-        let settings = makeTab(
-            SettingsExampleController(),
-            tabBarItem: UITabBarItem(
-                title: "Menu",
-                image: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21)),
-                selectedImage: UIImage(systemName: "rectangle.stack.badge.plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))
-            )
+        let settingsRoot = SettingsController()
+        let settingsTab = makeTab(
+            root: settingsRoot,
+            title: "Settings",
+            symbolName: "gearshape.fill",
+            symbolConfig: symbolConfig
         )
 
-        let tabs = CrystalTabBarController(
+        let tabs = AetherTabBarController(
             tabBarTheme: TabBarView.Theme(
                 tabBarSelectedIconColor: .systemBlue,
                 tabBarSelectedTextColor: .systemBlue,
                 style: .liquidGlass
             )
         )
-        tabs.setControllers([contacts, calls, chats, settings], selectedIndex: 2)
+        tabs.setControllers([componentsTab, statesTab, collectionTab, settingsTab], selectedIndex: 0)
         tabs.searchShowcase = TabBarView.SearchShowcase(
-            icon: UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 21))!,
+            icon: UIImage(systemName: "magnifyingglass", withConfiguration: symbolConfig),
             action: { [weak tabs] in tabs?.activateSearch() }
         )
+
+        // SettingsController drives the tab bar's chrome — wire the
+        // back-reference now so toggles inside Settings find it.
+        settingsRoot.hostTabBar = tabs
 
         window.contentController = tabs
         window.makeKeyAndVisible()
         self.window = window
+    }
 
-        // Demo-only: auto-push a detail screen after launch so screenshots can
-        // verify the back-button glass capsule layout without UI automation.
-        if ProcessInfo.processInfo.environment["TG_NAV_DEMO_PUSH"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chatsRoot] in
-                guard let chatsRoot else { return }
-                chatsRoot.push(ChatDetailExampleController(title: "Pool Duck"))
-            }
-        }
-
-        if ProcessInfo.processInfo.environment["TG_NAV_DEMO_MODAL"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak chats] in
-                let content = StickerPackModalController()
-                let modal = CrystalModalController(content: content)
-                modal.primaryScrollView = content.collectionView
-                chats?.present(modal, animated: true)
-            }
-        }
+    private func makeTab(
+        root: AetherViewController,
+        title: String,
+        symbolName: String,
+        symbolConfig: UIImage.SymbolConfiguration
+    ) -> AetherNavigationController {
+        let icon = UIImage(systemName: symbolName, withConfiguration: symbolConfig)
+        let item = UITabBarItem(title: title, image: icon, selectedImage: icon)
+        root.tabBarItem = item
+        let nav = AetherNavigationController(mode: .single, theme: .liquidGlass())
+        nav.setViewControllers([root], animated: false)
+        nav.tabBarItem = item
+        return nav
     }
 }

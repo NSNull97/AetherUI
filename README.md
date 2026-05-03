@@ -1,4 +1,4 @@
-# CrystalUI
+# AetherUI
 
 Pure UIKit navigation framework with glass morphism, liquid transitions, and floating tab bar. iOS 13+.
 
@@ -7,21 +7,21 @@ Pure UIKit navigation framework with glass morphism, liquid transitions, and flo
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/nicko170/CrystalUI.git", from: "1.0.0")
+    .package(url: "https://github.com/nicko170/AetherUI.git", from: "1.0.0")
 ]
 ```
 
 ## Quick Start
 
 ```swift
-import CrystalUI
+import AetherUI
 
-// 1. Create a CrystalWindow (keyboard-aware, status bar managed)
-let window = CrystalWindow(windowScene: windowScene)
+// 1. Create a AetherWindow (keyboard-aware, status bar managed)
+let window = AetherWindow(windowScene: windowScene)
 
 // 2. Create navigation controllers for each tab
-func makeTab(_ root: ViewController, item: UITabBarItem) -> CrystalNavigationController {
-    let nav = CrystalNavigationController(mode: .single, theme: .liquidGlass())
+func makeTab(_ root: ViewController, item: UITabBarItem) -> AetherNavigationController {
+    let nav = AetherNavigationController(mode: .single, theme: .liquidGlass())
     nav.setViewControllers([root], animated: false)
     nav.tabBarItem = item
     return nav
@@ -34,7 +34,7 @@ let chats = makeTab(ChatListController(), item: UITabBarItem(
 ))
 
 // 3. Create tab bar controller
-let tabs = CrystalTabBarController(
+let tabs = AetherTabBarController(
     tabBarTheme: TabBarView.Theme(
         tabBarSelectedIconColor: .systemBlue,
         tabBarSelectedTextColor: .systemBlue,
@@ -49,7 +49,7 @@ tabs.searchShowcase = TabBarView.SearchShowcase(
     action: { [weak tabs] in tabs?.activateSearch() }
 )
 
-// 5. Use CrystalWindow instead of plain UIWindow
+// 5. Use AetherWindow instead of plain UIWindow
 window.contentController = tabs
 window.makeKeyAndVisible()
 ```
@@ -57,9 +57,9 @@ window.makeKeyAndVisible()
 ## Architecture
 
 ```
-CrystalWindow                          // UIWindow subclass: keyboard, status bar
-  └── CrystalTabBarController          // Window root, floating glass tab bar
-        ├── CrystalNavigationController // Per tab, manages push/pop stack
+AetherWindow                          // UIWindow subclass: keyboard, status bar
+  └── AetherTabBarController          // Window root, floating glass tab bar
+        ├── AetherNavigationController // Per tab, manages push/pop stack
         │     ├── RootViewController    // Each controller owns its nav bar
         │     └── DetailViewController  // Pushed screen with back button
         └── TabBarView                  // Floating glass pill + search circle
@@ -90,7 +90,7 @@ Expandable content below the nav bar title:
 
 ```swift
 let filterBar = ChatFilterBarContent() // subclass NavigationBarContentView
-navigationBarContent = filterBar       // positioned below title automatically
+topBarAccessory = filterBar            // positioned below title automatically
 ```
 
 Modes: `.expansion` (below title, bar grows) or `.replacement` (replaces title row).
@@ -135,7 +135,7 @@ tinted. Inner scroll cooperates with the sheet drag.
 
 ```swift
 let content = MyContentController()
-let modal = CrystalModalController(content: content)
+let modal = AetherModalController(content: content)
 modal.primaryScrollView = content.scrollView   // optional
 present(modal, animated: true)
 
@@ -299,12 +299,12 @@ override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: 
 .animated(duration: 0.3, curve: .custom(0.33, 0.52, 0.25, 0.99))  // cubic bezier
 ```
 
-## CrystalWindow
+## AetherWindow
 
-`CrystalWindow` replaces `UIWindow` with keyboard tracking, interactive keyboard dismissal, and layout propagation.
+`AetherWindow` replaces `UIWindow` with keyboard tracking, interactive keyboard dismissal, and layout propagation.
 
 ```swift
-let window = CrystalWindow(windowScene: windowScene)
+let window = AetherWindow(windowScene: windowScene)
 window.contentController = tabs   // not rootViewController
 window.makeKeyAndVisible()
 ```
@@ -319,15 +319,15 @@ Features:
 
 ## Search
 
-### Nav Bar Search (CrystalSearchController)
+### Nav Bar Search (AetherSearchController)
 
 Glass search pill in the nav bar with full activation flow:
 
 ```swift
-let search = CrystalSearchController()
+let search = AetherSearchController()
 search.placeholder = "Search"
 search.delegate = self
-crystalSearchController = search  // on your ViewController
+searchController = search  // on your ViewController
 ```
 
 **Activation flow:** pill tap -> title/buttons fade out -> pill slides up -> text field appears inside pill -> glass X button appears -> keyboard shows -> collection animates up
@@ -337,17 +337,17 @@ crystalSearchController = search  // on your ViewController
 #### Delegate
 
 ```swift
-extension MyController: CrystalSearchControllerDelegate {
-    func searchControllerWillActivate(_ controller: CrystalSearchController) { }
-    func searchControllerDidActivate(_ controller: CrystalSearchController) { }
-    func searchController(_ controller: CrystalSearchController, didChangeText text: String) {
+extension MyController: AetherSearchControllerDelegate {
+    func searchControllerWillActivate(_ controller: AetherSearchController) { }
+    func searchControllerDidActivate(_ controller: AetherSearchController) { }
+    func searchController(_ controller: AetherSearchController, didChangeText text: String) {
         // filter your data
     }
-    func searchController(_ controller: CrystalSearchController, didSubmitText text: String) {
+    func searchController(_ controller: AetherSearchController, didSubmitText text: String) {
         // perform search
     }
-    func searchControllerWillDeactivate(_ controller: CrystalSearchController) { }
-    func searchControllerDidDeactivate(_ controller: CrystalSearchController) { }
+    func searchControllerWillDeactivate(_ controller: AetherSearchController) { }
+    func searchControllerDidDeactivate(_ controller: AetherSearchController) { }
 }
 ```
 
@@ -378,49 +378,49 @@ tabs.searchShowcase = TabBarView.SearchShowcase(
 Stack search pill + filter chips in the nav bar:
 
 ```swift
-let stacked = CrystalStackedBarContent(views: [searchPill, filterBar])
-navigationBarContent = stacked
+let stacked = AetherStackedBarContent(views: [searchPill, filterBar])
+topBarAccessory = stacked
 ```
 
-## CrystalListView
+## AetherListView
 
 Virtualized list ported from Telegram's `ListView`. Transaction-based API for all modifications.
 
 ```swift
-let listView = CrystalListView()
+let listView = AetherListView()
 
 // Insert items
 listView.transaction(
     insertIndicesAndItems: items.enumerated().map { i, item in
-        CrystalListInsertItem(index: i, item: item)
+        AetherListInsertItem(index: i, item: item)
     },
     options: [.animateInsertions]
 )
 
 // Delete + insert in one transaction
 listView.transaction(
-    deleteIndices: [CrystalListDeleteItem(index: 2)],
-    insertIndicesAndItems: [CrystalListInsertItem(index: 5, item: newItem)],
+    deleteIndices: [AetherListDeleteItem(index: 2)],
+    insertIndicesAndItems: [AetherListInsertItem(index: 5, item: newItem)],
     options: [.animateInsertions],
-    scrollToItem: CrystalListScrollToItem(index: 5, position: .visible)
+    scrollToItem: AetherListScrollToItem(index: 5, position: .visible)
 )
 ```
 
 ### Item Protocol
 
 ```swift
-class MyChatItem: CrystalListItem {
+class MyChatItem: AetherListItem {
     var approximateHeight: CGFloat { 72.0 }
 
-    func createNode(params: CrystalListItemLayoutParams, ...) -> (CrystalListItemNode, CrystalListItemNodeLayout) {
+    func createNode(params: AetherListItemLayoutParams, ...) -> (AetherListItemNode, AetherListItemNodeLayout) {
         let node = MyChatNode()
         node.configure(with: data)
-        return (node, CrystalListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72)))
+        return (node, AetherListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72)))
     }
 
-    func updateNode(_ node: CrystalListItemNode, ...) -> CrystalListItemNodeLayout {
+    func updateNode(_ node: AetherListItemNode, ...) -> AetherListItemNodeLayout {
         (node as? MyChatNode)?.configure(with: newData)
-        return CrystalListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72))
+        return AetherListItemNodeLayout(contentSize: CGSize(width: params.width, height: 72))
     }
 }
 ```
@@ -428,7 +428,7 @@ class MyChatItem: CrystalListItem {
 ### Node Lifecycle
 
 ```swift
-class MyChatNode: CrystalListItemNode {
+class MyChatNode: AetherListItemNode {
     override func animateInsertion(duration: Double) { /* custom insert animation */ }
     override func animateRemoval(duration: Double, completion: @escaping () -> Void) { /* ... */ }
     override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) { /* ... */ }

@@ -1,0 +1,73 @@
+name: Deploy DocC Documentation
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:        # позволяет запустить вручную из Actions UI
+
+# Минимальные permissions для деплоя в GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Один деплой за раз; новый push отменяет предыдущий
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build DocC archive
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16+
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Build DocC archive
+        run: |
+          xcodebuild docbuild \
+            -scheme AetherUI \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/docbuild
+
+      - name: Transform archive for static hosting
+        env:
+          # Подставляется автоматически: <username>.github.io/<repo-name>/
+          # Убирай этот env если используешь custom domain (CNAME).
+          BASE_PATH: /${{ github.event.repository.name }}
+        run: |
+          xcrun docc process-archive transform-for-static-hosting \
+            /tmp/docbuild/Build/Products/Debug-iphonesimulator/AetherUI.doccarchive \
+            --output-path _site \
+            --hosting-base-path "$BASE_PATH"
+
+          # Корневой index.html: редирект на /documentation/aetherui/
+          # — иначе GitHub Pages покажет пустую страницу при заходе на корень.
+          cat > _site/index.html <<HTML
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>AetherUI Documentation</title>
+          <meta http-equiv="refresh" content="0; url=$BASE_PATH/documentation/aetherui/">
+          <link rel="canonical" href="$BASE_PATH/documentation/aetherui/">
+          HTML
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
