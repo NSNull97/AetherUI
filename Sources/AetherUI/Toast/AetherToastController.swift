@@ -186,7 +186,11 @@ public final class AetherToastController {
     static func findActiveWindow() -> UIWindow? {
         // Prefer a foreground-active scene; fall back to any scene if the
         // app is launched but not yet foregrounded (e.g. during startup).
-        let scenes = UIApplication.shared.connectedScenes
+        // `Array(...)` because on iOS 26 SDK `Set<UIScene>.filter` has multiple
+        // overloads (Sequence vs Set) and the inferred element type is
+        // ambiguous when combined with `+`. Explicit Array bridge fixes the
+        // type and forces `Sequence.filter -> [UIScene]` everywhere.
+        let scenes = Array(UIApplication.shared.connectedScenes)
         let candidates = scenes.filter { $0.activationState == .foregroundActive } + scenes.filter { $0.activationState != .foregroundActive }
         for scene in candidates {
             guard let ws = scene as? UIWindowScene else { continue }
