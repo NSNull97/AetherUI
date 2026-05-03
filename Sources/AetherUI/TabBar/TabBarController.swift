@@ -292,7 +292,7 @@ open class AetherTabBarController: AetherViewController {
     /// expansion lands.
     private var deviceDisplayCornerRadius: CGFloat {
         guard let screen = view.window?.windowScene?.screen ?? view.window?.screen else { return 0 }
-        if let value = screen.value(forKey: "_displayCornerRadius") as? CGFloat {
+        if let value = screen.value(forKey: ObfuscatedSymbols.displayCornerRadius) as? CGFloat {
             return value
         }
         return 0

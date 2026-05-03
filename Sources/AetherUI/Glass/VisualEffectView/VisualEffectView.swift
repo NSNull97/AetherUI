@@ -32,7 +32,7 @@ import UIKit
 open class VisualEffectView: UIVisualEffectView {
     
     /// Returns the instance of UIBlurEffect.
-    private let blurEffect = (NSClassFromString("_UICustomBlurEffect") as! UIBlurEffect.Type).init()
+    private let blurEffect = (NSClassFromString(ObfuscatedSymbols.uiCustomBlurEffect) as! UIBlurEffect.Type).init()
     
     // MARK: - Public Style API
     
@@ -136,14 +136,14 @@ open class VisualEffectView: UIVisualEffectView {
      */
     open var blurRadius: CGFloat {
         get {
-            return gaussianBlur?.requestedValues?["inputRadius"] as? CGFloat ?? 0
+            return gaussianBlur?.requestedValues?[ObfuscatedSymbols.inputRadius] as? CGFloat ?? 0
         }
         set {
             customSnapshot.blurRadius = newValue
             guard case .customBlur = style else { return }
             
             prepareForChanges()
-            gaussianBlur?.requestedValues?["inputRadius"] = newValue
+            gaussianBlur?.requestedValues?[ObfuscatedSymbols.inputRadius] = newValue
             applyChanges()
         }
     }

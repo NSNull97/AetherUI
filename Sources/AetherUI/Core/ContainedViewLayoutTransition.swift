@@ -379,8 +379,8 @@ public enum ContainedViewLayoutTransition {
         var currentRadius: CGFloat = 0.0
         if let currentFilters = layer.filters {
             for filter in currentFilters {
-                if let f = filter as? NSObject, f.description.contains("gaussianBlur") {
-                    currentRadius = f.value(forKey: "inputRadius") as? CGFloat ?? 0.0
+                if let f = filter as? NSObject, f.description.contains(ObfuscatedSymbols.gaussianBlur) {
+                    currentRadius = f.value(forKey: ObfuscatedSymbols.inputRadius) as? CGFloat ?? 0.0
                 }
             }
         }
@@ -394,7 +394,7 @@ public enum ContainedViewLayoutTransition {
             completion?(true)
             return
         }
-        blurFilter.setValue(radius as NSNumber, forKey: "inputRadius")
+        blurFilter.setValue(radius as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
         layer.filters = [blurFilter]
 
         switch self {
@@ -406,7 +406,11 @@ public enum ContainedViewLayoutTransition {
             let to = NSNumber(value: Float(radius))
             layer.animate(
                 from: from, to: to,
-                keyPath: "filters.gaussianBlur.inputRadius",
+                keyPath: ObfuscatedSymbols.keypath(
+                    ObfuscatedSymbols.filters,
+                    ObfuscatedSymbols.gaussianBlur,
+                    ObfuscatedSymbols.inputRadius
+                ),
                 duration: duration,
                 completion: { [weak layer] flag in
                     if let layer, radius <= 0.0 { layer.filters = nil }

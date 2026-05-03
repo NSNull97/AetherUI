@@ -2,10 +2,10 @@ import UIKit
 
 extension CALayer {
     static func luminanceToAlpha() -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as AnyObject? else {
+        guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
-        let selector = NSSelectorFromString("filterWithName:")
+        let selector = NSSelectorFromString(ObfuscatedSymbols.filterWithName)
         guard filterClass.responds(to: selector) else {
             return nil
         }
@@ -13,10 +13,10 @@ extension CALayer {
     }
 
     static func colorInvert() -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as AnyObject? else {
+        guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
-        let selector = NSSelectorFromString("filterWithName:")
+        let selector = NSSelectorFromString(ObfuscatedSymbols.filterWithName)
         guard filterClass.responds(to: selector) else {
             return nil
         }
@@ -24,10 +24,10 @@ extension CALayer {
     }
 
     static func colorMatrix() -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as AnyObject? else {
+        guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
-        let selector = NSSelectorFromString("filterWithName:")
+        let selector = NSSelectorFromString(ObfuscatedSymbols.filterWithName)
         guard filterClass.responds(to: selector) else {
             return nil
         }
@@ -35,23 +35,23 @@ extension CALayer {
     }
 
     static func blur() -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as AnyObject? else {
+        guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
-        let selector = NSSelectorFromString("filterWithName:")
+        let selector = NSSelectorFromString(ObfuscatedSymbols.filterWithName)
         guard filterClass.responds(to: selector) else {
             return nil
         }
-        return filterClass.perform(selector, with: "gaussianBlur")?.takeUnretainedValue() as? NSObject
+        return filterClass.perform(selector, with: ObfuscatedSymbols.gaussianBlur)?.takeUnretainedValue() as? NSObject
     }
 
     /// Private `variableBlur` filter exposed on iOS 26+. Used by `VariableBlurView`
     /// to render progressive edge fades on nav / tab bars.
     static func variableBlur() -> NSObject? {
-        guard let filterClass = NSClassFromString("CAFilter") as AnyObject? else {
+        guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
-        let selector = NSSelectorFromString("filterWithName:")
+        let selector = NSSelectorFromString(ObfuscatedSymbols.filterWithName)
         guard filterClass.responds(to: selector) else {
             return nil
         }

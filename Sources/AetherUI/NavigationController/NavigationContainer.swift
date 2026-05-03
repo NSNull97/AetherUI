@@ -59,7 +59,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         guard let screen = window?.windowScene?.screen ?? window?.screen else {
             return 0
         }
-        if let value = screen.value(forKey: "_displayCornerRadius") as? CGFloat {
+        if let value = screen.value(forKey: ObfuscatedSymbols.displayCornerRadius) as? CGFloat {
             return value
         }
         return 0

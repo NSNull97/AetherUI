@@ -484,7 +484,7 @@ final class BackdropBlurHostView: UIView {
             filter = blur
         }
         if let filter {
-            filter.setValue(inputRadius as NSNumber, forKey: "inputRadius")
+            filter.setValue(inputRadius as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
             backdropLayer.filters = [filter]
         }
         appliedRadius = inputRadius
@@ -562,8 +562,8 @@ public final class VariableBlurEffect {
             imageSubview.layer.name = "mask_source"
 
             if let variableBlur = CALayer.variableBlur() {
-                variableBlur.setValue(self.maxBlurRadius, forKey: "inputRadius")
-                variableBlur.setValue("mask_source", forKey: "inputSourceSublayerName")
+                variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
+                variableBlur.setValue("mask_source", forKey: ObfuscatedSymbols.inputSourceSublayerName)
                 if isTransparent {
                     variableBlur.setValue(true, forKey: "inputNormalizeEdgesTransparent")
                 } else {
@@ -709,7 +709,7 @@ public final class VariableBlurEffect {
         guard let variableBlur = CALayer.variableBlur() else { return }
         guard let gradientImage else { return }
 
-        variableBlur.setValue(self.maxBlurRadius, forKey: "inputRadius")
+        variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
         if self.isTransparent {
             variableBlur.setValue(true, forKey: "inputNormalizeEdgesTransparent")
         } else {

@@ -63,7 +63,7 @@ final class ContextMenuDimBlurView: UIView {
             // Backdrop layers sample at 1× by default; lifting to the
             // screen scale avoids pixel-stepping on the blurred
             // result.
-            backdropLayer.setValue(Double(UIScreen.main.scale), forKey: "scale")
+            backdropLayer.setValue(Double(UIScreen.main.scale), forKey: ObfuscatedSymbols.scale)
             backdropLayer.rasterizationScale = UIScreen.main.scale
             layer.addSublayer(backdropLayer)
         }
@@ -94,7 +94,7 @@ final class ContextMenuDimBlurView: UIView {
             backdropLayer.filters = nil
             return
         }
-        filter.setValue(blurRadius as NSNumber, forKey: "inputRadius")
+        filter.setValue(blurRadius as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
         backdropLayer.filters = [filter]
     }
 }

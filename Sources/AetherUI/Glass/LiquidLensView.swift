@@ -57,7 +57,7 @@ private final class LiquidLensRestingBackgroundView: UIVisualEffectView {
             sublayer.filters = [filter]
             sublayer.isOpaque = false
             sublayer.backgroundColor = nil
-            sublayer.setValue(1.0, forKey: "scale")
+            sublayer.setValue(1.0, forKey: ObfuscatedSymbols.scale)
         }
     }
 }
@@ -239,7 +239,7 @@ public final class LiquidLensView: UIView {
 
         containerView.isUserInteractionEnabled = false
 
-        if #available(iOS 26.0, *), let viewClass = NSClassFromString("_UILiquidLensView") as AnyObject? {
+        if #available(iOS 26.0, *), let viewClass = NSClassFromString(ObfuscatedSymbols.uiLiquidLensView) as AnyObject? {
             let allocSelector = NSSelectorFromString("alloc")
             let initSelector = NSSelectorFromString("initWithRestingBackground:")
             if let allocated = viewClass.perform(allocSelector)?.takeUnretainedValue() as AnyObject?,

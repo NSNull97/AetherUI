@@ -61,7 +61,7 @@ final class AetherModalPresentationController: UIPresentationController, UIGestu
     /// the sheet should nest concentrically into the device bezel.
     lazy var deviceCornerRadius: CGFloat = {
         if let window = presentingViewController.view.window,
-           let value = window.screen.value(forKey: "_displayCornerRadius") as? CGFloat,
+           let value = window.screen.value(forKey: ObfuscatedSymbols.displayCornerRadius) as? CGFloat,
            value > 0 {
             return value
         }

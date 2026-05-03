@@ -40,8 +40,8 @@ final class LensSDFFilter {
             let sdfElement = aether_makeSDFObject("CASDFElementLayer") as? CALayer,
             let sdf = aether_makeSDFObject("CASDFLayer") as? CALayer,
             let effect = aether_makeSDFObject("CASDFGlassDisplacementEffect"),
-            let blur = aether_makeCAFilter(name: "gaussianBlur"),
-            let displacement = aether_makeCAFilter(name: "displacementMap")
+            let blur = aether_makeCAFilter(name: ObfuscatedSymbols.gaussianBlur),
+            let displacement = aether_makeCAFilter(name: ObfuscatedSymbols.displacementMap)
         else {
             return nil
         }
@@ -57,27 +57,27 @@ final class LensSDFFilter {
     }
 
     private func configureLayers() {
-        displacementEffect.setValue(1.0, forKey: "curvature")
-        displacementEffect.setValue(0.0 as NSNumber, forKey: "angle")
+        displacementEffect.setValue(1.0, forKey: ObfuscatedSymbols.curvature)
+        displacementEffect.setValue(0.0 as NSNumber, forKey: ObfuscatedSymbols.angle)
 
         sdfLayer.name = "sdfLayer"
-        sdfLayer.setValue(3.0, forKey: "scale")
-        sdfLayer.setValue(displacementEffect, forKey: "effect")
+        sdfLayer.setValue(3.0, forKey: ObfuscatedSymbols.scale)
+        sdfLayer.setValue(displacementEffect, forKey: ObfuscatedSymbols.effect)
         sdfLayer.delegate = emptyLayerDelegate
 
-        sdfElementLayer.setValue(0.5 as NSNumber, forKey: "gradientOvalization")
+        sdfElementLayer.setValue(0.5 as NSNumber, forKey: ObfuscatedSymbols.gradientOvalization)
         sdfElementLayer.isOpaque = true
         sdfElementLayer.allowsEdgeAntialiasing = true
         let sdfLayerDelegate = unsafeBitCast(sdfLayer, to: CALayerDelegate.self)
         sdfElementLayer.delegate = sdfLayerDelegate
-        sdfElementLayer.setValue(3.0, forKey: "scale")
+        sdfElementLayer.setValue(3.0, forKey: ObfuscatedSymbols.scale)
         sdfLayer.addSublayer(sdfElementLayer)
     }
 
     private func configureFilters() {
-        aether_setCAFilterName(blurFilter, "gaussianBlur")
-        aether_setCAFilterName(displacementFilter, "displacementMap")
-        displacementFilter.setValue("sdfLayer", forKey: "inputSourceSublayerName")
+        aether_setCAFilterName(blurFilter, ObfuscatedSymbols.gaussianBlur)
+        aether_setCAFilterName(displacementFilter, ObfuscatedSymbols.displacementMap)
+        displacementFilter.setValue("sdfLayer", forKey: ObfuscatedSymbols.inputSourceSublayerName)
     }
 
     // MARK: - Install / uninstall
@@ -175,28 +175,28 @@ final class LensSDFFilter {
         // `animateDisplacementPulse` instead, which has its own
         // model-value setup so the lens finalises to zero at rest.
         if ownsBlurFilter {
-            targetLayer.setValue(0.0 as NSNumber, forKeyPath: "filters.gaussianBlur.inputRadius")
+            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         }
-        targetLayer.setValue(0.0 as NSNumber, forKeyPath: "sublayers.sdfLayer.effect.height")
-        targetLayer.setValue(0.0 as NSNumber, forKeyPath: "filters.displacementMap.inputAmount")
+        targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
 
         let scale = UIView.animationDurationFactor()
 
-        let heightAnim = CAKeyframeAnimation(keyPath: "sublayers.sdfLayer.effect.height")
+        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         heightAnim.duration = duration * scale
         heightAnim.values = heightKeyframes.map { $0 as NSNumber }
         heightAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         heightAnim.isRemovedOnCompletion = true
         heightAnim.fillMode = .both
-        targetLayer.add(heightAnim, forKey: "sublayers.sdfLayer.effect.height")
+        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
 
-        let dispAnim = CAKeyframeAnimation(keyPath: "filters.displacementMap.inputAmount")
+        let dispAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
         dispAnim.duration = duration * scale
         dispAnim.values = heightKeyframes.map { -$0 as NSNumber }
         dispAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         dispAnim.isRemovedOnCompletion = true
         dispAnim.fillMode = .both
-        targetLayer.add(dispAnim, forKey: "filters.displacementMap.inputAmount")
+        targetLayer.add(dispAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
     }
 
     /// Animate `effect.height` as a HOLD-then-DECAY (or RISE-then-HOLD
@@ -249,28 +249,28 @@ final class LensSDFFilter {
         // and the rounded-rect shape mask shows through cleanly.
         let finalHeight = heightKeyframes.last ?? 0
         if ownsBlurFilter {
-            targetLayer.setValue(0.0 as NSNumber, forKeyPath: "filters.gaussianBlur.inputRadius")
+            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         }
-        targetLayer.setValue(finalHeight as NSNumber, forKeyPath: "sublayers.sdfLayer.effect.height")
-        targetLayer.setValue(-finalHeight as NSNumber, forKeyPath: "filters.displacementMap.inputAmount")
+        targetLayer.setValue(finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.setValue(-finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
 
         let scale = UIView.animationDurationFactor()
 
-        let heightAnim = CAKeyframeAnimation(keyPath: "sublayers.sdfLayer.effect.height")
+        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         heightAnim.duration = duration * scale
         heightAnim.values = heightKeyframes.map { $0 as NSNumber }
         heightAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         heightAnim.isRemovedOnCompletion = true
         heightAnim.fillMode = .both
-        targetLayer.add(heightAnim, forKey: "sublayers.sdfLayer.effect.height")
+        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
 
-        let dispAnim = CAKeyframeAnimation(keyPath: "filters.displacementMap.inputAmount")
+        let dispAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
         dispAnim.duration = duration * scale
         dispAnim.values = heightKeyframes.map { -$0 as NSNumber }
         dispAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         dispAnim.isRemovedOnCompletion = true
         dispAnim.fillMode = .both
-        targetLayer.add(dispAnim, forKey: "filters.displacementMap.inputAmount")
+        targetLayer.add(dispAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
     }
 
     /// Animate `gaussianBlur.inputRadius` via the file-private `blurEase`
@@ -289,13 +289,13 @@ final class LensSDFFilter {
             return CGFloat(blurEase(Double(t)))
         }
 
-        let blurAnim = CAKeyframeAnimation(keyPath: "filters.gaussianBlur.inputRadius")
+        let blurAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         blurAnim.duration = duration * UIView.animationDurationFactor()
         blurAnim.values = blurKeyframes.map { $0 as NSNumber }
         blurAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         blurAnim.isRemovedOnCompletion = true
         blurAnim.fillMode = .both
-        targetLayer.add(blurAnim, forKey: "filters.gaussianBlur.inputRadius")
+        targetLayer.add(blurAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
     }
 }
 

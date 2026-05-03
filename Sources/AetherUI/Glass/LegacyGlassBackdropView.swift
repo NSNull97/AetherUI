@@ -172,9 +172,9 @@ public final class LegacyGlassBackdropView: UIView {
                 // own kernel and reads as proper material.
                 switch style {
                 case .clear:
-                    blurFilter.setValue(10.0 as NSNumber, forKey: "inputRadius")
+                    blurFilter.setValue(10.0 as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
                 case .normal:
-                    blurFilter.setValue(14.0 as NSNumber, forKey: "inputRadius")
+                    blurFilter.setValue(14.0 as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
                 }
 
                 // Original saturation+brightness boost matrix —

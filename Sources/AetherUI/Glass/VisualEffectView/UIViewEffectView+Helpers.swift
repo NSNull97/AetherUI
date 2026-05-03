@@ -9,33 +9,33 @@ import UIKit
 
 extension UIVisualEffectView {
     var backdropView: UIView? {
-        return subview(of: NSClassFromString("_UIVisualEffectBackdropView"))
+        return subview(of: NSClassFromString(ObfuscatedSymbols.uiVisualEffectBackdropView))
     }
     var overlayView: UIView? {
-        return subview(of: NSClassFromString("_UIVisualEffectSubview"))
+        return subview(of: NSClassFromString(ObfuscatedSymbols.uiVisualEffectSubview))
     }
     var gaussianBlur: NSObject? {
-        return backdropView?.value(forKey: "filters", withFilterType: "gaussianBlur")
+        return backdropView?.value(forKey: ObfuscatedSymbols.filters, withFilterType: ObfuscatedSymbols.gaussianBlur)
     }
     var sourceOver: NSObject? {
-        return overlayView?.value(forKey: "viewEffects", withFilterType: "sourceOver")
+        return overlayView?.value(forKey: ObfuscatedSymbols.viewEffects, withFilterType: ObfuscatedSymbols.sourceOver)
     }
     func prepareForChanges() {
         self.effect = UIBlurEffect(style: .light)
-        gaussianBlur?.setValue(1.0, forKeyPath: "requestedScaleHint")
+        gaussianBlur?.setValue(1.0, forKeyPath: ObfuscatedSymbols.requestedScaleHint)
     }
     func applyChanges() {
-        backdropView?.perform(Selector(("applyRequestedFilterEffects")))
+        backdropView?.perform(NSSelectorFromString(ObfuscatedSymbols.applyRequestedFilterEffects))
     }
 }
 
 extension NSObject {
     var requestedValues: [String: Any]? {
-        get { return value(forKeyPath: "requestedValues") as? [String: Any] }
-        set { setValue(newValue, forKeyPath: "requestedValues") }
+        get { return value(forKeyPath: ObfuscatedSymbols.requestedValues) as? [String: Any] }
+        set { setValue(newValue, forKeyPath: ObfuscatedSymbols.requestedValues) }
     }
     func value(forKey key: String, withFilterType filterType: String) -> NSObject? {
-        return (value(forKeyPath: key) as? [NSObject])?.first { $0.value(forKeyPath: "filterType") as? String == filterType }
+        return (value(forKeyPath: key) as? [NSObject])?.first { $0.value(forKeyPath: ObfuscatedSymbols.filterType) as? String == filterType }
     }
 }
 
