@@ -439,7 +439,12 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
             ? Self.smootherstep(0.0, 1.0, t)
             : (
                 animationDirection < 0
-                    ? Self.easeOutCubic(t)
+                    // Closing is evaluated with t moving 1 -> 0. An
+                    // opening-style ease-out would therefore crawl at the
+                    // beginning and collapse in the last frames. Ease-in in
+                    // value-space gives the inverse feel: leave the platter
+                    // decisively, then settle softly into the source.
+                    ? Self.easeInPower(t, 2.12)
                     : Self.dampedSpring01(
                         t,
                         response: 0.96,
@@ -458,9 +463,12 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
         let circleT = shouldNormalizeSourceToCircle ? Self.smootherstep(0.0, circleEnd, t) : 0.0
         let growT = motionT
         let travelT = animationDirection < 0
-            ? Self.lerpUnclamped(motionT, Self.easeOutQuart(t), 0.35)
+            ? Self.lerpUnclamped(motionT, Self.easeInPower(t, 1.68), 0.22)
             : Self.lerpUnclamped(motionT, Self.easeOutPower(t, 2.02), 0.18)
-        let finalLockT = isProgressOvershooting ? 0.0 : Self.smootherstep(0.992, 1.0, t)
+        // Blend the spring/oval envelope back into the exact target over the
+        // main motion, not only in the last frames. A late lock reads as a
+        // separate "unfold" after the menu has visually arrived.
+        let finalLockT = isProgressOvershooting ? 0.0 : Self.smootherstep(0.68, 0.98, t)
         let sourceCenter = CGPoint(x: startFrame.midX, y: startFrame.midY)
         let targetCenter = CGPoint(x: targetMenuFrameInOverlay.midX, y: targetMenuFrameInOverlay.midY)
         let distance = hypot(targetCenter.x - sourceCenter.x, targetCenter.y - sourceCenter.y)
@@ -474,7 +482,7 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
             height: Self.lerpUnclamped(normalizedSourceSize.height, targetSize.height, growT)
         )
         let bloomPulse = reduceMotion ? 0 : sin(.pi * Self.smootherstep(0.04, 0.78, t))
-        let ovalPulse = bloomPulse * (1.0 - Self.smootherstep(0.18, 0.92, t))
+        let ovalPulse = bloomPulse * (1.0 - Self.smootherstep(0.22, 0.78, t))
         let pulsedSize = CGSize(
             width: baseSize.width * (1.0 + 0.018 * ovalPulse),
             height: baseSize.height * (1.0 + 0.205 * ovalPulse)
@@ -506,7 +514,7 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
         let circleLikeRadius = min(currentFrame.width, currentFrame.height) * 0.5
         let cornerToCircleEnd: CGFloat = shouldNormalizeSourceToCircle ? (animationDirection < 0 ? 0.24 : 0.085) : 0.20
         let cornerToCircleT = Self.smootherstep(0.0, cornerToCircleEnd, t)
-        let cornerToMenuT = Self.smootherstep(0.50, 0.99, t)
+        let cornerToMenuT = Self.smootherstep(0.36, 0.90, t)
         let earlyRadius = Self.lerpUnclamped(startCornerRadius, circleLikeRadius, cornerToCircleT)
         let cornerRadius = min(
             max(0.0, Self.lerpUnclamped(earlyRadius, finalCornerRadius, cornerToMenuT)),
@@ -711,6 +719,11 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
     private static func easeOutPower(_ x: CGFloat, _ power: CGFloat) -> CGFloat {
         let t = max(0, min(1, x))
         return 1.0 - pow(1.0 - t, power)
+    }
+
+    private static func easeInPower(_ x: CGFloat, _ power: CGFloat) -> CGFloat {
+        let t = max(0, min(1, x))
+        return pow(t, power)
     }
 
     private static func fluidMotionProgress(_ t: CGFloat, closing: Bool) -> CGFloat {

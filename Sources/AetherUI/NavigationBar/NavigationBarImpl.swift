@@ -1100,6 +1100,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             backgroundView.alpha = 1.0
             stripeView.alpha = 1.0
         }
+        applyTransitionVisibilityState()
     }
 
     public func updateLayout(size: CGSize, defaultHeight: CGFloat, additionalTopHeight: CGFloat, additionalContentHeight: CGFloat, additionalBackgroundHeight: CGFloat, additionalCutout: CGSize?, leftInset: CGFloat, rightInset: CGFloat, appearsHidden: Bool, isLandscape: Bool, transition: ContainedViewLayoutTransition) {

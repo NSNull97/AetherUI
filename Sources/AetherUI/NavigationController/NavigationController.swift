@@ -58,6 +58,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
 
     private let mode: NavigationControllerMode
     private var theme: NavigationControllerTheme
+    private var defaultNavigationBarPresentationData: NavigationBarPresentationData
 
     private var rootContainer: RootContainer?
     private var overlayContainers: [NavigationOverlayContainer] = []
@@ -223,6 +224,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         self.mode = mode
         self.theme = theme
         self.currentStatusBarStyle = theme.statusBar
+        self.defaultNavigationBarPresentationData = NavigationBarPresentationData(theme: theme.navigationBar)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -532,8 +534,9 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
     public func updateTheme(_ theme: NavigationControllerTheme) {
         self.theme = theme
         self.currentStatusBarStyle = theme.statusBar
+        self.defaultNavigationBarPresentationData = NavigationBarPresentationData(theme: theme.navigationBar)
         view.backgroundColor = theme.emptyAreaColor
-        sharedNavigationBar?.updatePresentationData(NavigationBarPresentationData(theme: theme.navigationBar), transition: .immediate)
+        sharedNavigationBar?.updatePresentationData(defaultNavigationBarPresentationData, transition: .immediate)
 
         if case let .split(container)? = rootContainer {
             container.updateTheme(theme: theme)
@@ -705,7 +708,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             return sharedNavigationBar
         }
 
-        let bar = NavigationBarImpl(presentationData: NavigationBarPresentationData(theme: theme.navigationBar))
+        let bar = NavigationBarImpl(presentationData: defaultNavigationBarPresentationData)
         bar.autoresizingMask = [.flexibleWidth]
         bar.backPressed = { [weak self] in
             self?.popViewController(animated: true)
@@ -721,6 +724,10 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         }
 
         return bar
+    }
+
+    private func navigationBarPresentationData(for controller: AetherViewController) -> NavigationBarPresentationData {
+        controller.explicitNavigationBarPresentationData ?? defaultNavigationBarPresentationData
     }
 
     private func activeRootStack(for rootLayout: RootNavigationLayout) -> [AetherViewController] {
@@ -825,6 +832,11 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         includeAccessoryContent: Bool = true,
         allowsContainerLayoutRequests: Bool = true
     ) -> AetherViewController.NavigationLayout {
+        let presentationData = navigationBarPresentationData(for: controller)
+        if bar.presentationData !== presentationData {
+            bar.updatePresentationData(presentationData, transition: transition)
+        }
+
         bar.item = controller.navigationItem
         bar.previousItem = previousAction(for: controller, in: stack)
         bar.backPressed = { [weak self] in
@@ -1019,7 +1031,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         layout: ContainerViewLayout
     ) -> NavigationBarImpl {
         controller.loadViewIfNeeded()
-        let bar = NavigationBarImpl(presentationData: NavigationBarPresentationData(theme: theme.navigationBar))
+        let bar = NavigationBarImpl(presentationData: navigationBarPresentationData(for: controller))
         bar.autoresizingMask = [.flexibleWidth]
         bar.requestContainerLayout = nil
         configureNavigationBar(
@@ -1043,7 +1055,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         layout: ContainerViewLayout
     ) -> NavigationBarImpl {
         controller.loadViewIfNeeded()
-        let bar = NavigationBarImpl(presentationData: NavigationBarPresentationData(theme: theme.navigationBar))
+        let bar = NavigationBarImpl(presentationData: navigationBarPresentationData(for: controller))
         bar.autoresizingMask = [.flexibleWidth]
         bar.requestContainerLayout = nil
         configureNavigationBar(

@@ -27,11 +27,9 @@ public final class ContextMenuController {
     /// as a convenient fallback (its internal progress driver reshapes them
     /// into its own phase budget).
     ///
-    ///   open    ~ 0.36s  soft spring-driven ease-out,
-    ///                    enough time for the menu/content crossfade to read
-    ///                    as one fluid motion instead of a snapped reveal.
-    ///   dismiss ~ 0.31s  reversed ease-out with a small inverse pulse
-    ///                    without being stiff.
+    ///   open    ~ 0.36s  soft spring-driven ease-out; the overshoot lives in
+    ///                    the main geometry curve, not as a late extra pulse.
+    ///   dismiss ~ 0.28s  inverse curve: decisive start, soft source settle.
     private static let morphDuration: TimeInterval = 0.36
     private static let dismissDuration: TimeInterval = 0.28
     /// `damping` is the spring's damping ratio for the display-link solvers.

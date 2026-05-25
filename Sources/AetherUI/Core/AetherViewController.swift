@@ -154,6 +154,7 @@ import UIKit
     // MARK: - Navigation Bar
 
     public var navigationBarView: NavigationBarView?
+    internal var explicitNavigationBarPresentationData: NavigationBarPresentationData?
     public var displayNavigationBar: Bool = true
     public internal(set) var navigationBarIsExternallyHosted: Bool = false
     public internal(set) var externalNavigationBarHeight: CGFloat?
@@ -309,6 +310,7 @@ import UIKit
 
     public init(navigationBarPresentationData: NavigationBarPresentationData? = nil) {
         super.init(nibName: nil, bundle: nil)
+        explicitNavigationBarPresentationData = navigationBarPresentationData
 
         if let data = navigationBarPresentationData {
             let bar = NavigationBarImpl(presentationData: data)
@@ -563,6 +565,7 @@ import UIKit
     // MARK: - Navigation Bar
 
     public func setNavigationBarPresentationData(_ presentationData: NavigationBarPresentationData, animated: Bool) {
+        explicitNavigationBarPresentationData = presentationData
         navigationBarView?.updatePresentationData(presentationData, transition: animated ? .animated(duration: 0.3, curve: .easeInOut) : .immediate)
     }
 
