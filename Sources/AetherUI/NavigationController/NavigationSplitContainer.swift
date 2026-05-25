@@ -29,7 +29,12 @@ final class NavigationSplitContainer: UIView {
         }
     }
 
-    init(theme: NavigationControllerTheme, controllerRemoved: @escaping (AetherViewController) -> Void, scrollToTop: @escaping (NavigationSplitContainerScrollToTop) -> Void) {
+    init(
+        theme: NavigationControllerTheme,
+        controllerRemoved: @escaping (AetherViewController) -> Void,
+        controllerRemovalCommitted: @escaping (AetherViewController) -> Void,
+        scrollToTop: @escaping (NavigationSplitContainerScrollToTop) -> Void
+    ) {
         self.theme = theme
 
         self.masterScrollToTopView = ScrollToTopView(frame: .zero)
@@ -41,10 +46,12 @@ final class NavigationSplitContainer: UIView {
         self.masterContainer = NavigationContainer(frame: .zero)
         self.masterContainer.clipsToBounds = true
         self.masterContainer.controllerRemoved = controllerRemoved
+        self.masterContainer.controllerRemovalCommitted = controllerRemovalCommitted
 
         self.detailContainer = NavigationContainer(frame: .zero)
         self.detailContainer.clipsToBounds = true
         self.detailContainer.controllerRemoved = controllerRemoved
+        self.detailContainer.controllerRemovalCommitted = controllerRemovalCommitted
 
         self.separator = UIView()
         self.separator.backgroundColor = theme.navigationBar.separatorColor

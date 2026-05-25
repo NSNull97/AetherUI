@@ -8,10 +8,12 @@ public final class AetherActionSheetTextItem: AetherActionSheetItem {
 
     public let title: String
     public let font: Font
+    public let parseMarkdown: Bool
 
-    public init(title: String, font: Font = .default) {
+    public init(title: String, font: Font = .default, parseMarkdown: Bool = false) {
         self.title = title
         self.font = font
+        self.parseMarkdown = parseMarkdown
     }
 
     public func makeView(theme: AetherActionSheetTheme) -> AetherActionSheetItemView {
@@ -48,9 +50,40 @@ final class AetherActionSheetTextItemView: AetherActionSheetItemView {
         case .default: fontSize = 13.0
         case .large:   fontSize = 15.0
         }
-        label.font = .systemFont(ofSize: floor(theme.baseFontSize * fontSize / 17.0))
-        label.text = item.title
+        let font = UIFont.systemFont(ofSize: floor(theme.baseFontSize * fontSize / 17.0))
+        label.font = font
+        if item.parseMarkdown {
+            label.attributedText = Self.markdownAttributedString(item.title, font: font, color: theme.secondaryTextColor)
+        } else {
+            label.attributedText = nil
+            label.text = item.title
+        }
         setNeedsLayout()
+    }
+
+    private static func markdownAttributedString(_ text: String, font: UIFont, color: UIColor) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        var index = text.startIndex
+        var isBold = false
+
+        while index < text.endIndex {
+            if text[index...].hasPrefix("**") {
+                isBold.toggle()
+                index = text.index(index, offsetBy: 2)
+                continue
+            }
+
+            let next = text.index(after: index)
+            let substring = String(text[index..<next])
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: isBold ? UIFont.systemFont(ofSize: font.pointSize, weight: .semibold) : font,
+                .foregroundColor: color
+            ]
+            result.append(NSAttributedString(string: substring, attributes: attributes))
+            index = next
+        }
+
+        return result
     }
 
     override func preferredHeight(constrainedWidth: CGFloat) -> CGFloat {

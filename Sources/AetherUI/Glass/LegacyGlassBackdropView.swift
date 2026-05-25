@@ -1,8 +1,7 @@
 import UIKit
 
 private let backdropLayerClass: NSObject? = {
-    let name = ("CA" as NSString).appendingFormat("BackdropLayer")
-    return NSClassFromString(name as String) as AnyObject as? NSObject
+    return NSClassFromString(ObfuscatedSymbols.caBackdropClass) as AnyObject as? NSObject
 }()
 
 private func getMethod<T>(object: NSObject, selector: String) -> T? {
@@ -60,7 +59,7 @@ private final class LegacyGlassNullAction: NSObject, CAAction {
     }
 }
 
-private final class LegacyGlassBackdropLayerDelegate: NSObject, CALayerDelegate {
+private final class LegacyGlassBackdropDelegate: NSObject, CALayerDelegate {
     private let nullAction = LegacyGlassNullAction()
 
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
@@ -87,7 +86,7 @@ public final class LegacyGlassBackdropView: UIView {
 
     /// Custom (CABackdropLayer) backend state. Non-nil iff `backend == .custom`.
     private let backdropLayer: CALayer?
-    private let backdropLayerDelegate = LegacyGlassBackdropLayerDelegate()
+    private let backdropLayerDelegate = LegacyGlassBackdropDelegate()
 
     /// VisualEffectView backend state. Non-nil iff `backend == .visualEffectView`.
     private let visualEffectView: VisualEffectView?

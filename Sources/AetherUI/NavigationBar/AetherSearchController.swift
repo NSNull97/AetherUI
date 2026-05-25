@@ -325,8 +325,6 @@ public final class AetherSearchController: NSObject, UITextFieldDelegate {
     // MARK: - Bottom Mode
 
     private func installBottomPill(on vc: AetherViewController) {
-        let h = Self.bottomBarHeight
-
         let edge = EdgeEffectView()
         edge.isUserInteractionEnabled = false
         vc.view.addSubview(edge)

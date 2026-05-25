@@ -37,6 +37,11 @@ open class AetherListItemNode: UIView {
     /// Vertical offset applied during insertion/deletion transitions.
     public var transitionOffset: CGFloat = 0
 
+    /// Extra insets used only for scroll positioning. Telegram rows use this
+    /// to align the meaningful visual content instead of the whole backing
+    /// node; default is `.zero`.
+    public var scrollPositioningInsets: UIEdgeInsets = .zero
+
     /// Selection state, synced by the list view from
     /// `AetherListView.selectedIndices`. Subclasses override
     /// `didChangeSelection(animated:)` to render whatever highlight
@@ -129,9 +134,26 @@ open class AetherListItemNode: UIView {
     /// shape iMessage / Telegram use for incoming rows. Override
     /// for custom directions or to cut to a plain fade.
     open func animateInsertion(duration: Double) {
+        animateInsertion(duration: duration, directionHint: nil, invertOffsetDirection: false)
+    }
+
+    /// Called when the node is being inserted with animation. The extended
+    /// signature lets the list pass Telegram-style operation hints while
+    /// preserving the old override point above.
+    open func animateInsertion(duration: Double, directionHint: AetherListItemOperationDirectionHint?, invertOffsetDirection: Bool) {
         let dy = -bounds.height * 0.25
+        let directionMultiplier: CGFloat
+        switch directionHint {
+        case .up:
+            directionMultiplier = -1.0
+        case .down:
+            directionMultiplier = 1.0
+        case nil:
+            directionMultiplier = 1.0
+        }
+        let resolvedDy = dy * directionMultiplier * (invertOffsetDirection ? -1.0 : 1.0)
         alpha = 0
-        transform = CGAffineTransform(translationX: 0, y: dy)
+        transform = CGAffineTransform(translationX: 0, y: resolvedDy)
         UIView.animate(
             withDuration: duration,
             delay: 0,

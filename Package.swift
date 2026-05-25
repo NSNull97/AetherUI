@@ -14,10 +14,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/SnapKit/SnapKit.git", from: "5.7.0"),
-        // Apple's Swift-DocC plugin — enables `swift package generate-documentation`
-        // and `swift package --disable-sandbox preview-documentation --target AetherUI`.
-        // The DocC catalog itself lives at `Sources/AetherUI/AetherUI.docc/`.
         .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.0"),
+        .package(url: "https://github.com/p-x9/AssociatedObject", from: "0.15.0")
     ],
     targets: [
         .target(
@@ -30,12 +28,10 @@ let package = Package(
             dependencies: [
                 "AetherUIBridging",
                 "SnapKit",
+                "AssociatedObject",
             ],
             path: "Sources/AetherUI",
             resources: [
-                // Metal sources for the DustEffectLayer port. SPM picks
-                // up *.metal files inside the target and compiles them
-                // into a `default.metallib` accessible via Bundle.module.
                 .process("ListView/DustEffect/Metal")
             ]
         ),

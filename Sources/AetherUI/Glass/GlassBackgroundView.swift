@@ -1011,9 +1011,14 @@ public final class GlassBackgroundContainerView: UIView {
 
         super.init(frame: .zero)
 
+        clipsToBounds = false
         if let nativeParamsView {
+            nativeParamsView.clipsToBounds = false
+            nativeView?.clipsToBounds = false
+            nativeView?.contentView.clipsToBounds = false
             addSubview(nativeParamsView)
         } else if let legacyView {
+            legacyView.clipsToBounds = false
             addSubview(legacyView)
         }
     }

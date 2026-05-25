@@ -128,9 +128,14 @@ final class ContextMenuFluidMorphHostView: UIView {
     /// rect (in host coords) equals `menuFrameInHost` throughout the
     /// morph. Fades in over the last ~55% of the morph.
     let actionsContainer = UIView()
+    var actionsRevealProgressChanged: ((CGFloat) -> Void)?
 
     private(set) var metrics: Metrics?
     private var runningAnimators: [UIViewPropertyAnimator] = []
+    private var progressDisplayLink: CADisplayLink?
+    private var progressStart: CFTimeInterval = 0
+    private var progressDuration: TimeInterval = 0
+    private var progressReversed = false
 
     // MARK: - Cross-fade curves
 
@@ -162,12 +167,13 @@ final class ContextMenuFluidMorphHostView: UIView {
 
     /// Shadow opacity at rest — set at init and the base value the
     /// CAKeyframeAnimation returns to at the end of the morph.
-    private static let shadowOpacityRest: Float = 0.14
+    private static let shadowOpacityStart: Float = 0.04
+    private static let shadowOpacityRest: Float = 0.12
     /// Peak shadow opacity reached mid-morph (40% in). Simulates the
     /// motion-heaviness of a real object being pushed through space —
     /// as the surface accelerates, it casts a briefly-darker shadow.
     /// Subtle, but it adds a ton of perceived "weight" / fluid-ness.
-    private static let shadowOpacityPeak: Float = 0.20
+    private static let shadowOpacityPeak: Float = 0.18
 
     // MARK: - Elastic curve
 
@@ -197,9 +203,9 @@ final class ContextMenuFluidMorphHostView: UIView {
         backgroundColor = .clear
         layer.masksToBounds = false
         layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: 8)
-        layer.shadowRadius = 22
-        layer.shadowOpacity = Self.shadowOpacityRest
+        layer.shadowOffset = CGSize(width: 0, height: 3)
+        layer.shadowRadius = 10
+        layer.shadowOpacity = Self.shadowOpacityStart
 
         glass.clipsToBounds = true
         if #available(iOS 13.0, *) {
@@ -225,6 +231,10 @@ final class ContextMenuFluidMorphHostView: UIView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        progressDisplayLink?.invalidate()
     }
 
     // MARK: - Configuration
@@ -255,6 +265,10 @@ final class ContextMenuFluidMorphHostView: UIView {
         self.frame = metrics.sourceFrameInHost
         glass.frame = CGRect(origin: .zero, size: metrics.sourceFrameInHost.size)
         glass.layer.cornerRadius = metrics.sourceCornerRadius
+        glass.updateMaterialThickness(0.0)
+        layer.shadowOffset = CGSize(width: 0, height: 3)
+        layer.shadowRadius = 10
+        layer.shadowOpacity = Self.shadowOpacityStart
         layer.shadowPath = UIBezierPath(
             roundedRect: CGRect(origin: .zero, size: metrics.sourceFrameInHost.size),
             cornerRadius: metrics.sourceCornerRadius
@@ -274,22 +288,26 @@ final class ContextMenuFluidMorphHostView: UIView {
         )
         sourceContent.autoresizingMask = metrics.anchor.autoresizingMask
         sourceContent.alpha = 1
+        sourceContent.transform = .identity
 
-        // actionsContainer: positioned in glass.contentView coords such
-        // that its absolute host-level rect equals `menuFrameInHost`.
-        // Derivation: host.origin == sourceFrameInHost.origin, and
-        // glass.contentView's origin in host is host.origin + (0,0)
-        // = host.origin. So actionsContainer.origin (in glass.contentView)
-        // = menu.origin - source.origin.
+        // actionsContainer starts anchored to the same corner as the
+        // source and autoresizes into `origin == .zero` when the host
+        // reaches `menuFrameInHost`. The previous source-relative
+        // origin (`menu.min - source.min`) kept absolute coordinates
+        // fixed during the morph, but left a permanent local offset in
+        // the settled menu, so rows rendered shifted inside the glass.
         actionsContainer.frame = CGRect(
-            origin: CGPoint(
-                x: metrics.menuFrameInHost.minX - metrics.sourceFrameInHost.minX,
-                y: metrics.menuFrameInHost.minY - metrics.sourceFrameInHost.minY
+            origin: cornerOrigin(
+                container: metrics.sourceFrameInHost.size,
+                content: metrics.menuFrameInHost.size,
+                anchor: metrics.anchor
             ),
             size: metrics.menuFrameInHost.size
         )
         actionsContainer.autoresizingMask = metrics.anchor.autoresizingMask
         actionsContainer.alpha = 0
+        actionsContainer.transform = CGAffineTransform(translationX: 0, y: 6)
+        actionsRevealProgressChanged?(0)
 
         CATransaction.commit()
     }
@@ -341,12 +359,6 @@ final class ContextMenuFluidMorphHostView: UIView {
             springDampingRatio: damping
         )
 
-        // Elastic curve — perpendicular-to-motion bulge via
-        // transform.translation keyframes, peaks mid-morph. Makes the
-        // host's centre trace a curved arc from source to menu
-        // instead of a straight diagonal — reads as "elastic swoop".
-        addElasticCurveAnimation(duration: duration)
-
         // Core geometry: spring on host.frame. Glass auto-follows via
         // its [.flexibleWidth, .flexibleHeight] mask. Content containers
         // auto-follow via their corner-anchored masks, staying stationary
@@ -358,34 +370,21 @@ final class ContextMenuFluidMorphHostView: UIView {
             self.frame = metrics.menuFrameInHost
         }
 
-        // Source snapshot fades out in the first ~12% — a snap exit
-        // (~50ms at morphDuration 0.42s). The tap-target's icon/text
-        // should read as vanishing AT the moment of press, not
-        // lingering while the menu unfolds. `.easeOut` drops alpha
-        // from the very first frame (unlike the emphasized curves
-        // which linger at the start), so the perceptual feel is
-        // "immediate" without the crispness of a hard alpha snap.
-        //
-        // On a 120Hz display 50ms is ~6 frames — imperceptible as a
-        // transition but enough to avoid the popping that pure
-        // `alpha = 0` at t=0 would produce.
         let sourceFade = UIViewPropertyAnimator(
-            duration: duration * 0.12,
+            duration: duration * 0.20,
             curve: .easeOut
         ) {
             self.sourceContent.alpha = 0
+            self.sourceContent.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
         }
 
-        // Actions container fades in over ~55% starting at ~30%.
-        // Emphasized decelerate — arrives fast, lands gently into the
-        // spring's overshoot window. 5% overlap with source's tail
-        // prevents any bald-glass frame.
         let actionsFade = UIViewPropertyAnimator(
-            duration: duration * 0.55,
+            duration: duration * 0.50,
             timingParameters: Self.fadeInCurve
         )
         actionsFade.addAnimations {
             self.actionsContainer.alpha = 1
+            self.actionsContainer.transform = .identity
         }
 
         geometry.addCompletion { [weak self] _ in
@@ -403,9 +402,10 @@ final class ContextMenuFluidMorphHostView: UIView {
         runningAnimators.append(sourceFade)
         runningAnimators.append(actionsFade)
 
+        startProgressDisplayLink(duration: duration, reversed: false)
         geometry.startAnimation()
-        sourceFade.startAnimation()
-        actionsFade.startAnimation(afterDelay: duration * 0.30)
+        sourceFade.startAnimation(afterDelay: duration * 0.08)
+        actionsFade.startAnimation(afterDelay: duration * 0.18)
     }
 
     // MARK: - Animate collapse
@@ -431,12 +431,6 @@ final class ContextMenuFluidMorphHostView: UIView {
             springDampingRatio: damping
         )
 
-        // Same curve shape as expand — arc is SAME SIDE of the
-        // straight line for both directions, just traversed backwards
-        // on close. Visual result: menu "swoops back" to the button
-        // along the same hump it swooped out along.
-        addElasticCurveAnimation(duration: duration)
-
         let timing = UISpringTimingParameters(dampingRatio: damping, initialVelocity: .zero)
         let geometry = UIViewPropertyAnimator(duration: duration, timingParameters: timing)
         geometry.isInterruptible = true
@@ -453,6 +447,7 @@ final class ContextMenuFluidMorphHostView: UIView {
         )
         actionsFade.addAnimations {
             self.actionsContainer.alpha = 0
+            self.actionsContainer.transform = CGAffineTransform(translationX: 0, y: 6)
         }
 
         // Source re-emerges in the tail half — emphasized decelerate
@@ -463,6 +458,7 @@ final class ContextMenuFluidMorphHostView: UIView {
         )
         sourceFade.addAnimations {
             self.sourceContent.alpha = 1
+            self.sourceContent.transform = .identity
         }
 
         geometry.addCompletion { [weak self] _ in
@@ -480,9 +476,10 @@ final class ContextMenuFluidMorphHostView: UIView {
         runningAnimators.append(actionsFade)
         runningAnimators.append(sourceFade)
 
+        startProgressDisplayLink(duration: duration, reversed: true)
         geometry.startAnimation()
         actionsFade.startAnimation()
-        sourceFade.startAnimation(afterDelay: duration * 0.50)
+        sourceFade.startAnimation(afterDelay: duration * 0.60)
     }
 
     // MARK: - Helpers
@@ -506,8 +503,59 @@ final class ContextMenuFluidMorphHostView: UIView {
             animator.finishAnimation(at: .current)
         }
         runningAnimators.removeAll()
+        progressDisplayLink?.invalidate()
+        progressDisplayLink = nil
         layer.removeAnimation(forKey: "elasticCurveX")
         layer.removeAnimation(forKey: "elasticCurveY")
+    }
+
+    private func startProgressDisplayLink(duration: TimeInterval, reversed: Bool) {
+        progressDisplayLink?.invalidate()
+        progressStart = CACurrentMediaTime()
+        progressDuration = duration
+        progressReversed = reversed
+
+        let link = CADisplayLink(target: self, selector: #selector(handleProgressDisplayLink(_:)))
+        let maximumFramesPerSecond = max(60, UIScreen.main.maximumFramesPerSecond)
+        if #available(iOS 15.0, *) {
+            let preferredFrameRate = Float(min(120, maximumFramesPerSecond))
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: min(80, preferredFrameRate),
+                maximum: preferredFrameRate,
+                preferred: preferredFrameRate
+            )
+        } else {
+            link.preferredFramesPerSecond = maximumFramesPerSecond
+        }
+        link.add(to: .main, forMode: .common)
+        progressDisplayLink = link
+        updateProgressDrivenEffects(reversed ? 1 : 0)
+    }
+
+    @objc
+    private func handleProgressDisplayLink(_ link: CADisplayLink) {
+        let elapsed = CACurrentMediaTime() - progressStart
+        let rawT = progressDuration > 0 ? CGFloat(elapsed / progressDuration) : 1.0
+        let t = max(0.0, min(1.0, rawT))
+        updateProgressDrivenEffects(progressReversed ? (1.0 - t) : t)
+
+        if rawT >= 1.0 {
+            link.invalidate()
+            progressDisplayLink = nil
+        }
+    }
+
+    private func updateProgressDrivenEffects(_ phase: CGFloat) {
+        let phaseT = max(0.0, min(1.0, phase))
+        let materialT = Self.smootherstep(0.08, 0.72, phaseT)
+        glass.updateMaterialThickness(materialT)
+        actionsRevealProgressChanged?(Self.smootherstep(0.18, 0.68, phaseT))
+    }
+
+    private static func smootherstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
+        guard edge1 > edge0 else { return x <= edge0 ? 0 : 1 }
+        let t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+        return t * t * t * (t * (6.0 * t - 15.0) + 10.0)
     }
 
     // MARK: - Elastic curve
@@ -660,17 +708,37 @@ final class ContextMenuFluidMorphHostView: UIView {
 
         // ─── 3. Shadow opacity: keyframe with mid-morph peak ────────
         let shadowOpacityAnim = CAKeyframeAnimation(keyPath: "shadowOpacity")
+        let expanding = toSize.width * toSize.height >= fromSize.width * fromSize.height
+        let fromOpacity = expanding ? Self.shadowOpacityStart : Self.shadowOpacityRest
+        let toOpacity = expanding ? Self.shadowOpacityRest : Self.shadowOpacityStart
         shadowOpacityAnim.values = [
-            Self.shadowOpacityRest,
+            fromOpacity,
             Self.shadowOpacityPeak,
-            Self.shadowOpacityRest
+            toOpacity
         ]
-        shadowOpacityAnim.keyTimes = [0.0, 0.4, 1.0]
+        shadowOpacityAnim.keyTimes = [0.0, 0.45, 1.0]
         shadowOpacityAnim.duration = duration
         shadowOpacityAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        // Rest opacity is what's baked into the layer; the keyframe
-        // animates ABOVE that rest for the duration of the morph and
-        // lands back on it.
+        layer.shadowOpacity = toOpacity
         layer.add(shadowOpacityAnim, forKey: "fluidMorphShadowOpacity")
+
+        let radiusAnim = CAKeyframeAnimation(keyPath: "shadowRadius")
+        radiusAnim.values = expanding ? [10.0, 28.0, 22.0] : [22.0, 18.0, 10.0]
+        radiusAnim.keyTimes = [0.0, 0.45, 1.0]
+        radiusAnim.duration = duration
+        radiusAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.shadowRadius = expanding ? 22.0 : 10.0
+        layer.add(radiusAnim, forKey: "fluidMorphShadowRadius")
+
+        let offsetAnim = CAKeyframeAnimation(keyPath: "shadowOffset")
+        let offsetValues: [CGSize] = expanding
+            ? [CGSize(width: 0, height: 3), CGSize(width: 0, height: 12), CGSize(width: 0, height: 8)]
+            : [CGSize(width: 0, height: 8), CGSize(width: 0, height: 7), CGSize(width: 0, height: 3)]
+        offsetAnim.values = offsetValues.map { NSValue(cgSize: $0) }
+        offsetAnim.keyTimes = [0.0, 0.45, 1.0]
+        offsetAnim.duration = duration
+        offsetAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.shadowOffset = expanding ? CGSize(width: 0, height: 8) : CGSize(width: 0, height: 3)
+        layer.add(offsetAnim, forKey: "fluidMorphShadowOffset")
     }
 }

@@ -23,6 +23,12 @@ import UIKit
     public enum NavigationPresentation {
         case `default`
         case master
+        case modal
+        case flatModal
+        case standaloneModal
+        case standaloneFlatModal
+        case modalInLargeLayout
+        case modalInCompactLayout
     }
 
     public enum TabBarItemContextActionType {
@@ -95,6 +101,7 @@ import UIKit
     /// Set to `nil` to remove the search pill from the nav bar.
     public var searchController: AetherSearchController? {
         didSet {
+            cachedStackedTopBarAccessory = nil
             oldValue?.uninstall()
             if let sc = searchController {
                 sc.searchBar.placeholder = sc.placeholder
@@ -110,35 +117,46 @@ import UIKit
     /// Rebuilds the nav bar content view to include the search pill
     /// (if `searchController` is set) stacked above `topBarAccessory`.
     internal func rebuildTopBarAccessory() {
-        guard let sc = searchController, sc.placement == .navBar else {
-            // No search controller, or bottom mode — just use raw content
-            if navigationBarView != nil, displayNavigationBar {
-                navigationBarView?.setContentView(_rawTopBarAccessory, animated: false)
-            }
-            topBarAccessoryDidChange?()
-            return
+        if navigationBarView != nil, displayNavigationBar {
+            navigationBarView?.setContentView(effectiveTopBarAccessory, animated: false)
         }
-        // Nav bar mode: stack search pill above raw content
+        topBarAccessoryDidChange?()
+    }
+
+    internal var effectiveTopBarAccessory: NavigationBarContentView? {
+        guard let sc = searchController, sc.placement == .navBar else {
+            cachedStackedTopBarAccessory = nil
+            return _rawTopBarAccessory
+        }
+        if let cachedStackedTopBarAccessory {
+            let expectedCount = _rawTopBarAccessory == nil ? 1 : 2
+            if cachedStackedTopBarAccessory.views.count == expectedCount,
+               cachedStackedTopBarAccessory.views.first === sc.searchBar,
+               (expectedCount == 1 || cachedStackedTopBarAccessory.views.last === _rawTopBarAccessory) {
+                return cachedStackedTopBarAccessory
+            }
+        }
         var views: [NavigationBarContentView] = [sc.searchBar]
         if let raw = _rawTopBarAccessory {
             views.append(raw)
         }
         let stacked = AetherStackedBarContent(views: views)
-        if navigationBarView != nil, displayNavigationBar {
-            navigationBarView?.setContentView(stacked, animated: false)
-        }
-        topBarAccessoryDidChange?()
+        cachedStackedTopBarAccessory = stacked
+        return stacked
     }
 
     /// The raw content set by the consumer (filters, chips, etc.).
     /// Stored separately from the search pill so `rebuildTopBarAccessory`
     /// can stack them.
     internal var _rawTopBarAccessory: NavigationBarContentView?
+    private var cachedStackedTopBarAccessory: AetherStackedBarContent?
 
     // MARK: - Navigation Bar
 
     public var navigationBarView: NavigationBarView?
     public var displayNavigationBar: Bool = true
+    public internal(set) var navigationBarIsExternallyHosted: Bool = false
+    public internal(set) var externalNavigationBarHeight: CGFloat?
 
     // MARK: - Floating Toolbar
 
@@ -186,6 +204,7 @@ import UIKit
         set {
             guard _rawTopBarAccessory !== newValue else { return }
             _rawTopBarAccessory = newValue
+            cachedStackedTopBarAccessory = nil
             if searchController != nil {
                 rebuildTopBarAccessory()
             } else {
@@ -318,6 +337,18 @@ import UIKit
         // would let title/buttons slide under the island.
         let topOffset: CGFloat = max(layout.statusBarHeight ?? 0.0, layout.safeInsets.top)
         let defaultNavigationBarHeight: CGFloat = 60.0
+
+        if navigationBarIsExternallyHosted, let externalNavigationBarHeight {
+            var navigationBarFrame = CGRect(
+                origin: .zero,
+                size: CGSize(width: layout.size.width, height: externalNavigationBarHeight)
+            )
+            if !displayNavigationBar {
+                navigationBarFrame.origin.y = -navigationBarFrame.size.height
+            }
+            return NavigationLayout(navigationFrame: navigationBarFrame, defaultContentHeight: defaultNavigationBarHeight)
+        }
+
         let navBarContentHeight = navigationBarView?.contentHeight(defaultHeight: defaultNavigationBarHeight) ?? defaultNavigationBarHeight
         let navigationBarHeight: CGFloat = topOffset + navBarContentHeight + additionalNavigationBarHeight
 
@@ -331,6 +362,9 @@ import UIKit
     }
 
     open var cleanNavigationHeight: CGFloat {
+        if navigationBarIsExternallyHosted, let externalNavigationBarHeight {
+            return displayNavigationBar ? externalNavigationBarHeight : 0.0
+        }
         if let bar = navigationBarView {
             return bar.frame.maxY
         }
@@ -350,7 +384,7 @@ import UIKit
             view.bringSubviewToFront(unavailableView)
         }
 
-        if let bar = navigationBarView {
+        if let bar = navigationBarView, !navigationBarIsExternallyHosted {
             // Snap the nav-bar frame synchronously rather than animating
             // it. When the bar resized over a `.animated` transition the
             // bar's `frame.maxY` was halfway between old and new for the
@@ -470,18 +504,20 @@ import UIKit
             // Only set defaults if not already configured by a
             // NavigationController (wireControllers sets these before
             // viewDidLoad and they must not be overwritten).
-            if bar.superview == nil {
+            if !navigationBarIsExternallyHosted, bar.superview == nil {
                 view.addSubview(bar)
             }
-            if bar.requestContainerLayout == nil {
+            if !navigationBarIsExternallyHosted, bar.requestContainerLayout == nil {
                 bar.requestContainerLayout = { [weak self] transition in
                     self?.requestLayout(transition: transition)
                 }
             }
             
-            bar.backPressed = { [weak self] in
-                guard let self else { return }
-                pop(animated: true)
+            if !navigationBarIsExternallyHosted {
+                bar.backPressed = { [weak self] in
+                    guard let self else { return }
+                    pop(animated: true)
+                }
             }
         }
 
@@ -605,6 +641,20 @@ import UIKit
         }
     }
 
+    public func presentInGlobalOverlay(_ controller: UIViewController, animated: Bool = true, completion: (() -> Void)? = nil) {
+        if let window = view.window as? AetherWindow {
+            window.presentInGlobalOverlay(controller, animated: animated, completion: completion)
+        } else if let controller = controller as? AetherViewController, let nav = aetherNavigationController {
+            nav.presentOverlay(controller, animated: animated, completion: completion)
+        } else {
+            present(controller, animated: animated, completion: completion)
+        }
+    }
+
+    public func addGlobalPortalHostView(_ view: UIView) {
+        (self.view.window as? AetherWindow)?.addGlobalPortalHostView(view)
+    }
+
     public func requestLayout(transition: ContainedViewLayoutTransition) {
         if let layout = self.validLayout {
             self.containerLayoutUpdated(layout, transition: transition)
@@ -715,8 +765,8 @@ public extension NavigationBarPresentationData {
             style: .glass,
             glassStyle: .clear,
             edgeEffectAlpha: 0.85,
-            edgeEffectBlurRadiusAtEdge: 0,
-            edgeEffectBlurRadiusAtFade: 0
+            edgeEffectBlurRadiusAtEdge: 1,
+            edgeEffectBlurRadiusAtFade: 1
         )
         
         return .init(theme: theme)

@@ -9,8 +9,7 @@ import UIKit
 // to its `filters` property.
 
 private let backdropLayerClass: NSObject? = {
-    let name = ("CA" as NSString).appendingFormat("BackdropLayer")
-    return NSClassFromString(name as String) as AnyObject as? NSObject
+    return NSClassFromString(ObfuscatedSymbols.caBackdropClass) as AnyObject as? NSObject
 }()
 
 private func makeBackdropLayer() -> CALayer? {

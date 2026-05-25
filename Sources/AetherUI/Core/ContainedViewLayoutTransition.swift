@@ -11,6 +11,10 @@ public enum ContainedViewLayoutTransitionCurve {
         return .custom(0.33, 0.52, 0.25, 0.99)
     }
 
+    public static var navigationEaseOut: ContainedViewLayoutTransitionCurve {
+        return .custom(0.18, 0.82, 0.22, 1.0)
+    }
+
     public var viewAnimationOptions: UIView.AnimationOptions {
         switch self {
         case .linear:
@@ -279,15 +283,25 @@ public enum ContainedViewLayoutTransition {
     }
 
     private func animate(duration: Double, curve: ContainedViewLayoutTransitionCurve, animations: @escaping () -> Void, completion: ((Bool) -> Void)?) {
+        let baseOptions: UIView.AnimationOptions = [.layoutSubviews, .beginFromCurrentState, .allowUserInteraction]
         switch curve {
         case .spring:
-            UIView.animate(withDuration: duration, delay: 0.0, usingSpringWithDamping: 500.0, initialSpringVelocity: 0.0, options: [.layoutSubviews], animations: animations, completion: completion)
+            UIView.animate(withDuration: duration, delay: 0.0, usingSpringWithDamping: 500.0, initialSpringVelocity: 0.0, options: baseOptions, animations: animations, completion: completion)
         case let .customSpring(damping, initialVelocity):
-            UIView.animate(withDuration: duration, delay: 0.0, usingSpringWithDamping: damping, initialSpringVelocity: initialVelocity, options: [.layoutSubviews], animations: animations, completion: completion)
-        case .custom:
-            UIView.animate(withDuration: duration, delay: 0.0, options: [curve.viewAnimationOptions, .layoutSubviews], animations: animations, completion: completion)
+            UIView.animate(withDuration: duration, delay: 0.0, usingSpringWithDamping: damping, initialSpringVelocity: initialVelocity, options: baseOptions, animations: animations, completion: completion)
+        case let .custom(p1, p2, p3, p4):
+            let parameters = UICubicTimingParameters(
+                controlPoint1: CGPoint(x: CGFloat(p1), y: CGFloat(p2)),
+                controlPoint2: CGPoint(x: CGFloat(p3), y: CGFloat(p4))
+            )
+            let animator = UIViewPropertyAnimator(duration: duration, timingParameters: parameters)
+            animator.addAnimations(animations)
+            animator.addCompletion { position in
+                completion?(position == .end)
+            }
+            UIViewPropertyAnimatorRetainer.start(animator)
         default:
-            UIView.animate(withDuration: duration, delay: 0.0, options: [curve.viewAnimationOptions, .layoutSubviews], animations: animations, completion: completion)
+            UIView.animate(withDuration: duration, delay: 0.0, options: [curve.viewAnimationOptions, baseOptions], animations: animations, completion: completion)
         }
     }
 
@@ -442,6 +456,7 @@ public enum ContainedViewLayoutTransition {
             if let completion {
                 animation.delegate = NavTransitionAnimationDelegate(completion: completion)
             }
+            animation.aetherPreferHighFrameRate()
             switch curve {
             case .spring, .customSpring:
                 let spring = CASpringAnimation(keyPath: "position")
@@ -457,6 +472,7 @@ public enum ContainedViewLayoutTransition {
                 if let completion {
                     spring.delegate = NavTransitionAnimationDelegate(completion: completion)
                 }
+                spring.aetherPreferHighFrameRate()
                 layer.add(spring, forKey: "position-additive")
             default:
                 layer.add(animation, forKey: "position-additive")
@@ -466,6 +482,19 @@ public enum ContainedViewLayoutTransition {
 
     public func animateOffsetAdditive(layer: CALayer, offset: CGFloat, removeOnCompletion: Bool = true, completion: ((Bool) -> Void)? = nil) {
         animatePositionAdditive(layer: layer, offset: CGPoint(x: 0.0, y: offset), removeOnCompletion: removeOnCompletion, completion: completion)
+    }
+}
+
+private enum UIViewPropertyAnimatorRetainer {
+    private static var activeAnimators: [UIViewPropertyAnimator] = []
+
+    static func start(_ animator: UIViewPropertyAnimator) {
+        activeAnimators.append(animator)
+        animator.addCompletion { [weak animator] _ in
+            guard let animator else { return }
+            activeAnimators.removeAll { $0 === animator }
+        }
+        animator.startAnimation()
     }
 }
 

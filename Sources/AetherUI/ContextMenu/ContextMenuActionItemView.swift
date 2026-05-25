@@ -68,6 +68,12 @@ final class ContextMenuActionItemView: UIView {
     // MARK: - State
 
     private(set) var item: ContextMenuActionItem
+    var reservesLeadingSlot = true {
+        didSet {
+            guard reservesLeadingSlot != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
 
     // MARK: - Init
 
@@ -168,7 +174,9 @@ final class ContextMenuActionItemView: UIView {
 
         let slotW = ContextMenuActionItemView.leadingSlotWidth
         let slotSpacing = ContextMenuActionItemView.leadingSlotSpacing
-        let leadingContentX = layoutRect.minX + slotW + slotSpacing
+        let leadingContentX = reservesLeadingSlot
+            ? layoutRect.minX + slotW + slotSpacing
+            : layoutRect.minX
 
         // Leading slot — checkmark and/or leading icon occupy the same rect.
         let leadingSlotRect = CGRect(
@@ -177,14 +185,16 @@ final class ContextMenuActionItemView: UIView {
             width: slotW,
             height: slotW
         )
-        checkmarkView.frame = leadingSlotRect
+        checkmarkView.frame = reservesLeadingSlot ? leadingSlotRect : .zero
         let leadingIconW = ContextMenuActionItemView.leadingIconSize
-        leadingIconView.frame = CGRect(
-            x: leadingSlotRect.midX - leadingIconW / 2.0,
-            y: (bounds.height - leadingIconW) / 2.0,
-            width: leadingIconW,
-            height: leadingIconW
-        )
+        leadingIconView.frame = reservesLeadingSlot
+            ? CGRect(
+                x: leadingSlotRect.midX - leadingIconW / 2.0,
+                y: (bounds.height - leadingIconW) / 2.0,
+                width: leadingIconW,
+                height: leadingIconW
+            )
+            : .zero
 
         // Trailing slot — submenu chevron OR trailing icon. Both occupy the
         // right edge with no overlap (apply(item:) hides one or the other).

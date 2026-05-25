@@ -50,14 +50,10 @@ final class ContextMenuActionsView: UIView {
     /// with UIGlassEffect / UIBlurEffect) — this view is just rows on
     /// transparent background.
     private let contentContainer = UIView()
-    /// Glass selection lens — the same `LiquidLensView` the tab bar uses
-    /// for its sliding selected indicator. `.noContainer` so only the
-    /// lens "blob" itself renders (no surrounding GlassBackgroundContainer
-    /// strip — the menu's outer UIVisualEffectView already provides the
-    /// background). Covers the whole content area and positions its visible
-    /// lens at the selected row via `update(selectionOrigin:selectionSize:...)`.
-    /// Rendered BELOW the row views so text + icons stay readable on top.
-    private let highlightLens = LiquidLensView(kind: .noContainer)
+    /// Native context menus use a quiet grey row selection here, not a
+    /// second glass lens. This pill still tracks between rows with the same
+    /// touch logic, but it does not refract or distort menu content.
+    private let highlightView = UIView()
     private var rowViews: [RowEntry] = []
 
     // MARK: - State
@@ -77,12 +73,14 @@ final class ContextMenuActionsView: UIView {
 
     private let items: [ContextMenuItem]
     private let headerStyle: HeaderStyle
+    private let reservesLeadingSlotForActionRows: Bool
     var onActionSelected: ((ContextMenuActionItem) -> Void)?
     var onSubmenuRequested: ((ContextMenuActionItem) -> Void)?
     var onHeaderTapped: (() -> Void)?
 
     private var trackedTouch: UITouch?
     private var highlightedIndex: Int?
+    private var rowRevealProgress: CGFloat = 1.0
 
     /// Hooks the controller can use to apply the rubber-band stretch on the
     /// outer container (the whole menu chrome, not just the rows). Reporting
@@ -124,6 +122,7 @@ final class ContextMenuActionsView: UIView {
     init(items: [ContextMenuItem], headerStyle: HeaderStyle = .none) {
         self.items = items
         self.headerStyle = headerStyle
+        self.reservesLeadingSlotForActionRows = Self.itemsNeedLeadingSlot(items)
 
         super.init(frame: .zero)
 
@@ -132,12 +131,15 @@ final class ContextMenuActionsView: UIView {
         contentContainer.clipsToBounds = false
         addSubview(contentContainer)
 
-        // Lens sits BENEATH the rows so text + icons stay readable on top
-        // of the lens glass. Its alpha controls visibility (0 = hidden,
-        // 1 = visible at the highlighted row).
-        highlightLens.alpha = 0
-        highlightLens.isUserInteractionEnabled = false
-        contentContainer.addSubview(highlightLens)
+        // Highlight sits BENEATH the rows so text + icons stay readable on
+        // top. Its alpha controls visibility (0 = hidden, 1 = visible at the
+        // highlighted row).
+        highlightView.alpha = 0
+        highlightView.isUserInteractionEnabled = false
+        highlightView.backgroundColor = Self.selectionHighlightColor(for: traitCollection)
+        highlightView.layer.cornerCurve = .continuous
+        highlightView.layer.masksToBounds = true
+        contentContainer.addSubview(highlightView)
 
         buildRowViews()
     }
@@ -213,24 +215,24 @@ final class ContextMenuActionsView: UIView {
             y += h
         }
 
-        // Lens covers the whole content area so its `selectionOrigin` /
-        // `selectionSize` can address any row. Update happens immediately
-        // here; `moveHighlight` re-runs `update(...)` with an animated
-        // transition when the user changes which row is highlighted.
-        highlightLens.frame = contentContainer.bounds
         if let highlightedIndex {
             let frame = highlightFrame(forRowAt: highlightedIndex)
-            highlightLens.update(
-                size: contentContainer.bounds.size,
-                cornerRadius: ContextMenuActionsView.highlightCornerRadius,
-                selectionOrigin: frame.origin,
-                selectionSize: frame.size,
-                inset: 0,
-                isDark: traitCollection.userInterfaceStyle == .dark,
-                isLifted: true,
-                transition: .immediate
-            )
+            applyHighlightFrame(frame, animated: false)
         }
+        applyRowRevealProgress()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        highlightView.backgroundColor = Self.selectionHighlightColor(for: traitCollection)
+    }
+
+    func setRevealProgress(_ progress: CGFloat) {
+        let next = max(0.0, min(1.0, progress))
+        guard abs(next - rowRevealProgress) > 0.001 else { return }
+        rowRevealProgress = next
+        applyRowRevealProgress()
     }
 
     // MARK: - Touch tracking
@@ -265,6 +267,26 @@ final class ContextMenuActionsView: UIView {
         clearHighlight(animated: true)
     }
 
+    /// Drive row selection from an outer glass-surface gesture. This lets the
+    /// menu's `UIGlassEffect.isInteractive` / fallback stretch own the actual
+    /// touch stream while the rows remain a passive visual layer.
+    func beginExternalInteraction(at point: CGPoint) {
+        trackedTouch = nil
+        moveHighlight(to: point, animated: false)
+    }
+
+    func updateExternalInteraction(at point: CGPoint) {
+        moveHighlight(to: point, animated: true)
+    }
+
+    func endExternalInteraction(at point: CGPoint) {
+        commitTouch(at: point)
+    }
+
+    func cancelExternalInteraction() {
+        clearHighlight(animated: true)
+    }
+
     // MARK: - Highlight tracking
 
     private func moveHighlight(to point: CGPoint, animated: Bool) {
@@ -288,45 +310,26 @@ final class ContextMenuActionsView: UIView {
 
     private func applyHighlight(to index: Int, animated: Bool) {
         let targetFrame = highlightFrame(forRowAt: index)
-        let isFirstShow = (highlightLens.alpha < 0.01)
+        let isFirstShow = (highlightView.alpha < 0.01)
 
         highlightedIndex = index
 
-        let isDark = traitCollection.userInterfaceStyle == .dark
-        let lensTransition: ContainedViewLayoutTransition = (animated && !isFirstShow)
-            ? .animated(duration: 0.32, curve: .customSpring(damping: 0.85, initialVelocity: 0))
-            : .immediate
-
-        // Lens covers the whole content area; `selectionOrigin/Size` move
-        // the visible lens to the highlighted row. The lens animates
-        // internally via its own update transition (matches the tab bar's
-        // lens motion).
-        highlightLens.frame = contentContainer.bounds
-        highlightLens.update(
-            size: contentContainer.bounds.size,
-            cornerRadius: ContextMenuActionsView.highlightCornerRadius,
-            selectionOrigin: targetFrame.origin,
-            selectionSize: targetFrame.size,
-            inset: 0,
-            isDark: isDark,
-            isLifted: true,
-            transition: lensTransition
-        )
+        applyHighlightFrame(targetFrame, animated: animated && !isFirstShow)
 
         if isFirstShow {
             UIView.animate(
                 withDuration: 0.15, delay: 0,
                 options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
-                animations: { self.highlightLens.alpha = 1.0 },
+                animations: { self.highlightView.alpha = 1.0 },
                 completion: nil
             )
         }
     }
 
-    /// Fade the sliding highlight lens out, releasing any tracked touch's
+    /// Fade the sliding highlight out, releasing any tracked touch's
     /// visual state. Exposed (non-private) because
     /// `ContextMenuController` needs to call it when an inline submenu
-    /// opens — otherwise the lens stays at its last tap-down row on the
+    /// opens — otherwise the highlight stays at its last tap-down row on the
     /// parent menu, which then becomes visible again when the parent
     /// un-dims on submenu-close.
     func clearHighlight(animated: Bool) {
@@ -335,11 +338,35 @@ final class ContextMenuActionsView: UIView {
             UIView.animate(
                 withDuration: 0.18, delay: 0,
                 options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
-                animations: { self.highlightLens.alpha = 0.0 },
+                animations: { self.highlightView.alpha = 0.0 },
                 completion: nil
             )
         } else {
-            highlightLens.alpha = 0.0
+            highlightView.alpha = 0.0
+        }
+    }
+
+    private func applyHighlightFrame(_ frame: CGRect, animated: Bool) {
+        let cornerRadius = min(
+            ContextMenuActionsView.highlightCornerRadius,
+            min(frame.width, frame.height) * 0.5
+        )
+        let updates = {
+            self.highlightView.frame = frame
+            self.highlightView.layer.cornerRadius = cornerRadius
+        }
+        if animated {
+            UIView.animate(
+                withDuration: 0.22,
+                delay: 0,
+                usingSpringWithDamping: 0.88,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut],
+                animations: updates,
+                completion: nil
+            )
+        } else {
+            updates()
         }
     }
 
@@ -534,6 +561,7 @@ final class ContextMenuActionsView: UIView {
                 rowViews.append(RowEntry(view: container, actionItem: nil))
             case let .action(action):
                 let row = ContextMenuActionItemView(item: action)
+                row.reservesLeadingSlot = reservesLeadingSlotForActionRows
                 contentContainer.addSubview(row)
                 rowViews.append(RowEntry(view: row, actionItem: action))
             case .separator:
@@ -572,9 +600,48 @@ final class ContextMenuActionsView: UIView {
                 }
             }
         }
-        // Keep the highlight on top of rows so it visually sits above content.
-        // Keep the lens UNDER the rows — text + icons need to read on top.
-        contentContainer.sendSubviewToBack(highlightLens)
+        // Keep the highlight UNDER the rows — text + icons need to read on top.
+        contentContainer.sendSubviewToBack(highlightView)
+        applyRowRevealProgress()
+    }
+
+    private static func itemsNeedLeadingSlot(_ items: [ContextMenuItem]) -> Bool {
+        for item in items {
+            switch item {
+            case let .action(action):
+                if action.isSelected || (action.icon != nil && action.iconSide == .leading) {
+                    return true
+                }
+            case .actionRow, .header, .separator:
+                continue
+            }
+        }
+        return false
+    }
+
+    private static func selectionHighlightColor(for traitCollection: UITraitCollection) -> UIColor {
+        if traitCollection.userInterfaceStyle == .dark {
+            return UIColor.white.withAlphaComponent(0.14)
+        }
+        return UIColor.black.withAlphaComponent(0.12)
+    }
+
+    private func applyRowRevealProgress() {
+        guard !rowViews.isEmpty else { return }
+        for (index, entry) in rowViews.enumerated() {
+            let rowStart = min(0.74, 0.42 + CGFloat(index) * 0.025)
+            let rowT = Self.smootherstep(rowStart, rowStart + 0.20, rowRevealProgress)
+            entry.view.alpha = rowT
+            let scale = 0.985 + 0.015 * rowT
+            entry.view.transform = CGAffineTransform(translationX: 0.0, y: (1.0 - rowT) * 5.0)
+                .scaledBy(x: scale, y: scale)
+        }
+    }
+
+    private static func smootherstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
+        guard edge1 > edge0 else { return x <= edge0 ? 0 : 1 }
+        let t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+        return t * t * t * (t * (6.0 * t - 15.0) + 10.0)
     }
 
     /// Header row used at the top of pushed submenu pages (chevron.left)

@@ -15,6 +15,7 @@ final class ContextMenuMorphHostView: UIView {
     let glass: MenuGlassSurfaceView
     let sourceContent = UIView()
     let destinationContent = UIView()
+    var destinationRevealProgressChanged: ((CGFloat) -> Void)?
 
     /// Passthrough wrapper between the morph host and the glass view.
     /// Exists so `LensSDFFilter` can install on a plain-UIView layer
@@ -56,25 +57,21 @@ final class ContextMenuMorphHostView: UIView {
     private var animStep: ((CGFloat) -> Void)?
     private var animCompletion: ((Bool) -> Void)?
 
-    /// When `true`, the droplet deformation (`blob` + `topDome`) is
-    /// suppressed — the host stays a lerping rounded rectangle. Used
-    /// by the dismiss path to collapse the menu back to the source
-    /// rect as a plain geometric shrink, letting the cross-fade
-    /// between menu rows and source snapshot read cleanly without a
-    /// droplet silhouette flashing through.
+    /// When `true`, the subtle organic deformation is suppressed and
+    /// the host stays a lerping rounded rectangle. Kept for dismiss /
+    /// cancellation paths where a completely predictable collapse is
+    /// preferable to any surface-tension pulse.
     var suppressBlob: Bool = false
 
-    private static let collapsedShadowRadius: CGFloat = 12.0
-    private static let expandedShadowRadius: CGFloat = 20.0
-    // At t=0 the shadow is invisible. The ramp (see
-    // `updateForProgress`) holds 0 through ALMOST the entire morph
-    // and only smoothsteps on in the last ~25 %, at reduced
-    // amplitude. Matches iOS 26 context menus where the landed menu
-    // has only a faint shadow and no shadow shows during the
-    // unfold.
-    private static let collapsedShadowOpacity: Float = 0.0
-    private static let expandedShadowOpacity: Float = 0.08
-    private static let shadowOffset = CGSize(width: 0, height: 4)
+    private static let collapsedShadowRadius: CGFloat = 10.0
+    private static let peakShadowRadius: CGFloat = 28.0
+    private static let settledShadowRadius: CGFloat = 22.0
+    private static let collapsedShadowOpacity: Float = 0.04
+    private static let peakShadowOpacity: Float = 0.18
+    private static let settledShadowOpacity: Float = 0.12
+    private static let collapsedShadowOffsetY: CGFloat = 3.0
+    private static let peakShadowOffsetY: CGFloat = 12.0
+    private static let settledShadowOffsetY: CGFloat = 8.0
 
     // MARK: - Init
 
@@ -86,7 +83,7 @@ final class ContextMenuMorphHostView: UIView {
         backgroundColor = .clear
         layer.masksToBounds = false
         layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOffset = Self.shadowOffset
+        layer.shadowOffset = CGSize(width: 0, height: Self.collapsedShadowOffsetY)
         layer.shadowRadius = Self.collapsedShadowRadius
         layer.shadowOpacity = Self.collapsedShadowOpacity
 
@@ -109,6 +106,7 @@ final class ContextMenuMorphHostView: UIView {
 
         sourceContent.backgroundColor = .clear
         sourceContent.isUserInteractionEnabled = false
+        sourceContent.clipsToBounds = true
         glass.contentView.addSubview(sourceContent)
 
         destinationContent.backgroundColor = .clear
@@ -204,12 +202,16 @@ final class ContextMenuMorphHostView: UIView {
         // CADisplayLink defaults to 60 Hz even on 120 Hz displays,
         // which shows as subtle stairstepping in the shape-path updates
         // during fast morphs.
+        let maximumFramesPerSecond = max(60, UIScreen.main.maximumFramesPerSecond)
         if #available(iOS 15.0, *) {
+            let preferredFrameRate = Float(min(120, maximumFramesPerSecond))
             link.preferredFrameRateRange = CAFrameRateRange(
-                minimum: 80,
-                maximum: 120,
-                preferred: 120
+                minimum: min(80, preferredFrameRate),
+                maximum: preferredFrameRate,
+                preferred: preferredFrameRate
             )
+        } else {
+            link.preferredFramesPerSecond = maximumFramesPerSecond
         }
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -258,165 +260,77 @@ final class ContextMenuMorphHostView: UIView {
     private func updateForProgress(surfaceProgress: CGFloat, phaseProgress: CGFloat, rawTime: CGFloat = 0) {
         guard let metrics else { return }
 
-        let gt = max(0, min(1, surfaceProgress))
         let phaseT = max(0, min(1, phaseProgress))
+        let geometryT = max(0, min(1.06, surfaceProgress))
+        let materialT = Self.smootherstep(0.08, 0.72, phaseT)
 
-        // Position and size curves ride `gt` (cubic-ease-out),
-        // both running over the FULL timeline now. The previous
-        // version saturated position at `gt=0.4` and started size
-        // at `gt=0.15`, which under the new ease-out curve meant
-        // position arrived at τ≈0.13 and the host then sat with
-        // a fixed centre while size finished expanding — perceived
-        // as "travel, plateau, then inflate".
-        //
-        // Mapping both ranges to `[0, 1]` lets position and size
-        // share one velocity profile: the bubble travels TOWARD
-        // menu.mid at the same rate it grows, so position and
-        // size resolve simultaneously at τ=1. Each is wrapped in
-        // `smootherstep` so the second derivative is zero at the
-        // endpoints — no kink at start/finish.
-        let positionT = Self.smootherstep(0, 1, gt)
-        let sizeT = Self.smootherstep(0, 1, gt)
+        let midX = Self.lerp(metrics.collapsedFrame.midX, metrics.expandedFrame.midX, geometryT)
+        let midY = Self.lerp(metrics.collapsedFrame.midY, metrics.expandedFrame.midY, geometryT)
+        var width = Self.lerp(metrics.collapsedFrame.width, metrics.expandedFrame.width, geometryT)
+        var height = Self.lerp(metrics.collapsedFrame.height, metrics.expandedFrame.height, geometryT)
 
-        let midX = Self.lerp(metrics.collapsedFrame.midX, metrics.expandedFrame.midX, positionT)
-        let midY = Self.lerp(metrics.collapsedFrame.midY, metrics.expandedFrame.midY, positionT)
-        let width = Self.lerp(metrics.collapsedFrame.width, metrics.expandedFrame.width, sizeT)
-        let height = Self.lerp(metrics.collapsedFrame.height, metrics.expandedFrame.height, sizeT)
-        let lerpFrame = CGRect(
+        // Surface tension stays deliberately low: enough to prevent a
+        // wooden rectangle scale, never enough to become a teardrop.
+        let blob = suppressBlob ? 0.0 : 0.06 * sin(.pi * phaseT)
+        let dx = abs(metrics.expandedFrame.midX - metrics.collapsedFrame.midX)
+        let dy = abs(metrics.expandedFrame.midY - metrics.collapsedFrame.midY)
+        if dy >= dx {
+            height *= 1.0 + blob
+            width *= 1.0 - blob * 0.35
+        } else {
+            width *= 1.0 + blob
+            height *= 1.0 - blob * 0.35
+        }
+
+        let bulgedFrame = CGRect(
             x: midX - width / 2,
             y: midY - height / 2,
             width: width,
             height: height
         )
-        // Pill-biased corner: in the early/middle morph the corner
-        // is biased toward `min(w, h) / 2` (full pill), which makes
-        // the interim shape read as a fat capsule instead of a
-        // softly-rounded rectangle. Bias relaxes to the menu's
-        // final cornerRadius over a wide `gt ∈ [0.4, 1.0]` window
-        // through smootherstep, so the transition is C²-continuous
-        // and never "snaps". The previous attempt that gated the
-        // bias to `[0.75, 1.0]` produced the visible "финальный
-        // разворот" jerk because the shape changed too late and
-        // too fast — by spreading the relaxation over 60 % of the
-        // timeline, the corner glides toward the menu radius
-        // imperceptibly.
-        //
-        // At `gt = 0` the formula yields `collapsedCornerRadius`
-        // exactly (pillBias=1 + pillCorner=collapsedRadius for
-        // the droplet), so the start state matches the droplet's
-        // geometry without a discontinuity.
+
         let pillCorner = min(width, height) / 2
-        let menuCorner = metrics.expandedCornerRadius
-        let pillBias = 1 - Self.smootherstep(0.4, 1.0, gt)
-        let baseCorner = menuCorner + (pillCorner - menuCorner) * pillBias
+        let earlyCorner = Self.lerp(
+            metrics.collapsedCornerRadius,
+            pillCorner,
+            Self.smootherstep(0.0, 0.35, phaseT)
+        )
+        let baseCorner = Self.lerp(
+            earlyCorner,
+            metrics.expandedCornerRadius,
+            Self.smootherstep(0.35, 0.9, phaseT)
+        )
+        let cornerRadius = baseCorner + blob * min(baseCorner * 0.08, 3.0)
 
-        // Droplet silhouette suppressed on open too (previously only
-        // on dismiss). The user wanted a rounder, cleaner morph;
-        // the teardrop bulge reads as teardrop tension which is at
-        // odds with the "bubble inflates into menu" feel.
-        let blob: CGFloat = 0
-        let topDome: CGFloat = 0
-        _ = Self.blobAmount(for: phaseT)
-        _ = Self.topDomeAmount(for: phaseT, hostHeight: lerpFrame.height)
-
-        // Не схлопываем host слишком сильно — иначе форма выглядит как
-        // умирающий мешочек. Только лёгкое сужение и небольшое удлинение.
-        let widthInset = blob * min(18, lerpFrame.width * 0.08)
-        let heightStretch = blob * min(22, lerpFrame.height * 0.08)
-
-        let bulgedFrame = CGRect(
-            x: lerpFrame.minX + widthInset * xAnchor,
-            y: lerpFrame.minY - topDome - heightStretch * 0.35,
-            width: lerpFrame.width - widthInset,
-            height: lerpFrame.height + topDome + heightStretch
+        let shadowPeakT = Self.smootherstep(0.0, 0.45, materialT)
+        let shadowSettleT = Self.smootherstep(0.45, 1.0, materialT)
+        let shadowOpacityValue = Self.lerp(
+            Self.lerp(CGFloat(Self.collapsedShadowOpacity), CGFloat(Self.peakShadowOpacity), shadowPeakT),
+            CGFloat(Self.settledShadowOpacity),
+            shadowSettleT
+        )
+        let shadowRadius = Self.lerp(
+            Self.lerp(Self.collapsedShadowRadius, Self.peakShadowRadius, shadowPeakT),
+            Self.settledShadowRadius,
+            shadowSettleT
+        )
+        let shadowOffsetY = Self.lerp(
+            Self.lerp(Self.collapsedShadowOffsetY, Self.peakShadowOffsetY, shadowPeakT),
+            Self.settledShadowOffsetY,
+            shadowSettleT
         )
 
-        let cornerPulse = blob * min(baseCorner * 0.18, 8)
-        let cornerRadius = baseCorner + cornerPulse
+        let sourceFade = Self.smootherstep(0.08, 0.28, phaseT)
+        let sourceAlpha = 1.0 - sourceFade
+        let sourceScale = 1.0 - 0.04 * sourceFade
 
-        let shadowRadius = Self.lerp(Self.collapsedShadowRadius, Self.expandedShadowRadius, gt)
-        // Shadow ramps ONLY in the last ~25 % of the morph. Before
-        // that the value is 0 so the growing droplet casts no drop-
-        // shadow — a shadow during the bulge phase reads as "menu is
-        // already settled" and fights the unfold. Keyed off
-        // `phaseT` (not the spring `gt`) so the ramp doesn't
-        // overshoot on open nor undershoot on dismiss.
-        // Shadow ramp window widened from 0.75–1.0 to 0.5–1.0 so
-        // the drop-shadow fades in over the entire back half of
-        // the morph instead of "popping" on at τ=0.75. Quintic
-        // smootherstep means the very start of the ramp is
-        // imperceptible; the shadow only becomes visibly present
-        // once the menu shape has substantially landed.
-        let shadowRampT = Self.smootherstep(0.5, 1.0, phaseT)
-        let shadowOpacity = Float(
-            Self.lerp(
-                CGFloat(Self.collapsedShadowOpacity),
-                CGFloat(Self.expandedShadowOpacity),
-                shadowRampT
-            )
-        )
+        let destReveal = Self.smootherstep(0.18, 0.68, phaseT)
+        let destAlpha = destReveal
+        let destTranslateY = (1.0 - Self.smootherstep(0.18, 0.60, phaseT)) * 6.0
 
-        // Параллельная хореография: всё идёт за одну и ту же полную
-        // длительность [0, 1]. Source смотрим как он уходит, dest —
-        // как приходит, blob — bell. Никто не стартует с задержкой
-        // и не финиширует раньше — это то, что даёт "одна цельная
-        // трансформация" вместо "череды микро-анимаций с плато".
-        let sourceFadeOut = Self.smootherstep(0.0, 1.0, phaseT)
-        let sourceAlpha = max(0, 1 - sourceFadeOut)
-        let sourceScale = 1.0 - 0.08 * sourceFadeOut
-
-        let destFadeIn = Self.smootherstep(0.0, 1.0, phaseT)
-        let destAlpha = destFadeIn
-        // No translateY — content stays put, just fades in. The
-        // previous 8 pt slide was too subtle to register as "menu
-        // rows dropping into place" and instead created a vertical
-        // nudge that muddied the clean bilateral growth.
-        let destTranslateY: CGFloat = 0
-
-        // End-bounce — raised-cosine bump `(1 - cos(2π·s)) / 2` over
-        // `phaseT ∈ [0.35, 0.85]`. Window centred on `τ=0.6`, where
-        // the cubic-ease-out has resolved ~94 % of the size lerp,
-        // so the bump reads as the "landing" rather than a
-        // separate animation that fires after the menu has already
-        // stopped. The previous (0.5, 1.0) window peaked at τ=0.75,
-        // by which point movement was visibly already done — the
-        // bump felt detached / late.
-        //
-        // Raised-cosine has zero derivative at BOTH endpoints AND
-        // at the peak — no kink at engage / disengage / crest. A
-        // half-sine `sin(π·s)` would click on engage and disengage
-        // (non-zero slope at s=0 and s=1), which is what made the
-        // earlier "spring" read as harsh on a 120 Hz display.
-        let bouncePhase = max(0, min(1, (phaseT - 0.35) / 0.5))
-        let bounceAmplitude: CGFloat = 0.025
-        let bounceScale = 1 + bounceAmplitude * (1 - cos(bouncePhase * 2 * .pi)) / 2
-
-        // Start-pop — half-sine `sin(π·s)` over the first 28 % of
-        // raw time. Two components: scale-up by 14 % AND vertical
-        // translate up by 28 pt (open only). The window stretched
-        // from 22 % → 28 % so the pop has more time to read on a
-        // 0.5 s morph, and amplitudes both roughly doubled because
-        // the previous values were getting visually swallowed —
-        // the bubble starts at 24 pt, a 9 % scale was changing its
-        // size by only 2 pt (sub-pixel-noise-level on Retina),
-        // and a 14 pt translate was about half a finger-width.
-        // 28 pt translate is roughly the bubble's own diameter,
-        // so the pop reads as the bubble visibly "jumping" up
-        // its own height before settling.
-        //
-        // On dismiss the translate is suppressed — a downward
-        // jolt at the start of close reads as a glitch. Scale
-        // pop still fires symmetrically. Open detection:
-        // `animTo > animFrom`.
-        let isOpening = animTo > animFrom
-        let startBumpT = max(0, min(1, rawTime / 0.28))
-        let startBumpEnv = sin(startBumpT * .pi)
-        let startBumpAmplitude: CGFloat = 0.14
-        let startBumpScale = 1 + startBumpAmplitude * startBumpEnv
-        let startBumpTranslateY: CGFloat = isOpening ? -28 * startBumpEnv : 0
-
-        let springScaleX = bounceScale * startBumpScale
-        let springScaleY = bounceScale * startBumpScale
+        let isAnimatingOpen = displayLink != nil && animTo > animFrom
+        let pressureT = isAnimatingOpen ? Self.smootherstep(0.0, 0.14, rawTime) : 1.0
+        let pressureScale = isAnimatingOpen ? Self.lerp(0.985, 1.0, pressureT) : 1.0
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -426,8 +340,7 @@ final class ContextMenuMorphHostView: UIView {
 
         bounds = CGRect(origin: .zero, size: bulgedFrame.size)
         layer.position = CGPoint(x: anchorPositionX, y: anchorPositionY)
-        transform = CGAffineTransform(scaleX: springScaleX, y: springScaleY)
-            .concatenating(CGAffineTransform(translationX: 0, y: startBumpTranslateY))
+        transform = CGAffineTransform(scaleX: pressureScale, y: pressureScale)
 
         // `glass` MUST be sized via `view.frame` (not `layer.frame`).
         // `UIVisualEffectView` owns a private `_UIVisualEffectBackdropView`
@@ -469,25 +382,26 @@ final class ContextMenuMorphHostView: UIView {
         )
         layer.shadowPath = shadowPath
         layer.shadowRadius = shadowRadius
-        layer.shadowOpacity = shadowOpacity
+        layer.shadowOpacity = Float(shadowOpacityValue)
+        layer.shadowOffset = CGSize(width: 0, height: shadowOffsetY)
+        glass.updateMaterialThickness(materialT)
 
-        // sourceContent is intentionally empty in the morph
-        // setup (the controller does NOT embed a snapshot — the
-        // real source view stays put in its parent). So updating
-        // its frame/alpha/transform per tick is wasted work
-        // (sourceAlpha, sourceScale calculated above are unused).
-        // destinationContent only needs frame on bounds change;
-        // the (translateY=0) transform never changes, so it's
-        // set once and left alone.
-        _ = sourceAlpha
-        _ = sourceScale
-        _ = destTranslateY
+        let sourceLocalOrigin = CGPoint(
+            x: metrics.collapsedFrame.minX - bulgedFrame.minX,
+            y: metrics.collapsedFrame.minY - bulgedFrame.minY
+        )
+        sourceContent.layer.frame = CGRect(origin: sourceLocalOrigin, size: metrics.collapsedFrame.size)
+        sourceContent.alpha = sourceAlpha
+        sourceContent.transform = CGAffineTransform(scaleX: sourceScale, y: sourceScale)
+
         let destLocalOrigin = CGPoint(
             x: metrics.expandedFrame.minX - bulgedFrame.minX,
             y: metrics.expandedFrame.minY - bulgedFrame.minY
         )
         destinationContent.layer.frame = CGRect(origin: destLocalOrigin, size: metrics.expandedFrame.size)
         destinationContent.alpha = destAlpha
+        destinationContent.transform = CGAffineTransform(translationX: 0, y: destTranslateY)
+        destinationRevealProgressChanged?(destReveal)
 
         CATransaction.commit()
     }
@@ -682,30 +596,24 @@ final class ContextMenuMorphHostView: UIView {
     // MARK: - Easing helpers
 
     private static func springProgress(_ t: CGFloat, damping: CGFloat) -> CGFloat {
-        // Cubic ease-out: `1 - (1 - t)³`. Asymmetric S-curve —
-        // velocity at τ=0 is 3× the average rate (snappy launch),
-        // velocity at τ=1 is 0 (gentle landing). Reads as "the
-        // motion takes off quickly and resolves softly", which is
-        // the standard fluid-motion shape (close cousin of CSS
-        // `ease-out`, Material's "decelerate easing", iOS UIKit's
-        // `.easeOut`).
-        //
-        // Symmetric smootherstep (the previous curve here) is
-        // C²-smooth but starts AND ends slowly — it read as
-        // "wooden" because the motion never had a moment of
-        // commitment at the launch.
-        //
-        // ~87.5 % of the visible motion happens in the first half
-        // of the timeline. Combined with the raised-cosine end-
-        // bounce on `phaseT`, the second half is dedicated to the
-        // soft landing + 2.5 % scale breathe.
-        //
-        // `damping` is unused — kept in the signature for call-
-        // site stability (the controller still passes it from
-        // `morphDamping` constants).
-        _ = damping
-        let inv = 1 - max(0, min(1, t))
-        return 1 - inv * inv * inv
+        dampedSpring01(t, response: 0.48, dampingRatio: damping)
+    }
+
+    private static func dampedSpring01(_ rawT: CGFloat, response: CGFloat, dampingRatio: CGFloat) -> CGFloat {
+        let t = max(0.0, min(1.0, rawT))
+        let response = max(0.08, response)
+        let omega0 = 2.0 * CGFloat.pi / response
+        let zeta = max(0.01, dampingRatio)
+
+        if zeta < 1.0 {
+            let wd = omega0 * sqrt(1.0 - zeta * zeta)
+            let envelope = exp(-zeta * omega0 * t)
+            let c = zeta / sqrt(1.0 - zeta * zeta)
+            return 1.0 - envelope * (cos(wd * t) + c * sin(wd * t))
+        } else {
+            let omega = omega0
+            return 1.0 - exp(-omega * t) * (1.0 + omega * t)
+        }
     }
 
     private static func cubicBezier(progress: CGFloat, cp1: CGPoint, cp2: CGPoint) -> CGFloat {

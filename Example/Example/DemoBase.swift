@@ -1,5 +1,6 @@
 import UIKit
 import AetherUI
+import AssociatedObject
 
 /// Vertical stack of buttons inside a scroll view — used as the body
 /// of every leaf demo screen below. Subclasses populate via `addButton`
@@ -136,8 +137,7 @@ final class DemoListController: AetherViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         navigationItem.title = titleText
-        view.backgroundColor = .systemGroupedBackground
-        installRandomNavbarButton(on: self)
+        view.backgroundColor = .systemGroupedBackground 
 
         tableView = UITableView(frame: view.bounds, style: .insetGrouped)
         tableView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -215,14 +215,78 @@ private let randomNavbarSymbols: [String] = [
 
 func installRandomNavbarButton(on viewController: UIViewController) {
     let symbol = randomNavbarSymbols.randomElement() ?? "ellipsis"
-    let item = UIBarButtonItem(
-        image: UIImage(systemName: symbol),
-        style: .plain,
-        target: nil,
-        action: nil
-    )
-    item.primaryAction = UIAction { _ in
+    let target = NavbarButtonActionTarget {
         AetherToastController(content: .text("Tapped \(symbol)")).present()
     }
+
+    let item = UIBarButtonItem(image: UIImage(systemName: symbol)) {
+        sampleItems()
+    }
+
+    viewController.navbarButtonActionTarget = target
     viewController.navigationItem.rightBarButtonItem = item
+}
+
+func sampleItems() -> [ContextMenuItem] {
+    return [
+        .action(ContextMenuActionItem(
+            title: "Копировать",
+            icon: UIImage(systemName: "doc.on.doc"),
+            action: { _, handle in
+                AetherToastController(content: .text("Copied")).present()
+                handle.dismiss()
+            }
+        )),
+        .action(ContextMenuActionItem(
+            title: "Поделиться",
+            icon: UIImage(systemName: "square.and.arrow.up"),
+            action: { _, handle in
+                AetherToastController(content: .text("Shared")).present()
+                handle.dismiss()
+            }
+        )),
+        .action(ContextMenuActionItem(
+            title: "Ещё",
+            icon: UIImage(systemName: "chevron.right"),
+            submenu: [
+                .action(ContextMenuActionItem(
+                    title: "Пункт 1",
+                    icon: UIImage(systemName: "1.circle"),
+                    action: { _, handle in handle.dismiss() }
+                )),
+                .action(ContextMenuActionItem(
+                    title: "Пункт 2",
+                    icon: UIImage(systemName: "2.circle"),
+                    action: { _, handle in handle.dismiss() }
+                ))
+            ]
+        )),
+        .separator,
+        .action(ContextMenuActionItem(
+            title: "Удалить",
+            icon: UIImage(systemName: "trash"),
+            textColor: .destructive,
+            action: { _, handle in
+                AetherToastController(content: .text("Deleted")).present()
+                handle.dismiss()
+            }
+        ))
+    ]
+}
+
+private extension UIViewController {
+    @AssociatedObject(.retain(.nonatomic))
+    var navbarButtonActionTarget: NavbarButtonActionTarget?
+}
+
+private final class NavbarButtonActionTarget: NSObject {
+    private let action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc func invoke() {
+        action()
+    }
 }

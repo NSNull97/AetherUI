@@ -1,4 +1,13 @@
 import UIKit
+import AssociatedObject
+
+private extension UIBarButtonItem {
+    @AssociatedObject(.retain(.nonatomic))
+    var aetherContextMenuProviderBox: AetherContextMenuProviderBox?
+
+    @AssociatedObject(.retain(.nonatomic))
+    var aetherSeparatesSharedBackground: Bool = false
+}
 
 // MARK: - UIBarButtonItem + ContextMenu
 
@@ -17,8 +26,8 @@ import UIKit
 /// how UIKit's own `UIBarButtonItem.menu` overrides tap when set.
 ///
 /// **How the navbar finds the provider.** Stored as an associated object
-/// on the bar item via `objc_setAssociatedObject`. `NavigationBarImpl`'s
-/// glass-button layout reads it (`item.contextMenuItemsProvider`)
+/// on the bar item. `NavigationBarImpl`'s glass-button layout reads it
+/// (`item.contextMenuItemsProvider`)
 /// and replaces the `GlassControlGroup` action with a "show menu" closure
 /// when present.
 public extension UIBarButtonItem {
@@ -56,20 +65,31 @@ public extension UIBarButtonItem {
     /// without using the dedicated convenience init above.
     var contextMenuItemsProvider: (() -> [ContextMenuItem])? {
         get {
-            (objc_getAssociatedObject(self, &Self.providerKey) as? AetherContextMenuProviderBox)?.provider
+            aetherContextMenuProviderBox?.provider
         }
         set {
-            let box = newValue.map(AetherContextMenuProviderBox.init(provider:))
-            objc_setAssociatedObject(self, &Self.providerKey, box, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            aetherContextMenuProviderBox = newValue.map(AetherContextMenuProviderBox.init(provider:))
         }
     }
 
-    private static var providerKey: UInt8 = 0
+    /// AetherUI equivalent of iOS 26's `hidesSharedBackground`.
+    ///
+    /// When true, this bar item is rendered in its own floating glass
+    /// background instead of being merged into the adjacent shared capsule.
+    /// Set it on the `UIBarButtonItem` before assigning it through
+    /// `navigationItem.leftBarButtonItems` / `rightBarButtonItems`.
+    var separatesSharedBackground: Bool {
+        get {
+            aetherSeparatesSharedBackground
+        }
+        set {
+            aetherSeparatesSharedBackground = newValue
+        }
+    }
 }
 
-/// Box around the `() -> [ContextMenuItem]` closure so it can be stored
-/// via `objc_setAssociatedObject` (which only retains Objective-C
-/// reference-typed values).
+/// Box around the `() -> [ContextMenuItem]` closure so the associated
+/// object stores a stable reference-typed value.
 private final class AetherContextMenuProviderBox {
     let provider: () -> [ContextMenuItem]
     init(provider: @escaping () -> [ContextMenuItem]) {

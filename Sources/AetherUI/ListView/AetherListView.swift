@@ -72,6 +72,33 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     }
     private var _insets: UIEdgeInsets = .zero
 
+    /// Insets used for sticky/header positioning. Defaults to `insets` when
+    /// unset, mirroring Telegram's `headerInsets ?? insets` behaviour.
+    public var headerInsets: UIEdgeInsets? {
+        didSet {
+            applyStickyHeaderLayout()
+        }
+    }
+
+    /// Optional scroll-indicator insets distinct from content insets.
+    public var scrollIndicatorInsets: UIEdgeInsets? {
+        didSet {
+            applyEffectiveInsets()
+        }
+    }
+
+    /// Insets applied to the item offset coordinate system. This is useful
+    /// when callers need row geometry offset from the scroll content's raw
+    /// origin without baking spacer rows into the data source.
+    public var itemOffsetInsets: UIEdgeInsets? {
+        didSet {
+            rebuildOffsets()
+            positionNodes()
+            updateContentSize()
+            applyStickyHeaderLayout()
+        }
+    }
+
     /// When `true`, the list view listens for `UIKeyboardWill…`
     /// notifications and grows `scrollView.contentInset.bottom` by
     /// the on-screen keyboard's overlap with the list. Animation
@@ -114,7 +141,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         // caller positioned it (under their navbar etc.) instead of
         // sliding under the new chrome.
         transition.updateContentInset(scrollView: scrollView, insets: effective)
-        transition.updateScrollIndicatorInsets(scrollView: scrollView, insets: effective)
+        transition.updateScrollIndicatorInsets(scrollView: scrollView, insets: scrollIndicatorInsets ?? effective)
     }
 
     /// Update `insets` and propagate through `transition` so the
@@ -220,6 +247,11 @@ open class AetherListView: UIView, UIScrollViewDelegate {
 
     /// Called when an item is tapped.
     public var itemTapped: ((Int) -> Void)?
+
+    /// Opaque caller-owned state attached to the latest transaction. The list
+    /// does not interpret it; it is kept so higher-level code can keep parity
+    /// with Telegram's `updateOpaqueState` transaction channel.
+    public private(set) var opaqueState: Any?
 
     // MARK: - Read-only State
 
@@ -630,9 +662,20 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// Animation duration for transactions.
     private let animationDuration: Double = 0.3
 
+    /// Visible lifetime for the Telegram-style dust burst. Keep neighbour
+    /// slide, source fade, and delayed removal tied to one value so the row
+    /// does not disappear on one timeline while particles run on another.
+    private let particleDissolveVisualDuration: TimeInterval = 0.8
+
+    /// The shader keeps Telegram's original particle lifetime distribution;
+    /// drive the overlay faster for list deletes so the dust cloud resolves
+    /// on the same shorter timeline as the row fade.
+    private let particleDissolveDustAnimationSpeed: Float = 2.0
+
     /// Pending transaction queue (serialized).
     private var isProcessingTransaction = false
     private var pendingTransactions: [() -> Void] = []
+    private var afterTransactionsCompleted: [() -> Void] = []
 
     // MARK: - Init
 
@@ -740,7 +783,10 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         updateIndicesAndItems: [AetherListUpdateItem] = [],
         options: AetherListTransactionOptions = [],
         scrollToItem: AetherListScrollToItem? = nil,
+        additionalScrollDistance: CGFloat = 0.0,
         updateSizeAndInsets: AetherListUpdateSizeAndInsets? = nil,
+        stationaryItemRange: (Int, Int)? = nil,
+        updateOpaqueState: Any? = nil,
         completion: ((AetherListDisplayedItemRange) -> Void)? = nil
     ) {
         let work: () -> Void = { [weak self] in
@@ -752,12 +798,15 @@ open class AetherListView: UIView, UIScrollViewDelegate {
                 updateIndicesAndItems: updateIndicesAndItems,
                 options: options,
                 scrollToItem: scrollToItem,
+                additionalScrollDistance: additionalScrollDistance,
                 updateSizeAndInsets: updateSizeAndInsets,
+                stationaryItemRange: stationaryItemRange,
+                updateOpaqueState: updateOpaqueState,
                 completion: completion
             )
         }
 
-        if isProcessingTransaction {
+        if isProcessingTransaction && !options.contains(.synchronous) && !options.contains(.lowLatency) {
             pendingTransactions.append(work)
         } else {
             work()
@@ -783,6 +832,20 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         }
     }
 
+    public func forEachItemNode(_ body: (AetherListItemNode) -> Void) {
+        for node in itemNodes {
+            body(node)
+        }
+    }
+
+    public func enumerateItemNodes(_ body: (AetherListItemNode) -> Bool) {
+        for node in itemNodes {
+            if !body(node) {
+                break
+            }
+        }
+    }
+
     /// Find the visible node for an item at the given index.
     public func nodeForItem(at index: Int) -> AetherListItemNode? {
         return itemNodes.first { $0.index == index }
@@ -791,6 +854,52 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// Current visible content offset from top.
     public func visibleContentOffset() -> CGFloat {
         return scrollView.contentOffset.y + scrollView.contentInset.top
+    }
+
+    /// Current visible content offset from bottom.
+    public func visibleBottomContentOffset() -> CGFloat {
+        return scrollView.contentSize.height + scrollView.contentInset.bottom - scrollView.bounds.height - scrollView.contentOffset.y
+    }
+
+    /// Run `f` after the currently executing/queued transactions settle.
+    public func addAfterTransactionsCompleted(_ f: @escaping () -> Void) {
+        if isProcessingTransaction || !pendingTransactions.isEmpty {
+            afterTransactionsCompleted.append(f)
+        } else {
+            f()
+        }
+    }
+
+    /// UIKit scroll views do not expose velocity transfer directly; this
+    /// method keeps Telegram-compatible call sites valid and nudges the offset
+    /// by one frame worth of velocity for handoff gestures.
+    public func transferVelocity(_ velocity: CGFloat) {
+        guard !velocity.isZero else { return }
+        let delta = velocity / 60.0
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: scrollView.contentOffset.y - delta), animated: false)
+    }
+
+    public func resetScrolledToItem() {
+        scrollView.layer.removeAllAnimations()
+    }
+
+    @discardableResult
+    public func ensureItemNodeVisible(_ node: AetherListItemNode, animated: Bool, overflow: CGFloat = 0.0, allowIntersection: Bool = true, atTop: Bool = false) -> Bool {
+        guard itemNodes.contains(where: { $0 === node }) else { return false }
+        let viewportTop = scrollView.contentOffset.y + scrollView.contentInset.top
+        let viewportBottom = scrollView.contentOffset.y + bounds.height - scrollView.contentInset.bottom
+        let frame = node.frame.inset(by: node.scrollPositioningInsets)
+        if allowIntersection, frame.maxY > viewportTop, frame.minY < viewportBottom {
+            return false
+        }
+        let targetY: CGFloat
+        if atTop {
+            targetY = frame.minY - scrollView.contentInset.top - overflow
+        } else {
+            targetY = frame.maxY - bounds.height + scrollView.contentInset.bottom + overflow
+        }
+        scrollView.setContentOffset(CGPoint(x: 0.0, y: targetY), animated: animated)
+        return true
     }
 
     // MARK: - Private: Transaction Execution
@@ -802,10 +911,16 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         updateIndicesAndItems: [AetherListUpdateItem],
         options: AetherListTransactionOptions,
         scrollToItem: AetherListScrollToItem?,
+        additionalScrollDistance: CGFloat,
         updateSizeAndInsets: AetherListUpdateSizeAndInsets?,
+        stationaryItemRange: (Int, Int)?,
+        updateOpaqueState: Any?,
         completion: ((AetherListDisplayedItemRange) -> Void)?
     ) {
         isProcessingTransaction = true
+        if let updateOpaqueState {
+            opaqueState = updateOpaqueState
+        }
 
         // Snapshot whether the user is "at the bottom" BEFORE any
         // inserts grow the content size — needed for chat-style
@@ -813,11 +928,47 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         let wasNearBottom = stackFromBottom && isNearBottom(tolerance: stackFromBottomAutoAnchorTolerance)
 
         if let update = updateSizeAndInsets {
-            insets = update.insets
-            // Caller resizes the view itself — only insets are tracked here.
+            let updateTransition: ContainedViewLayoutTransition = update.customTransition ?? (update.duration > .ulpOfOne
+                ? .animated(duration: update.duration, curve: update.curve)
+                : .immediate)
+            if update.size.width > 0.0, update.size.height > 0.0, bounds.size != update.size {
+                updateTransition.updateFrame(view: self, frame: CGRect(origin: frame.origin, size: update.size))
+                layoutParams = AetherListItemLayoutParams(
+                    width: update.size.width,
+                    leftInset: safeAreaInsets.left,
+                    rightInset: safeAreaInsets.right,
+                    availableHeight: update.size.height
+                )
+            }
+            headerInsets = update.headerInsets
+            scrollIndicatorInsets = update.scrollIndicatorInsets
+            itemOffsetInsets = update.itemOffsetInsets
+            updateInsets(update.insets, transition: updateTransition)
+        } else if options.contains(.forceUpdate), let params = layoutParams {
+            relayoutAllNodes(params: params)
         }
 
         let animate = options.contains(.animateInsertions)
+            || options.contains(.requestItemInsertionAnimations)
+            || options.contains(.animateFullTransition)
+            || insertIndicesAndItems.contains(where: { $0.forceAnimateInsertion })
+        let animateAlpha = options.contains(.animateAlpha)
+        func applyAdditionalScrollDistance(_ distance: CGFloat, animated: Bool) {
+            guard !distance.isZero else { return }
+            let targetOffset = CGPoint(
+                x: scrollView.contentOffset.x,
+                y: scrollView.contentOffset.y + distance
+            )
+            if let update = updateSizeAndInsets, update.duration > .ulpOfOne {
+                ContainedViewLayoutTransition
+                    .animated(duration: update.duration, curve: update.curve)
+                    .animateView {
+                        self.scrollView.contentOffset = targetOffset
+                    }
+            } else {
+                scrollView.setContentOffset(targetOffset, animated: animated)
+            }
+        }
 
         // 1. Snapshot the geometry of every loaded node BEFORE the
         //    items array shifts. Used to drive the slide-into-the-gap
@@ -825,14 +976,53 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         //    to whatever Y its (possibly different) index resolves to
         //    after the dust settles.
         var preFrames: [ObjectIdentifier: CGRect] = [:]
+        var preNodesByIndex: [Int: AetherListItemNode] = [:]
+        var preFramesByIndex: [Int: CGRect] = [:]
         for node in itemNodes {
             preFrames[ObjectIdentifier(node)] = node.frame
+            if let index = node.index {
+                preNodesByIndex[index] = node
+                preFramesByIndex[index] = node.frame
+            }
+        }
+        let stationaryItemIndex: Int? = stationaryItemRange.flatMap { range in
+            let lower = min(range.0, range.1)
+            let upper = max(range.0, range.1)
+            return (lower...upper).first(where: { preFramesByIndex[$0] != nil })
         }
 
         // 2. Collect nodes about to disappear, then mutate the items
         //    array. Sorting deletes descending keeps lower indices
         //    valid as we go.
         var removingNodes: [(AetherListItemNode, AetherListItemDeleteAnimation, AetherListItemOperationDirectionHint?)] = []
+        var consumedPreviousNodeIds = Set<ObjectIdentifier>()
+        func takePreviousNode(previousIndex: Int, targetIndex: Int) -> AetherListItemNode? {
+            guard let node = preNodesByIndex[previousIndex] else {
+                return nil
+            }
+            let nodeId = ObjectIdentifier(node)
+            guard !consumedPreviousNodeIds.contains(nodeId) else {
+                return nil
+            }
+            consumedPreviousNodeIds.insert(nodeId)
+
+            if let removingIndex = removingNodes.firstIndex(where: { $0.0 === node }) {
+                removingNodes.remove(at: removingIndex)
+            }
+            if let duplicateIndex = itemNodes.firstIndex(where: { $0 !== node && $0.index == targetIndex }) {
+                let duplicate = itemNodes.remove(at: duplicateIndex)
+                duplicate.removeFromSuperview()
+            }
+            if !itemNodes.contains(where: { $0 === node }) {
+                itemNodes.append(node)
+            }
+            if node.superview !== scrollView {
+                scrollView.addSubview(node)
+            }
+            node.index = targetIndex
+            return node
+        }
+
         let sortedDeletes = deleteIndices.sorted { $0.index > $1.index }
         for delete in sortedDeletes {
             guard delete.index < items.count else { continue }
@@ -860,10 +1050,22 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         // 4. Apply inserts. Sorted ascending so earlier inserts don't
         //    shift the target indices of later ones in the same batch.
         let sortedInserts = insertIndicesAndItems.sorted { $0.index < $1.index }
+        var insertPreviousIndexByTargetIndex: [Int: Int] = [:]
+        var insertDirectionHintByTargetIndex: [Int: AetherListItemOperationDirectionHint] = [:]
+        var forceAnimateInsertionIndices = Set<Int>()
         for insert in sortedInserts {
             let idx = min(insert.index, items.count)
             items.insert(insert.item, at: idx)
             itemHeights.insert(insert.item.approximateHeight, at: idx)
+            if let previousIndex = insert.previousIndex {
+                insertPreviousIndexByTargetIndex[idx] = previousIndex
+            }
+            if let directionHint = insert.directionHint {
+                insertDirectionHintByTargetIndex[idx] = directionHint
+            }
+            if insert.forceAnimateInsertion {
+                forceAnimateInsertionIndices.insert(idx)
+            }
         }
 
         // 5. Re-index every surviving node by object identity. Walking
@@ -893,12 +1095,22 @@ open class AetherListView: UIView, UIScrollViewDelegate {
             items[update.index] = update.item
             itemIdentityToIndex[ObjectIdentifier(update.item)] = update.index
 
-            if let node = itemNodes.first(where: { $0.index == update.index }) {
+            let node = takePreviousNode(previousIndex: update.previousIndex, targetIndex: update.index)
+                ?? itemNodes.first(where: { $0.index == update.index })
+            if let node {
                 let prevItem = update.index > 0 ? items[update.index - 1] : nil
                 let nextItem = update.index + 1 < items.count ? items[update.index + 1] : nil
-                let animation: AetherListItemUpdateAnimation = options.contains(.crossfade) ? .crossfade : .none
+                let animation: AetherListItemUpdateAnimation
+                if options.contains(.crossfade) {
+                    animation = .crossfade
+                } else if options.contains(.animateFullTransition) {
+                    animation = .system(duration: animationDuration, transition: .animated(duration: animationDuration, curve: .easeInOut))
+                } else {
+                    animation = .none
+                }
                 let newLayout = update.item.updateNode(node, params: params, previousItem: prevItem, nextItem: nextItem, animation: animation)
                 node.applyLayout(newLayout)
+                node.index = update.index
                 node.item = update.item
                 itemHeights[update.index] = newLayout.totalHeight
             }
@@ -916,7 +1128,26 @@ open class AetherListView: UIView, UIScrollViewDelegate {
             let item = items[i]
             let prevItem = i > 0 ? items[i - 1] : nil
             let nextItem = i + 1 < items.count ? items[i + 1] : nil
-            let (node, layout) = item.createNode(params: params, previousItem: prevItem, nextItem: nextItem)
+            let node: AetherListItemNode
+            let layout: AetherListItemNodeLayout
+            if let previousIndex = insertPreviousIndexByTargetIndex[i],
+               let previousNode = takePreviousNode(previousIndex: previousIndex, targetIndex: i) {
+                node = previousNode
+                let animation: AetherListItemUpdateAnimation
+                if options.contains(.crossfade) {
+                    animation = .crossfade
+                } else if options.contains(.animateFullTransition) {
+                    animation = .system(duration: animationDuration, transition: .animated(duration: animationDuration, curve: .easeInOut))
+                } else {
+                    animation = .none
+                }
+                layout = item.updateNode(previousNode, params: params, previousItem: prevItem, nextItem: nextItem, animation: animation)
+            } else {
+                let created = item.createNode(params: params, previousItem: prevItem, nextItem: nextItem)
+                node = created.0
+                layout = created.1
+                insertedNodes.append(node)
+            }
             node.applyLayout(layout)
             node.index = i
             node.item = item
@@ -924,9 +1155,12 @@ open class AetherListView: UIView, UIScrollViewDelegate {
                 node.isSelected = true
             }
             itemHeights[i] = layout.totalHeight
-            itemNodes.append(node)
-            insertedNodes.append(node)
-            scrollView.addSubview(node)
+            if !itemNodes.contains(where: { $0 === node }) {
+                itemNodes.append(node)
+            }
+            if node.superview !== scrollView {
+                scrollView.addSubview(node)
+            }
         }
 
         itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
@@ -937,6 +1171,30 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         // 8. Settle frames. New nodes go straight to their final spot;
         //    surviving nodes either snap (no animation) or animate from
         //    `preFrames[node]` to the freshly computed slot.
+        //
+        //    The neighbour slide-into-the-gap duration normally tracks
+        //    `animationDuration` (~0.3s). When at least one delete is a
+        //    particle dissolve, that 0.3s is *too short*: rows below would
+        //    finish climbing into the freed slot in a third of a second
+        //    while the particle wave is still mid-burst above their old
+        //    position — the cloud ends up floating disconnected from any
+        //    visible row. Stretch the slide to match the particle wave's
+        //    full lifetime so the gap closes at the same pace the cloud
+        //    dissipates: visually the row "becomes" the cloud and the
+        //    rows below "absorb" the now-empty space in lockstep.
+        let particleDissolveDuration = particleDissolveVisualDuration
+        let hasParticleDissolve = removingNodes.contains { _, animation, _ in
+            if case .particleDissolve = animation { return true }
+            return false
+        }
+        let effectiveSlideDuration = hasParticleDissolve ? particleDissolveDuration : animationDuration
+        // EaseOut so most of the gap-closing happens early (under the
+        // densest part of the cloud) and the last few percent stretch out
+        // — matching the easeOut applied to the dissolving node's alpha.
+        let effectiveSlideOptions: UIView.AnimationOptions = hasParticleDissolve
+            ? [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut]
+            : [.beginFromCurrentState, .allowUserInteraction]
+
         if animate {
             for node in itemNodes {
                 guard let index = node.index, index < itemOffsets.count else { continue }
@@ -949,13 +1207,33 @@ open class AetherListView: UIView, UIScrollViewDelegate {
                 let nodeId = ObjectIdentifier(node)
                 if insertedNodes.contains(where: { $0 === node }) {
                     node.frame = targetFrame
-                    node.animateInsertion(duration: animationDuration)
+                    if animateAlpha {
+                        node.alpha = 0.0
+                        UIView.animate(
+                            withDuration: min(animationDuration, 0.1),
+                            delay: 0,
+                            options: [.beginFromCurrentState, .allowUserInteraction],
+                            animations: { node.alpha = 1.0 },
+                            completion: nil
+                        )
+                    } else {
+                        let directionHint = insertDirectionHintByTargetIndex[index]
+                        let forceAnimate = forceAnimateInsertionIndices.contains(index)
+                            || options.contains(.requestItemInsertionAnimations)
+                        if forceAnimate || animate {
+                            node.animateInsertion(
+                                duration: animationDuration,
+                                directionHint: directionHint,
+                                invertOffsetDirection: options.contains(.invertOffsetDirection)
+                            )
+                        }
+                    }
                 } else if let from = preFrames[nodeId], from != targetFrame {
                     node.frame = from
                     UIView.animate(
-                        withDuration: animationDuration,
+                        withDuration: effectiveSlideDuration,
                         delay: 0,
-                        options: [.beginFromCurrentState, .allowUserInteraction],
+                        options: effectiveSlideOptions,
                         animations: { node.frame = targetFrame },
                         completion: nil
                     )
@@ -964,7 +1242,17 @@ open class AetherListView: UIView, UIScrollViewDelegate {
                 }
             }
             for (node, animation, hint) in removingNodes {
-                runDeleteAnimation(animation, on: node, hint: hint) {
+                let resolvedAnimation: AetherListItemDeleteAnimation
+                if animateAlpha {
+                    if case .particleDissolve = animation {
+                        resolvedAnimation = animation
+                    } else {
+                        resolvedAnimation = .fade
+                    }
+                } else {
+                    resolvedAnimation = animation
+                }
+                runDeleteAnimation(resolvedAnimation, on: node, hint: hint) {
                     node.removeFromSuperview()
                 }
             }
@@ -981,7 +1269,20 @@ open class AetherListView: UIView, UIScrollViewDelegate {
 
         // 10. Honour scroll-to + notify subscribers.
         if let scrollTo = scrollToItem {
-            self.scrollToItem(at: scrollTo.index, position: scrollTo.position, animated: scrollTo.animated)
+            if scrollTo.index >= 0, scrollTo.index < items.count {
+                let targetY = computeScrollOffset(for: scrollTo.index, position: scrollTo.position) + additionalScrollDistance
+                scrollView.setContentOffset(CGPoint(x: 0, y: targetY), animated: scrollTo.animated)
+            }
+        } else if !additionalScrollDistance.isZero {
+            applyAdditionalScrollDistance(additionalScrollDistance, animated: animate)
+        } else if let stationaryItemIndex,
+                  let previousFrame = preFramesByIndex[stationaryItemIndex],
+                  let node = itemNodes.first(where: { $0.index == stationaryItemIndex }) {
+            let delta = node.frame.minY - previousFrame.minY
+            if abs(delta) > CGFloat.ulpOfOne {
+                let targetOffset = CGPoint(x: scrollView.contentOffset.x, y: scrollView.contentOffset.y + delta)
+                scrollView.setContentOffset(targetOffset, animated: options.contains(.animateTopItemPosition) && animate)
+            }
         } else if stackFromBottom && wasNearBottom {
             // Chat-style anchor: if the user was at the bottom, keep
             // them there after the transaction even when new items
@@ -998,6 +1299,10 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         if let next = pendingTransactions.first {
             pendingTransactions.removeFirst()
             next()
+        } else if !afterTransactionsCompleted.isEmpty {
+            let callbacks = afterTransactionsCompleted
+            afterTransactionsCompleted.removeAll()
+            callbacks.forEach { $0() }
         }
     }
 
@@ -1087,7 +1392,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         let savedAlpha = target.alpha
         target.alpha = 1
         let snapshot = AetherDustEffectView.snapshot(of: target)
-        target.alpha = 0
+        target.alpha = savedAlpha
 
         guard let snapshot = snapshot else {
             target.alpha = savedAlpha
@@ -1105,19 +1410,26 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         // values quadratically reduce per-frame compute and prevent
         // micro-stutters when the burst overlaps other animations.
         let frameInOverlay = target.convert(target.bounds, to: dustView)
+        dustView.animationSpeed = particleDissolveDustAnimationSpeed
         dustView.addItem(frame: frameInOverlay, image: snapshot, tileSize: tileSize)
 
-        // Fade the node down in lockstep so neighbouring layout
-        // animations (slide-up of rows below) read clean even if
-        // Metal drops a frame.
-        UIView.animate(withDuration: 0.3, animations: {
-            node.alpha = 0
-        })
+        // Match the node's alpha decay to the shortened particle wave: the
+        // row should look like it dissolves into the cloud, but the deletion
+        // needs to resolve quickly enough for chat-like list interactions.
+        // easeOut keeps the densest part of the cloud covering the source
+        // while the last particles fade out.
+        let dissolveDuration = particleDissolveVisualDuration
+        UIView.animate(
+            withDuration: dissolveDuration,
+            delay: 0,
+            options: [.curveEaseOut, .beginFromCurrentState],
+            animations: { node.alpha = 0 }
+        )
 
-        // Telegram's lifetime range is 0.7…1.5s plus the wave window;
-        // 1.6s covers the worst case before we drop the node from
-        // the hierarchy.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+        // Drop the node from the hierarchy at the same moment the fade
+        // settles — keeps the visual deletion event ("row gone") in sync
+        // with the wave's end. Neighbours slide up from this point on.
+        DispatchQueue.main.asyncAfter(deadline: .now() + dissolveDuration) {
             completion()
         }
     }
@@ -1166,12 +1478,13 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     private func rebuildOffsets() {
         itemOffsets = []
         itemOffsets.reserveCapacity(items.count)
-        var y: CGFloat = 0
+        let offsetInsets = itemOffsetInsets ?? .zero
+        var y: CGFloat = offsetInsets.top
         for height in itemHeights {
             itemOffsets.append(y)
             y += height
         }
-        totalContentHeight = y
+        totalContentHeight = y + offsetInsets.bottom
         // `stackFromBottom`'s top padding depends on
         // `totalContentHeight`, so any time the height changes the
         // effective insets need a refresh.
@@ -1192,6 +1505,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
             guard let index = node.index, index < itemOffsets.count else { continue }
             let y = itemOffsets[index]
             node.frame = CGRect(x: 0, y: y, width: bounds.width, height: itemHeights[index])
+            node.updateAbsoluteRect(node.frame, within: bounds.size)
         }
     }
 
@@ -1325,29 +1639,50 @@ open class AetherListView: UIView, UIScrollViewDelegate {
 
     private func computeScrollOffset(for index: Int, position: AetherListScrollPosition) -> CGFloat {
         guard index < itemOffsets.count else { return 0 }
-        let itemTop = itemOffsets[index]
-        let itemHeight = itemHeights[index]
+        let nodeInsets = itemNodes.first(where: { $0.index == index })?.scrollPositioningInsets ?? .zero
+        let itemTop = itemOffsets[index] + nodeInsets.top
+        let itemHeight = max(0.0, itemHeights[index] - nodeInsets.top - nodeInsets.bottom)
+        let itemBottom = itemTop + itemHeight
+        let effectiveTopInset = insets.top
+        let effectiveBottomInset = insets.bottom
 
         switch position {
         case .visible:
             let currentTop = scrollView.contentOffset.y
             let currentBottom = currentTop + bounds.height
-            if itemTop >= currentTop && itemTop + itemHeight <= currentBottom {
+            if itemTop >= currentTop && itemBottom <= currentBottom {
                 return scrollView.contentOffset.y // already visible
             }
             if itemTop < currentTop {
-                return itemTop - insets.top
+                return itemTop - effectiveTopInset
             }
-            return itemTop + itemHeight - bounds.height + insets.bottom
+            return itemBottom - bounds.height + effectiveBottomInset
 
         case .top(let offset):
-            return itemTop - insets.top - offset
+            return itemTop - effectiveTopInset - offset
 
         case .bottom(let offset):
-            return itemTop + itemHeight - bounds.height + insets.bottom + offset
+            return itemBottom - bounds.height + effectiveBottomInset + offset
 
         case .center:
             return itemTop + itemHeight / 2 - bounds.height / 2
+
+        case .centerWithOverflow(let overflow):
+            let contentAreaHeight = bounds.height - effectiveTopInset - effectiveBottomInset
+            if itemHeight <= contentAreaHeight + CGFloat.ulpOfOne {
+                return itemTop + itemHeight / 2 - bounds.height / 2
+            }
+            switch overflow {
+            case .top:
+                return itemTop - effectiveTopInset
+            case .bottom:
+                return itemBottom - bounds.height + effectiveBottomInset
+            case .custom(let getOverflow):
+                if let node = itemNodes.first(where: { $0.index == index }) {
+                    return itemBottom - bounds.height + effectiveBottomInset + getOverflow(node)
+                }
+                return itemTop - effectiveTopInset
+            }
         }
     }
 
@@ -1368,13 +1703,17 @@ open class AetherListView: UIView, UIScrollViewDelegate {
         let viewportBottom = viewportTop + bounds.height
         var visibleFirst: Int?
         var visibleLast: Int?
+        var firstFullyVisible = false
 
         for node in itemNodes {
             guard let index = node.index else { continue }
             let nodeTop = node.frame.minY
             let nodeBottom = node.frame.maxY
             if nodeBottom > viewportTop && nodeTop < viewportBottom {
-                if visibleFirst == nil { visibleFirst = index }
+                if visibleFirst == nil {
+                    visibleFirst = index
+                    firstFullyVisible = nodeTop >= viewportTop && nodeBottom <= viewportBottom
+                }
                 visibleLast = index
             }
         }
@@ -1386,7 +1725,14 @@ open class AetherListView: UIView, UIScrollViewDelegate {
             visibleRange = nil
         }
 
-        return AetherListDisplayedItemRange(loadedRange: loadedRange, visibleRange: visibleRange)
+        let visibleItemRange: AetherListVisibleItemRange?
+        if let first = visibleFirst, let last = visibleLast {
+            visibleItemRange = AetherListVisibleItemRange(firstIndex: first, firstIndexFullyVisible: firstFullyVisible, lastIndex: last)
+        } else {
+            visibleItemRange = nil
+        }
+
+        return AetherListDisplayedItemRange(loadedRange: loadedRange, visibleRange: visibleRange, visibleItemRange: visibleItemRange)
     }
 
     // MARK: - Sticky headers
@@ -1396,7 +1742,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// the last one whose natural Y is at or above the viewport top
     /// wins. Returns `nil` when nothing has scrolled past yet.
     private func currentStickyHeaderIndex() -> Int? {
-        let viewportTop = scrollView.contentOffset.y
+        let viewportTop = scrollView.contentOffset.y + (headerInsets ?? insets).top
         var found: Int?
         for (i, item) in items.enumerated() {
             guard item.isFloatingHeader, i < itemOffsets.count else { continue }
@@ -1443,7 +1789,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     private func applyStickyHeaderLayout() {
         guard !items.isEmpty, !itemOffsets.isEmpty else { return }
 
-        let viewportTop = scrollView.contentOffset.y
+        let viewportTop = scrollView.contentOffset.y + (headerInsets ?? insets).top
 
         // Collect sticky-header indices in order.
         var headerIndices: [Int] = []

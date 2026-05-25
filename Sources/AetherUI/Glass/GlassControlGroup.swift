@@ -42,6 +42,7 @@ public final class GlassControlGroup: UIView {
     // MARK: - Subviews
 
     private let backgroundView: GlassBackgroundView
+    private let controlsView: UIView
     private var itemViews: [ItemEntry] = []
 
     private struct ItemEntry {
@@ -51,6 +52,7 @@ public final class GlassControlGroup: UIView {
         let contentView: UIView
         var contentInsets: UIEdgeInsets
         var isInteractive: Bool
+        var itemFrame: CGRect
     }
 
     private enum ContentId: Hashable {
@@ -64,6 +66,8 @@ public final class GlassControlGroup: UIView {
     public private(set) var items: [Item] = []
     public private(set) var background: Background = .panel
     public private(set) var preferClearGlass: Bool = false
+    private var currentTintColor: GlassBackgroundView.TintColor = .init(kind: .panel)
+    private var currentIsInteractive: Bool = false
     public var foregroundColor: UIColor = .label {
         didSet {
             applyForegroundColorToItems()
@@ -84,6 +88,22 @@ public final class GlassControlGroup: UIView {
     }
 
     public var minWidth: CGFloat = 44.0
+    public var animatesInsertedItemsAlpha: Bool = true
+    private var naturalSize: CGSize = .zero
+    private var updateGeneration: Int = 0
+
+    private enum Overspring {
+        static let itemChangeAmplitude: CGFloat = 0.110
+        static let groupRemovalAmplitude: CGFloat = 0.095
+        static let itemTransitionScale: CGFloat = 0.94
+    }
+
+    public enum TransitionChromeContentAlignment {
+        case leading
+        case trailing
+    }
+
+    public var transitionContentAlignment: TransitionChromeContentAlignment = .leading
 
     // MARK: - Init
 
@@ -91,10 +111,13 @@ public final class GlassControlGroup: UIView {
 
     public init(style: GlassBackgroundView.Style = .regular) {
         self.backgroundView = GlassBackgroundView(style: style)
+        self.controlsView = UIView()
 
         super.init(frame: .zero)
 
+        controlsView.clipsToBounds = true
         addSubview(backgroundView)
+        backgroundView.contentView.addSubview(controlsView)
 
         // iOS ≤25 doesn't have UIGlassEffect.isInteractive — port the
         // Telegram elastic touch feedback so the whole capsule (glass
@@ -104,7 +127,7 @@ public final class GlassControlGroup: UIView {
         if #unavailable(iOS 26.0) {
             let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
             elastic.touchEffectView = self
-            elastic.highlightContainerView = backgroundView.contentView
+            elastic.highlightContainerView = controlsView
             addGestureRecognizer(elastic)
             self.elasticRecognizer = elastic
         }
@@ -126,6 +149,8 @@ public final class GlassControlGroup: UIView {
         minWidth: CGFloat = 44.0,
         transition: ContainedViewLayoutTransition = .immediate
     ) -> CGSize {
+        updateGeneration += 1
+        let generation = updateGeneration
         self.items = items
         self.background = background
         self.preferClearGlass = preferClearGlass
@@ -146,16 +171,18 @@ public final class GlassControlGroup: UIView {
             tintColor = .init(kind: .custom(style: preferClearGlass ? .clear : .default, color: color))
             derivedForeground = foregroundColor ?? .white
         }
+        self.currentTintColor = tintColor
         self.foregroundColor = derivedForeground
 
         // Diff item views by (id, content-id).
         var newEntries: [ItemEntry] = []
         newEntries.reserveCapacity(items.count)
 
-        let alphaTransition: ContainedViewLayoutTransition = transition.isAnimated ? .animated(duration: 0.2, curve: .easeInOut) : .immediate
-
         var isInteractiveOverall = false
         var contentsWidth: CGFloat = 0.0
+        var didChangeVisualItems = false
+        var insertedEntryCount = 0
+        var removedEntryCount = 0
 
         for item in items {
             let contentId: ContentId
@@ -185,16 +212,22 @@ public final class GlassControlGroup: UIView {
             // Reuse existing entry with matching id & contentId.
             let existingIndex = itemViews.firstIndex { $0.id == item.id && $0.contentId == contentId }
             var entry: ItemEntry
+            let contentView: UIView
+            let isNewEntry: Bool
             if let existingIndex {
                 entry = itemViews.remove(at: existingIndex)
                 entry.contentInsets = item.contentInsets
                 entry.isInteractive = item.action != nil
                 // Keep existing content view; just update action.
+                contentView = entry.contentView
+                isNewEntry = false
             } else {
                 let button = HighlightTrackingButton(type: .custom)
                 button.isUserInteractionEnabled = item.action != nil
                 button.addSubview(freshView)
-                backgroundView.contentView.addSubview(button)
+                controlsView.addSubview(button)
+                didChangeVisualItems = true
+                insertedEntryCount += 1
 
                 entry = ItemEntry(
                     id: item.id,
@@ -202,15 +235,20 @@ public final class GlassControlGroup: UIView {
                     button: button,
                     contentView: freshView,
                     contentInsets: item.contentInsets,
-                    isInteractive: item.action != nil
+                    isInteractive: item.action != nil,
+                    itemFrame: .zero
                 )
-                button.alpha = 0.0
-                alphaTransition.updateAlpha(view: button, alpha: item.action != nil ? 1.0 : 0.5)
+                contentView = freshView
+                isNewEntry = true
+                animateInsertedButton(button, targetAlpha: item.action != nil ? 1.0 : 0.5, transition: transition)
             }
 
             // Wire action.
             entry.button.onTap = { item.action?() }
-            entry.button.alpha = item.action != nil ? 1.0 : 0.5
+            entry.button.isUserInteractionEnabled = item.action != nil
+            if !isNewEntry {
+                restoreExistingButton(entry.button, targetAlpha: item.action != nil ? 1.0 : 0.5, transition: transition)
+            }
 
             if item.action != nil {
                 isInteractiveOverall = true
@@ -218,11 +256,11 @@ public final class GlassControlGroup: UIView {
 
             // Measure content.
             let maxContentHeight = availableHeight
-            var contentSize = freshView.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: maxContentHeight))
+            var contentSize = contentView.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: maxContentHeight))
             if case .customView = item.content {
-                contentSize = freshView.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: maxContentHeight))
+                contentSize = contentView.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: maxContentHeight))
                 if contentSize == .zero {
-                    contentSize = freshView.bounds.size
+                    contentSize = contentView.bounds.size
                 }
             } else if case .text = item.content {
                 contentSize.width = ceil(contentSize.width)
@@ -242,15 +280,17 @@ public final class GlassControlGroup: UIView {
             }
 
             let itemFrame = CGRect(x: contentsWidth, y: 0.0, width: itemWidth, height: availableHeight)
-            transition.updateFrame(view: entry.button, frame: itemFrame)
+            entry.itemFrame = itemFrame
+            let itemGeometryTransition: ContainedViewLayoutTransition = isNewEntry ? .immediate : transition
+            itemGeometryTransition.updateFrame(view: entry.button, frame: itemFrame)
 
             // Center the content view inside the button with contentInsets.
             let contentOrigin = CGPoint(
                 x: entry.contentInsets.left + floor((itemWidth - entry.contentInsets.left - entry.contentInsets.right - contentSize.width) / 2.0),
                 y: floor((availableHeight - contentSize.height) / 2.0)
             )
-            transition.updateFrame(
-                view: freshView,
+            itemGeometryTransition.updateFrame(
+                view: contentView,
                 frame: CGRect(origin: contentOrigin, size: contentSize)
             )
 
@@ -258,32 +298,76 @@ public final class GlassControlGroup: UIView {
             contentsWidth += itemWidth
         }
 
-        // Remove stale views.
+        // Remove stale views. For trailing bar-button groups, preserve the
+        // outgoing button's right edge while the replacement fades in; otherwise
+        // a narrower target group makes the old right button look like it moves.
+        let nextNaturalWidth = items.isEmpty ? (naturalSize.width > 0.0 ? naturalSize.width : availableHeight) : max(availableHeight, contentsWidth)
         for stale in itemViews {
-            if transition.isAnimated {
-                alphaTransition.updateAlpha(view: stale.button, alpha: 0.0) { [weak button = stale.button] _ in
-                    button?.removeFromSuperview()
-                }
-            } else {
-                stale.button.removeFromSuperview()
+            didChangeVisualItems = true
+            removedEntryCount += 1
+            if transitionContentAlignment == .trailing {
+                var staleFrame = stale.itemFrame
+                staleFrame.origin.x = nextNaturalWidth - staleFrame.width
+                ContainedViewLayoutTransition.immediate.updateFrame(view: stale.button, frame: staleFrame)
             }
+            animateRemovedButton(stale.button, transition: transition)
         }
         itemViews = newEntries
+        currentIsInteractive = isInteractiveOverall
 
         // If there are no items, collapse the group entirely — otherwise the
         // glass capsule would still render at its min-width size, producing a
         // visible empty pill next to real content (matches behaviour).
         if items.isEmpty {
+            isUserInteractionEnabled = false
+            let previousSize = naturalSize == .zero ? backgroundView.bounds.size : naturalSize
+            if didChangeVisualItems,
+               transition.isAnimated,
+               animatesInsertedItemsAlpha,
+               previousSize.width > 0.0,
+               previousSize.height > 0.0 {
+                backgroundView.isHidden = false
+                if backgroundView.bounds.size == .zero {
+                    backgroundView.frame = CGRect(origin: .zero, size: previousSize)
+                }
+                if controlsView.bounds.size == .zero {
+                    controlsView.frame = CGRect(origin: .zero, size: previousSize)
+                }
+                animateGroupPulse(transition: transition, amplitude: -Overspring.groupRemovalAmplitude)
+                transition.updateAlpha(view: backgroundView, alpha: 0.0) { [weak self] _ in
+                    guard let self, self.updateGeneration == generation else {
+                        return
+                    }
+                    self.backgroundView.isHidden = true
+                    self.backgroundView.alpha = 1.0
+                    self.backgroundView.frame = .zero
+                    self.controlsView.frame = .zero
+                    self.controlsView.alpha = 1.0
+                    self.naturalSize = .zero
+                    self.frame.size = .zero
+                }
+                transition.updateAlpha(view: controlsView, alpha: 0.0)
+                return .zero
+            }
             transition.updateFrame(view: backgroundView, frame: .zero)
+            transition.updateFrame(view: controlsView, frame: .zero)
             backgroundView.isHidden = true
+            backgroundView.alpha = 1.0
+            controlsView.alpha = 1.0
+            naturalSize = .zero
             frame.size = .zero
             return .zero
         }
 
         backgroundView.isHidden = false
+        backgroundView.alpha = 1.0
+        controlsView.alpha = 1.0
+        isUserInteractionEnabled = isInteractiveOverall
         let size = CGSize(width: max(availableHeight, contentsWidth), height: availableHeight)
+        naturalSize = size
 
         transition.updateFrame(view: backgroundView, frame: CGRect(origin: .zero, size: size))
+        transition.updateFrame(view: controlsView, frame: CGRect(origin: .zero, size: size))
         backgroundView.update(
             size: size,
             cornerRadius: size.height * 0.5,
@@ -292,9 +376,174 @@ public final class GlassControlGroup: UIView {
             isInteractive: isInteractiveOverall,
             transition: transition
         )
+        if didChangeVisualItems {
+            let pulseAmplitude = insertedEntryCount > 0 || removedEntryCount == 0 ? Overspring.itemChangeAmplitude : -Overspring.itemChangeAmplitude
+            animateGroupPulse(transition: transition, amplitude: pulseAmplitude)
+        }
 
         frame.size = size
         return size
+    }
+
+    private func softItemTransition(for transition: ContainedViewLayoutTransition, appearing: Bool) -> ContainedViewLayoutTransition {
+        guard transition.isAnimated else {
+            return .immediate
+        }
+        let duration = max(0.38, transition.duration * 0.78)
+        let curve: ContainedViewLayoutTransitionCurve = appearing
+            ? .custom(0.16, 1.0, 0.30, 1.0)
+            : .custom(0.70, 0.0, 0.84, 0.0)
+        return .animated(duration: duration, curve: curve)
+    }
+
+    private func animateInsertedButton(_ button: UIView, targetAlpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        guard transition.isAnimated && animatesInsertedItemsAlpha else {
+            button.alpha = targetAlpha
+            button.transform = .identity
+            ContainedViewLayoutTransition.immediate.setBlur(layer: button.layer, radius: 0.0)
+            return
+        }
+
+        let softTransition = softItemTransition(for: transition, appearing: true)
+        button.alpha = 0.0
+        button.transform = CGAffineTransform(scaleX: Overspring.itemTransitionScale, y: Overspring.itemTransitionScale)
+        ContainedViewLayoutTransition.immediate.setBlur(layer: button.layer, radius: 8.0)
+        softTransition.updateAlpha(view: button, alpha: targetAlpha)
+        softTransition.updateTransform(view: button, transform: .identity)
+        softTransition.setBlur(layer: button.layer, radius: 0.0)
+    }
+
+    private func restoreExistingButton(_ button: UIView, targetAlpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        guard transition.isAnimated && animatesInsertedItemsAlpha else {
+            button.alpha = targetAlpha
+            button.transform = .identity
+            ContainedViewLayoutTransition.immediate.setBlur(layer: button.layer, radius: 0.0)
+            return
+        }
+
+        let softTransition = softItemTransition(for: transition, appearing: true)
+        softTransition.updateAlpha(view: button, alpha: targetAlpha)
+        softTransition.updateTransform(view: button, transform: .identity)
+        softTransition.setBlur(layer: button.layer, radius: 0.0)
+    }
+
+    private func animateRemovedButton(_ button: UIView, transition: ContainedViewLayoutTransition) {
+        guard transition.isAnimated else {
+            button.removeFromSuperview()
+            return
+        }
+
+        guard animatesInsertedItemsAlpha else {
+            transition.updateAlpha(view: button, alpha: 0.0) { [weak button] _ in
+                button?.removeFromSuperview()
+            }
+            return
+        }
+
+        let softTransition = softItemTransition(for: transition, appearing: false)
+        button.isUserInteractionEnabled = false
+        softTransition.updateAlpha(view: button, alpha: 0.0)
+        softTransition.updateTransform(view: button, transform: CGAffineTransform(scaleX: Overspring.itemTransitionScale, y: Overspring.itemTransitionScale))
+        softTransition.setBlur(layer: button.layer, radius: 8.0) { [weak button] _ in
+            button?.removeFromSuperview()
+        }
+    }
+
+    private func animateGroupPulse(transition: ContainedViewLayoutTransition, amplitude: CGFloat) {
+        guard transition.isAnimated && animatesInsertedItemsAlpha else {
+            return
+        }
+        applyOverspringPulseIfNeeded(to: self, amplitude: amplitude, transition: transition)
+    }
+
+    public func setContentTransitionEffects(alpha: CGFloat, blurRadius: CGFloat, scale: CGFloat = 1.0, horizontalScale: CGFloat = 1.0, pulseAmplitude: CGFloat = 0.0, transition: ContainedViewLayoutTransition) {
+        let transform = CGAffineTransform(scaleX: scale * horizontalScale, y: scale)
+        transition.updateTransform(view: backgroundView, transform: transform)
+        transition.updateAlpha(view: controlsView, alpha: alpha)
+        transition.updateTransform(view: controlsView, transform: transform)
+        transition.setBlur(layer: controlsView.layer, radius: blurRadius)
+        applyOverspringPulseIfNeeded(to: self, amplitude: pulseAmplitude, transition: transition)
+    }
+
+    public func setContentTransform(scale: CGFloat = 1.0, horizontalScale: CGFloat = 1.0, transition: ContainedViewLayoutTransition) {
+        let transform = CGAffineTransform(scaleX: scale * horizontalScale, y: scale)
+        transition.updateTransform(view: backgroundView, transform: transform)
+        transition.updateTransform(view: controlsView, transform: transform)
+    }
+
+    private func applyOverspringPulseIfNeeded(to view: UIView, amplitude: CGFloat, transition: ContainedViewLayoutTransition) {
+        let resolvedAmplitude = abs(amplitude)
+        guard resolvedAmplitude > 0.0, transition.isAnimated, !UIAccessibility.isReduceMotionEnabled else {
+            return
+        }
+        let duration = max(0.34, min(0.50, transition.duration))
+        view.layer.removeAnimation(forKey: "aether.glassButtonOverspringPulse")
+
+        let baseTransform = view.layer.transform
+        let peakTransform = CATransform3DScale(baseTransform, 1.0 + resolvedAmplitude, 1.0 + resolvedAmplitude, 1.0)
+        let undershootScale = max(0.968, 1.0 - resolvedAmplitude * 0.30)
+        let undershootTransform = CATransform3DScale(baseTransform, undershootScale, undershootScale, 1.0)
+        let animation = CAKeyframeAnimation(keyPath: "transform")
+        if amplitude >= 0.0 {
+            animation.values = [baseTransform, peakTransform, undershootTransform, baseTransform]
+        } else {
+            animation.values = [baseTransform, undershootTransform, peakTransform, baseTransform]
+        }
+        animation.keyTimes = [0.0, 0.36, 0.74, 1.0]
+        animation.duration = duration
+        let timingFunction = amplitude >= 0.0
+            ? CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.30, 1.0)
+            : CAMediaTimingFunction(controlPoints: 0.70, 0.0, 0.84, 0.0)
+        animation.timingFunctions = [timingFunction, timingFunction, timingFunction]
+        animation.isRemovedOnCompletion = true
+        animation.aetherPreferHighFrameRate()
+        view.layer.add(animation, forKey: "aether.glassButtonOverspringPulse")
+    }
+
+    public func setTransitionChromeSize(
+        _ size: CGSize,
+        contentAlignment: TransitionChromeContentAlignment = .leading,
+        transition: ContainedViewLayoutTransition
+    ) {
+        setTransitionChromeFrame(
+            CGRect(origin: frame.origin, size: size),
+            contentAlignment: contentAlignment,
+            transition: transition
+        )
+    }
+
+    public func setTransitionChromeFrame(
+        _ frame: CGRect,
+        contentAlignment: TransitionChromeContentAlignment = .leading,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let resolvedSize = CGSize(width: max(0.0, frame.width), height: max(0.0, frame.height))
+        let resolvedFrame = CGRect(origin: frame.origin, size: resolvedSize)
+        let contentOffsetX: CGFloat
+        switch contentAlignment {
+        case .leading:
+            contentOffsetX = 0.0
+        case .trailing:
+            contentOffsetX = resolvedSize.width - naturalSize.width
+        }
+        for entry in itemViews {
+            transition.updateFrame(view: entry.button, frame: entry.itemFrame.offsetBy(dx: contentOffsetX, dy: 0.0))
+        }
+        transition.updateFrame(view: self, frame: resolvedFrame)
+        transition.updateFrame(view: backgroundView, frame: CGRect(origin: .zero, size: resolvedSize))
+        transition.updateFrame(view: controlsView, frame: CGRect(origin: .zero, size: resolvedSize))
+        backgroundView.update(
+            size: resolvedSize,
+            cornerRadius: resolvedSize.height * 0.5,
+            isDark: isDarkAppearance,
+            tintColor: currentTintColor,
+            isInteractive: currentIsInteractive,
+            transition: transition
+        )
+    }
+
+    public func setTransitionChromeAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        transition.updateAlpha(view: backgroundView, alpha: alpha)
     }
 
     private func applyForegroundColorToItems() {
@@ -321,6 +570,26 @@ public final class GlassControlGroup: UIView {
     /// small a target for that.
     public func itemButton(id: AnyHashable) -> UIView? {
         return itemViews.first(where: { $0.id == id })?.button
+    }
+
+    /// Visual source used by menu/presentation leases. A single-item group
+    /// reads as one glass button, so the whole group is the visual owner.
+    /// Multi-item groups share one background; in that case only the item
+    /// button/content can be leased without hiding siblings.
+    public func itemVisualSourceView(id: AnyHashable) -> UIView? {
+        guard let entry = itemViews.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return itemViews.count == 1 ? self : entry.button
+    }
+
+    public func visualSourceView(containing view: UIView) -> UIView? {
+        for entry in itemViews {
+            if entry.button === view || entry.button.isDescendant(of: view) || view.isDescendant(of: entry.button) {
+                return itemViews.count == 1 ? self : entry.button
+            }
+        }
+        return nil
     }
 
     public override func sizeThatFits(_ size: CGSize) -> CGSize {

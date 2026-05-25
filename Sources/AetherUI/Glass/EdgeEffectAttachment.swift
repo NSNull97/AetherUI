@@ -1,4 +1,5 @@
 import UIKit
+import AssociatedObject
 
 /// Configuration for a scroll-edge frost overlay attached to an arbitrary
 /// container view. Mirrors the look used by the kit's nav bar / tab bar.
@@ -56,7 +57,10 @@ public struct EdgeEffectAttachment {
     }
 }
 
-private var edgeEffectStoreKey: UInt8 = 0
+private extension UIView {
+    @AssociatedObject(.retain(.nonatomic))
+    var edgeEffectStore: EdgeEffectAttachmentStore?
+}
 
 public extension UIView {
     /// Attach a scroll-edge frost overlay anchored to one edge of the view.
@@ -68,9 +72,9 @@ public extension UIView {
     /// rendering applies.
     @discardableResult
     func setEdgeEffect(_ attachment: EdgeEffectAttachment?) -> EdgeEffectView? {
-        if let store = objc_getAssociatedObject(self, &edgeEffectStoreKey) as? EdgeEffectAttachmentStore {
+        if let store = edgeEffectStore {
             store.effect.removeFromSuperview()
-            objc_setAssociatedObject(self, &edgeEffectStoreKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            edgeEffectStore = nil
         }
 
         guard let attachment else { return nil }
@@ -80,7 +84,7 @@ public extension UIView {
         addSubview(effect)
 
         let store = EdgeEffectAttachmentStore(effect: effect, attachment: attachment)
-        objc_setAssociatedObject(self, &edgeEffectStoreKey, store, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        edgeEffectStore = store
 
         store.relayout(in: self)
         setNeedsLayout()
@@ -89,7 +93,7 @@ public extension UIView {
 
     /// Update the already-attached edge effect (no-op if none).
     func updateEdgeEffectLayout() {
-        if let store = objc_getAssociatedObject(self, &edgeEffectStoreKey) as? EdgeEffectAttachmentStore {
+        if let store = edgeEffectStore {
             store.relayout(in: self)
         }
     }

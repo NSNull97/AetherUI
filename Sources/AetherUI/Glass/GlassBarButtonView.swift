@@ -69,6 +69,12 @@ public final class GlassBarButtonView: UIView {
             setNeedsLayout()
         }
     }
+    
+    public override var tintColor: UIColor! {
+        didSet {
+            glassBackground.glassTintColor = .init(kind: .custom(style: .clear, color: tintColor))
+        }
+    }
 
     private var tapRecognizer: UITapGestureRecognizer?
 

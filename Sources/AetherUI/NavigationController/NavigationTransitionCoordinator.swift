@@ -10,6 +10,49 @@ enum NavigationTransitionDirection {
 }
 
 private let navigationShadowWidth: CGFloat = 16.0
+private let fastPopOverpopVelocityThreshold: CGFloat = 1500.0
+private let overpulledPopExitProgressThreshold: CGFloat = 1.035
+
+private final class NavigationProgressDisplayLinkTarget: NSObject {
+    var tick: ((CADisplayLink) -> Void)?
+
+    @objc func handleDisplayLink(_ link: CADisplayLink) {
+        tick?(link)
+    }
+}
+
+private struct NavigationProgressTiming {
+    let p1x: CGFloat
+    let p1y: CGFloat
+    let p2x: CGFloat
+    let p2y: CGFloat
+
+    static let linear = NavigationProgressTiming(p1x: 0.0, p1y: 0.0, p2x: 1.0, p2y: 1.0)
+    static let easeInOut = NavigationProgressTiming(p1x: 0.42, p1y: 0.0, p2x: 0.58, p2y: 1.0)
+    static let navigationEaseOut = NavigationProgressTiming(p1x: 0.18, p1y: 0.82, p2x: 0.22, p2y: 1.0)
+
+    func value(at input: CGFloat) -> CGFloat {
+        let x = max(0.0, min(1.0, input))
+        var lower: CGFloat = 0.0
+        var upper: CGFloat = 1.0
+        var t = x
+        for _ in 0..<8 {
+            let estimatedX = cubicValue(t: t, p1: p1x, p2: p2x)
+            if estimatedX < x {
+                lower = t
+            } else {
+                upper = t
+            }
+            t = (lower + upper) * 0.5
+        }
+        return cubicValue(t: t, p1: p1y, p2: p2y)
+    }
+
+    private func cubicValue(t: CGFloat, p1: CGFloat, p2: CGFloat) -> CGFloat {
+        let inverse = 1.0 - t
+        return 3.0 * inverse * inverse * t * p1 + 3.0 * inverse * t * t * p2 + t * t * t
+    }
+}
 
 private let navigationShadowImage: UIImage? = generateImage(CGSize(width: 16.0, height: 1.0), rotatedContext: { size, context in
     context.clear(CGRect(origin: .zero, size: size))
@@ -39,6 +82,7 @@ final class NavigationTransitionCoordinator {
     private let bottomView: UIView
     private let topBar: NavigationBarView?
     private let bottomBar: NavigationBarView?
+    private let progressUpdated: ((CGFloat, ContainedViewLayoutTransition) -> Void)?
 
     private let dimView: UIView
     private let shadowView: UIImageView
@@ -46,6 +90,28 @@ final class NavigationTransitionCoordinator {
     private var topInitialCorners: (clipsToBounds: Bool, cornerRadius: CGFloat, maskedCorners: CACornerMask, cornerCurve: CALayerCornerCurve)?
 
     private var currentCompletion: (() -> Void)?
+
+    private var progressDisplayLink: CADisplayLink?
+    private var progressDisplayLinkTarget: NavigationProgressDisplayLinkTarget?
+    private var progressAnimationElapsed: CFTimeInterval = 0.0
+    private var progressAnimationLastTimestamp: CFTimeInterval?
+    private var progressAnimationDuration: CFTimeInterval = 0.0
+    private var progressAnimationFrom: CGFloat = 0.0
+    private var progressAnimationTo: CGFloat = 0.0
+    private var progressAnimationTiming: NavigationProgressTiming = .navigationEaseOut
+    private var progressAnimationCompletion: (() -> Void)?
+
+    var completionTransition: ContainedViewLayoutTransition {
+        return makeCompletionTransition(velocity: 0.0)
+    }
+
+    func completionTransition(velocity: CGFloat) -> ContainedViewLayoutTransition {
+        return makeCompletionTransition(velocity: velocity)
+    }
+
+    var cancelTransition: ContainedViewLayoutTransition {
+        return .animated(duration: 0.30, curve: .navigationEaseOut)
+    }
 
     // MARK: - Init
 
@@ -74,7 +140,8 @@ final class NavigationTransitionCoordinator {
         bottomBar: NavigationBarView?,
         isInteractive: Bool,
         isFlat: Bool = false,
-        screenCornerRadius: CGFloat = 0.0
+        screenCornerRadius: CGFloat = 0.0,
+        progressUpdated: ((CGFloat, ContainedViewLayoutTransition) -> Void)? = nil
     ) {
         self.container = container
         self.direction = direction
@@ -84,6 +151,7 @@ final class NavigationTransitionCoordinator {
         self.bottomBar = bottomBar
         self.isInteractive = isInteractive
         self.isFlat = isFlat
+        self.progressUpdated = progressUpdated
 
         self.dimView = UIView()
         self.dimView.backgroundColor = .black
@@ -141,6 +209,10 @@ final class NavigationTransitionCoordinator {
         updateProgress(0.0, transition: .immediate, completion: {})
     }
 
+    deinit {
+        invalidateProgressDisplayLink()
+    }
+
     // MARK: - Progress
 
     /// Maps `progress` (0 → 1) to the on-screen position of the transition.
@@ -148,7 +220,11 @@ final class NavigationTransitionCoordinator {
     /// progress` for `.pop`. All geometry is driven by `position`.
     func updateProgress(_ progress: CGFloat, transition: ContainedViewLayoutTransition, completion: @escaping () -> Void) {
         self.progress = progress
+        progressUpdated?(progress, transition)
+        updateContentProgress(progress, transition: transition, completion: completion)
+    }
 
+    private func updateContentProgress(_ progress: CGFloat, transition: ContainedViewLayoutTransition, completion: @escaping () -> Void) {
         let position: CGFloat
         switch direction {
         case .push:
@@ -158,10 +234,10 @@ final class NavigationTransitionCoordinator {
         }
 
         let size = container.bounds.size
-        let topFrame = CGRect(origin: CGPoint(x: floor(position * size.width), y: 0.0), size: size)
+        let topFrame = CGRect(origin: CGPoint(x: position * size.width, y: 0.0), size: size)
         let bottomFrame: CGRect
         if isFlat {
-            bottomFrame = CGRect(origin: CGPoint(x: -floor((1.0 - position) * size.width), y: 0.0), size: size)
+            bottomFrame = CGRect(origin: CGPoint(x: -(1.0 - position) * size.width, y: 0.0), size: size)
         } else {
             // Parallax: bottomView moves at 30% of topView's displacement.
             bottomFrame = CGRect(origin: CGPoint(x: (position - 1.0) * size.width * 0.3, y: 0.0), size: size)
@@ -207,64 +283,136 @@ final class NavigationTransitionCoordinator {
 
     // MARK: - Animation entry points
 
-    /// Finish the transition with a spring animation. When a `velocity` is
-    /// provided (e.g. from a pan-gesture end), timing is scaled to that
-    /// velocity — matching iOS's natural flick-to-complete feel.
-    ///
-    /// Three regimes, each with its own damping:
-    ///   * Programmatic **push** — critical damping (1.0). Pushing in a new
-    ///     controller should feel deliberate and quiet; an overshoot bounce
-    ///     reads as instability ("did the screen mis-land?").
-    ///   * Programmatic **pop** — slight under-critical damping (0.88). The
-    ///     revealed bottom controller settles with a barely-visible kiss,
-    ///     consistent with the iOS 26 nav stack feel without being playful.
-    ///   * **Interactive flick-to-pop** — pronounced under-critical damping
-    ///     (0.62). When the user actively flicks the screen away, the
-    ///     incoming bottom controller bounces visibly into place, mirroring
-    ///     the energy of the gesture. Initial velocity is also fed in from
-    ///     the pan velocity, so the bounce scales with how hard the user
-    ///     flicked.
+    /// Finish the transition with a soft ease-out. Fast interactive pops use a
+    /// one-way exit overpull: the outgoing card travels slightly past the
+    /// right edge and is removed there, so it doesn't visibly spring back to
+    /// the exact final edge position before teardown.
     func animateCompletion(velocity: CGFloat = 0.0, completion: @escaping () -> Void) {
         animatingCompletion = true
         currentCompletion = completion
 
-        let distance = (1.0 - progress) * container.bounds.size.width
-        let transition: ContainedViewLayoutTransition
-
-        if abs(velocity) < .ulpOfOne, abs(progress) < .ulpOfOne {
-            // Non-interactive (programmatic) completion.
-            let damping: CGFloat
-            switch direction {
-            case .push: damping = 1.0  // critical — quiet, no bounce
-            case .pop:  damping = 0.92 // barely-there soft kiss
-            }
-            transition = .animated(duration: 0.4, curve: .customSpring(damping: damping, initialVelocity: 0.0))
-        } else {
-            // Interactive flick-to-complete (always a pop — we don't expose
-            // interactive push). Damping 0.74 with a tighter 0.42-0.55s
-            // duration: the bounce stays clearly visible (peak ~7-9%) but
-            // the whole spring motion (overshoot → return → settle) runs
-            // faster, matching the snappy native iOS-26 feel — no slow
-            // wobbly aftertaste.
-            //
-            // Duration must still be *long enough* for the spring's full
-            // path to complete within `withDuration`, because the
-            // `completion` callback fires at `withDuration` (not when the
-            // spring physically settles). After completion fires,
-            // `NavigationController.handleControllerRemoved` runs
-            // `setControllers(animated: false)` which snaps every controller
-            // view to its layout frame — instantly aborting any still-running
-            // spring. The slightly higher damping (0.74 vs 0.66) lets the
-            // spring settle quickly enough that 0.42s minimum is enough room
-            // for it to complete naturally.
-            let normalizedVelocity = max(1.0, min(10.0, abs(velocity) / max(1.0, abs(distance))))
-            let duration = max(0.42, min(0.55, abs(distance) / max(1.0, abs(velocity))))
-            transition = .animated(duration: duration, curve: .customSpring(damping: 0.74, initialVelocity: normalizedVelocity))
+        if shouldUseOneWayPopExit(velocity: velocity) {
+            invalidateProgressDisplayLink()
+            animateOneWayPopExit(velocity: velocity)
+            return
         }
 
-        updateProgress(1.0, transition: transition, completion: { [weak self] in
+        let transition = makeCompletionTransition(velocity: velocity)
+        animateProgressWithDisplayLink(to: 1.0, transition: transition, completion: { [weak self] in
             self?.finish()
         })
+    }
+
+    private func makeCompletionTransition(velocity: CGFloat) -> ContainedViewLayoutTransition {
+        if shouldUseOneWayPopExit(velocity: velocity) {
+            return makeOneWayPopExitTransition(velocity: velocity)
+        }
+
+        if abs(velocity) < .ulpOfOne, abs(progress) < .ulpOfOne {
+            // Non-interactive (programmatic) completion. Slightly longer
+            // than the previous 0.40s spring and explicitly ease-out, so the
+            // card lands with a decelerating glide instead of a stiff snap.
+            let duration: Double
+            switch direction {
+            case .push: duration = 0.50
+            case .pop: duration = 0.46
+            }
+            return .animated(duration: duration, curve: .navigationEaseOut)
+        } else {
+            // Interactive slow release (fast flicks and already-overpulled
+            // states are routed through the one-way exit path above).
+            let remainingProgress = max(0.0, min(1.0, 1.0 - progress))
+            let duration = 0.34 + 0.18 * Double(remainingProgress)
+            return .animated(duration: duration, curve: .navigationEaseOut)
+        }
+    }
+
+    private func shouldUseOneWayPopExit(velocity: CGFloat) -> Bool {
+        guard isInteractive, direction == .pop else {
+            return false
+        }
+        return velocity > fastPopOverpopVelocityThreshold || progress > overpulledPopExitProgressThreshold
+    }
+
+    private func fastPopStrength(velocity: CGFloat) -> CGFloat {
+        return max(0.0, min(1.0, (max(0.0, velocity) - fastPopOverpopVelocityThreshold) / 2400.0))
+    }
+
+    private func makeOneWayPopExitTransition(velocity: CGFloat) -> ContainedViewLayoutTransition {
+        let remainingProgress = max(0.0, min(1.0, 1.0 - progress))
+        let flickStrength = fastPopStrength(velocity: velocity)
+        let duration = max(0.30, min(0.42, 0.37 + 0.06 * Double(remainingProgress) - 0.05 * Double(flickStrength)))
+        return .animated(duration: duration, curve: .navigationEaseOut)
+    }
+
+    private func oneWayPopExitOvershoot(velocity: CGFloat, width: CGFloat) -> CGFloat {
+        let flickStrength = fastPopStrength(velocity: velocity)
+        let velocityOvershoot = 28.0 + 44.0 * flickStrength
+        let currentOvershoot = max(0.0, progress - 1.0) * width
+        return max(velocityOvershoot, currentOvershoot + 16.0)
+    }
+
+    private func animateOneWayPopExit(velocity: CGFloat) {
+        let transition = makeOneWayPopExitTransition(velocity: velocity)
+        let size = container.bounds.size
+        let width = max(1.0, size.width)
+        let currentX = topView.frame.minX
+        let targetX = max(currentX + 1.0, width + oneWayPopExitOvershoot(velocity: velocity, width: width))
+        let flickStrength = fastPopStrength(velocity: velocity)
+        let bottomOverpopX = flickStrength > 0.0 ? 4.0 + 8.0 * flickStrength : 0.0
+
+        progress = 1.0
+        progressUpdated?(1.0, transition)
+
+        var pendingCompletions = 2
+        var didFinish = false
+        let markCompleted: (Bool) -> Void = { [weak self] _ in
+            guard !didFinish else {
+                return
+            }
+            pendingCompletions -= 1
+            if pendingCompletions == 0 {
+                didFinish = true
+                self?.finish()
+            }
+        }
+
+        let topFrame = CGRect(origin: CGPoint(x: floor(targetX), y: 0.0), size: size)
+        let bottomFrame = CGRect(origin: .zero, size: size)
+        transition.updateFrame(view: topView, frame: topFrame, completion: markCompleted)
+        transition.updateFrame(view: bottomView, frame: bottomFrame, completion: markCompleted)
+
+        if bottomOverpopX > 0.0 {
+            bottomView.transform = .identity
+            UIView.animateKeyframes(
+                withDuration: transition.duration,
+                delay: 0.0,
+                options: [.beginFromCurrentState, .allowUserInteraction, .calculationModeCubic],
+                animations: { [weak bottomView] in
+                    UIView.addKeyframe(withRelativeStartTime: 0.0, relativeDuration: 0.62) {
+                        bottomView?.transform = CGAffineTransform(translationX: bottomOverpopX, y: 0.0)
+                    }
+                    UIView.addKeyframe(withRelativeStartTime: 0.62, relativeDuration: 0.38) {
+                        bottomView?.transform = .identity
+                    }
+                },
+                completion: { [weak bottomView] _ in
+                    bottomView?.transform = .identity
+                }
+            )
+        }
+
+        let shadowFrame = CGRect(
+            x: topFrame.minX - navigationShadowWidth,
+            y: 0.0,
+            width: navigationShadowWidth,
+            height: size.height
+        )
+        transition.updateFrame(view: shadowView, frame: shadowFrame)
+        transition.updateAlpha(view: shadowView, alpha: 0.0)
+
+        transition.updateFrame(view: dimView, frame: CGRect(origin: .zero, size: CGSize(width: size.width, height: size.height)))
+        transition.updateAlpha(view: dimView, alpha: 0.0)
     }
 
     /// Abort the transition (e.g. interactive pan released without enough
@@ -273,7 +421,7 @@ final class NavigationTransitionCoordinator {
         currentCompletion = completion
         // Cancel: critically damped spring — snaps back to origin without
         // bouncing past 0 (no destination to overshoot toward).
-        updateProgress(0.0, transition: .animated(duration: 0.22, curve: .customSpring(damping: 1.0, initialVelocity: 0.0)), completion: { [weak self] in
+        animateProgressWithDisplayLink(to: 0.0, transition: cancelTransition, completion: { [weak self] in
             guard let self else { return }
             // Remove the incoming view entirely — same controller just came
             // back to its original position.
@@ -294,6 +442,7 @@ final class NavigationTransitionCoordinator {
     /// Instantly complete the transition without animation (used when the
     /// transition is being replaced mid-flight by a deeper one).
     func performCompletion(completion: @escaping () -> Void) {
+        invalidateProgressDisplayLink()
         updateProgress(1.0, transition: .immediate, completion: { [weak self] in
             self?.finish()
             completion()
@@ -303,14 +452,109 @@ final class NavigationTransitionCoordinator {
     /// Synchronously mark the transition as complete and tear down overlays.
     /// Used when the caller has already applied `progress = 1.0`.
     func complete() {
+        invalidateProgressDisplayLink()
         animatingCompletion = true
         progress = 1.0
         finish()
     }
 
+    // MARK: - High-refresh progress driving
+
+    private func animateProgressWithDisplayLink(to targetProgress: CGFloat, transition: ContainedViewLayoutTransition, completion: @escaping () -> Void) {
+        guard case let .animated(duration, curve) = transition, duration > 0.0 else {
+            invalidateProgressDisplayLink()
+            updateProgress(targetProgress, transition: .immediate, completion: {})
+            completion()
+            return
+        }
+
+        invalidateProgressDisplayLink()
+        progressAnimationFrom = progress
+        progressAnimationTo = targetProgress
+        progressAnimationDuration = duration
+        progressAnimationTiming = progressTiming(for: curve)
+        progressAnimationCompletion = completion
+        progressAnimationElapsed = 0.0
+        progressAnimationLastTimestamp = nil
+
+        progressUpdated?(targetProgress, transition)
+
+        let target = NavigationProgressDisplayLinkTarget()
+        target.tick = { [weak self] link in
+            self?.handleProgressDisplayLink(link)
+        }
+        let link = CADisplayLink(target: target, selector: #selector(NavigationProgressDisplayLinkTarget.handleDisplayLink(_:)))
+        if #available(iOS 15.0, *) {
+            let screenMaximum = (container.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond)
+            let preferred = Float(min(120, max(60, screenMaximum)))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 60.0, maximum: preferred, preferred: preferred)
+        }
+        progressDisplayLinkTarget = target
+        progressDisplayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    private func handleProgressDisplayLink(_ link: CADisplayLink) {
+        if let lastTimestamp = progressAnimationLastTimestamp {
+            let delta = max(0.0, link.timestamp - lastTimestamp)
+            progressAnimationElapsed += min(delta, 1.0 / 30.0)
+        } else {
+            progressAnimationLastTimestamp = link.timestamp
+            progress = progressAnimationFrom
+            updateContentProgress(progressAnimationFrom, transition: .immediate, completion: {})
+            return
+        }
+        progressAnimationLastTimestamp = link.timestamp
+
+        let linearProgress = progressAnimationDuration > 0.0
+            ? min(1.0, progressAnimationElapsed / progressAnimationDuration)
+            : 1.0
+        let easedProgress = progressAnimationTiming.value(at: CGFloat(linearProgress))
+        let nextProgress = progressAnimationFrom + (progressAnimationTo - progressAnimationFrom) * easedProgress
+        progress = nextProgress
+        updateContentProgress(nextProgress, transition: .immediate, completion: {})
+
+        if linearProgress >= 1.0 {
+            let finalProgress = progressAnimationTo
+            let completion = progressAnimationCompletion
+            invalidateProgressDisplayLink()
+            progress = finalProgress
+            updateContentProgress(finalProgress, transition: .immediate, completion: {})
+            completion?()
+        }
+    }
+
+    private func invalidateProgressDisplayLink() {
+        progressDisplayLink?.invalidate()
+        progressDisplayLink = nil
+        progressDisplayLinkTarget = nil
+        progressAnimationCompletion = nil
+        progressAnimationElapsed = 0.0
+        progressAnimationLastTimestamp = nil
+    }
+
+    private func progressTiming(for curve: ContainedViewLayoutTransitionCurve) -> NavigationProgressTiming {
+        switch curve {
+        case .linear:
+            return .linear
+        case .easeInOut:
+            return .easeInOut
+        case .spring, .customSpring:
+            return .navigationEaseOut
+        case let .custom(p1x, p1y, p2x, p2y):
+            return NavigationProgressTiming(
+                p1x: CGFloat(p1x),
+                p1y: CGFloat(p1y),
+                p2x: CGFloat(p2x),
+                p2y: CGFloat(p2y)
+            )
+        }
+    }
+
     // MARK: - Teardown
 
     private func finish() {
+        invalidateProgressDisplayLink()
         cleanupOverlays()
         restoreTopViewCorners()
         let hook = currentCompletion

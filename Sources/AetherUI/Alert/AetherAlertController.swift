@@ -13,6 +13,7 @@ open class AetherAlertController: UIViewController {
     public let alertMessage: String?
     public let actions: [AetherAlertAction]
     public let textFieldConfigs: [AetherAlertTextField]
+    public let customContentView: UIView?
 
     /// Tap outside the card dismisses. Default `true` — matches the
     /// AetherUI interactive-dim expectation (UIKit's UIAlertController
@@ -21,6 +22,7 @@ open class AetherAlertController: UIViewController {
     public var dismissOnOutsideTap: Bool = true
 
     public var dismissed: ((Bool) -> Void)?
+    public var willDismiss: ((Bool) -> Void)?
 
     /// Current text of the Nth text field, or nil if index out of range.
     /// Useful for reading input from action handlers.
@@ -38,12 +40,14 @@ open class AetherAlertController: UIViewController {
         message: String?,
         actions: [AetherAlertAction],
         textFields: [AetherAlertTextField] = [],
+        customContentView: UIView? = nil,
         theme: AetherAlertTheme = .system
     ) {
         self.alertTitle = title
         self.alertMessage = message
         self.actions = actions
         self.textFieldConfigs = textFields
+        self.customContentView = customContentView
         self.theme = theme
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
@@ -67,6 +71,7 @@ open class AetherAlertController: UIViewController {
             message: message,
             actions: actions,
             textFields: textField.map { [$0] } ?? [],
+            customContentView: nil,
             theme: theme
         )
     }
@@ -81,11 +86,13 @@ open class AetherAlertController: UIViewController {
             title: alertTitle,
             message: alertMessage,
             actions: actions,
-            textFields: textFieldConfigs
+            textFields: textFieldConfigs,
+            customContentView: customContentView
         )
         root.actionTriggered = { [weak self] action in
             guard let self, !self.isDismissed else { return }
             self.isDismissed = true
+            self.willDismiss?(false)
             self.dismissed?(false)
             action.handler()
             self.dismissAnimated(fromOutside: false)
@@ -93,6 +100,7 @@ open class AetherAlertController: UIViewController {
         root.outsideTap = { [weak self] in
             guard let self, self.dismissOnOutsideTap, !self.isDismissed else { return }
             self.isDismissed = true
+            self.willDismiss?(true)
             self.dismissed?(true)
             self.dismissAnimated(fromOutside: true)
         }
@@ -107,6 +115,7 @@ open class AetherAlertController: UIViewController {
     public func dismissAnimated() {
         guard !isDismissed else { return }
         isDismissed = true
+        willDismiss?(false)
         dismissed?(false)
         dismissAnimated(fromOutside: false)
     }
@@ -149,6 +158,7 @@ final class AetherAlertRootView: UIView {
     private let message: String?
     private let actions: [AetherAlertAction]
     private let textFieldConfigs: [AetherAlertTextField]
+    private let customContentView: UIView?
 
     private let dimView = UIView()
     /// Interactive liquid-glass card on iOS 26+. `glassIsInteractive = true`
@@ -192,13 +202,15 @@ final class AetherAlertRootView: UIView {
         title: String?,
         message: String?,
         actions: [AetherAlertAction],
-        textFields: [AetherAlertTextField]
+        textFields: [AetherAlertTextField],
+        customContentView: UIView?
     ) {
         self.theme = theme
         self.title = title
         self.message = message
         self.actions = actions
         self.textFieldConfigs = textFields
+        self.customContentView = customContentView
 
         self.card = GlassBackgroundView(style: .regular)
         self.card.glassIsInteractive = true
@@ -249,6 +261,10 @@ final class AetherAlertRootView: UIView {
 
         for config in textFields {
             fieldRows.append(installFieldRow(config: config))
+        }
+
+        if let customContentView {
+            card.contentView.addSubview(customContentView)
         }
 
         for action in actions {
@@ -344,6 +360,27 @@ final class AetherAlertRootView: UIView {
             let fit = messageLabel.sizeThatFits(CGSize(width: innerWidth, height: .greatestFiniteMagnitude))
             messageLabel.frame = CGRect(x: Self.horizontalPadding, y: y + 4, width: innerWidth, height: fit.height)
             y += fit.height
+        }
+
+        if let customContentView {
+            y += Self.messageToFieldSpacing
+            var customSize = customContentView.sizeThatFits(CGSize(width: innerWidth, height: .greatestFiniteMagnitude))
+            if customSize.width <= 0.0 || customSize.height <= 0.0 {
+                customSize = customContentView.intrinsicContentSize
+            }
+            if customSize.width <= 0.0 || customSize.width == UIView.noIntrinsicMetric {
+                customSize.width = innerWidth
+            }
+            if customSize.height <= 0.0 || customSize.height == UIView.noIntrinsicMetric {
+                customSize.height = customContentView.bounds.height > 0.0 ? customContentView.bounds.height : 44.0
+            }
+            customContentView.frame = CGRect(
+                x: Self.horizontalPadding,
+                y: y,
+                width: innerWidth,
+                height: customSize.height
+            )
+            y += customSize.height
         }
 
         if !fieldRows.isEmpty {

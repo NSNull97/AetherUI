@@ -18,6 +18,7 @@ open class AetherActionSheetController: UIViewController {
     public var dismissed: ((Bool) -> Void)?
 
     private var groups: [AetherActionSheetItemGroup] = []
+    private var groupOverlayViews: [Int: UIView] = [:]
     private var isDismissed: Bool = false
 
     private var rootView: AetherActionSheetControllerView? {
@@ -47,6 +48,7 @@ open class AetherActionSheetController: UIViewController {
             self.presentingViewController?.dismiss(animated: false)
         }
         root.setGroups(groups)
+        root.setGroupOverlayViews(groupOverlayViews)
         view = root
     }
 
@@ -62,6 +64,11 @@ open class AetherActionSheetController: UIViewController {
 
     public func updateItem(groupIndex: Int, itemIndex: Int, _ transform: (AetherActionSheetItem) -> AetherActionSheetItem) {
         rootView?.updateItem(groupIndex: groupIndex, itemIndex: itemIndex, transform)
+    }
+
+    public func setItemGroupOverlayView(groupIndex: Int, view: UIView?) {
+        groupOverlayViews[groupIndex] = view
+        rootView?.setItemGroupOverlayView(groupIndex: groupIndex, view: view)
     }
 
     public func dismissAnimated() {
@@ -99,6 +106,7 @@ final class AetherActionSheetControllerView: UIView {
     private let dimView = UIView()
     private let containerView = UIView()
     private var groupViews: [AetherActionSheetItemGroupView] = []
+    private var groupOverlayViews: [Int: UIView] = [:]
 
     private var isUserInteractionReady: Bool = false
 
@@ -136,6 +144,7 @@ final class AetherActionSheetControllerView: UIView {
             containerView.addSubview(view)
             return view
         }
+        applyGroupOverlayViews()
         setNeedsLayout()
     }
 
@@ -149,6 +158,22 @@ final class AetherActionSheetControllerView: UIView {
         //  API is present for compatibility with upstream call sites.)
         _ = transform
         _ = itemIndex
+    }
+
+    func setItemGroupOverlayView(groupIndex: Int, view: UIView?) {
+        groupOverlayViews[groupIndex] = view
+        applyGroupOverlayViews()
+    }
+
+    func setGroupOverlayViews(_ views: [Int: UIView]) {
+        groupOverlayViews = views
+        applyGroupOverlayViews()
+    }
+
+    private func applyGroupOverlayViews() {
+        for (index, groupView) in groupViews.enumerated() {
+            groupView.setOverlayView(groupOverlayViews[index])
+        }
     }
 
     override func layoutSubviews() {

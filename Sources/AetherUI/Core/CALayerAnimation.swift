@@ -1,5 +1,19 @@
 import UIKit
 
+extension CAAnimation {
+    func aetherPreferHighFrameRate(maximumFramesPerSecond: Int = UIScreen.main.maximumFramesPerSecond) {
+        if #available(iOS 15.0, *) {
+            let screenMaximum = maximumFramesPerSecond > 0 ? maximumFramesPerSecond : 120
+            let preferred = Float(min(120, max(60, screenMaximum)))
+            self.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 60.0,
+                maximum: preferred,
+                preferred: preferred
+            )
+        }
+    }
+}
+
 extension CALayer {
     static func luminanceToAlpha() -> NSObject? {
         guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
@@ -71,6 +85,7 @@ extension CALayer {
             animation.delegate = CALayerAnimationDelegate(completion: completion)
         }
 
+        animation.aetherPreferHighFrameRate()
         self.add(animation, forKey: keyPath)
     }
 

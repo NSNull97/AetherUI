@@ -33,6 +33,16 @@ public protocol AetherListItem: AnyObject {
     /// Whether the item can be selected (tapped).
     var selectable: Bool { get }
 
+    /// Optional accessory rendered by hosts that support side/header
+    /// accessories. The base UIKit list does not force a concrete accessory
+    /// model, but keeping the hook mirrors Telegram's item contract and lets
+    /// higher-level rows carry accessory state without downcasting.
+    var accessoryItem: Any? { get }
+
+    /// Optional header accessory model, equivalent to Telegram's
+    /// `headerAccessoryItem`.
+    var headerAccessoryItem: Any? { get }
+
     /// Called when the item is selected.
     func selected(listView: AetherListView)
 
@@ -47,15 +57,25 @@ public protocol AetherListItem: AnyObject {
     /// separators / non-movable rows return `false`. Has no effect
     /// unless `AetherListView.allowsReorder == true`.
     var canReorder: Bool { get }
+
+    /// Telegram-style pin-to-edge marker used by scroll positioning. In this
+    /// UIKit port `isFloatingHeader` remains the visual sticky-header switch;
+    /// this flag is kept separate for call sites that only need pin-aware
+    /// scroll alignment.
+    var pinToEdgeWithInset: Bool { get }
 }
 
 // Default implementations
 public extension AetherListItem {
     var approximateHeight: CGFloat { 44.0 }
-    var selectable: Bool { true }
+    var selectable: Bool { false }
+    var accessoryItem: Any? { nil }
+    var headerAccessoryItem: Any? { nil }
     func selected(listView: AetherListView) {}
+    func performSecondaryAction(listView: AetherListView) {}
     var isFloatingHeader: Bool { false }
     var canReorder: Bool { true }
+    var pinToEdgeWithInset: Bool { false }
 }
 
 // MARK: - Layout Parameters
@@ -105,10 +125,25 @@ public struct AetherListItemNodeLayout {
 public enum AetherListItemUpdateAnimation {
     /// No animation.
     case none
+    /// System transition carrying the same layout transition object the list
+    /// is using for its own geometry update.
+    case system(duration: Double, transition: ContainedViewLayoutTransition)
     /// Crossfade transition.
     case crossfade
     /// Custom animation with duration.
     case animated(duration: Double)
+}
+
+/// Flags passed to row implementations when a caller requests synchronous
+/// drawing/resource loading. The base UIKit item API is synchronous already,
+/// but explicit flags keep the transaction surface aligned with Telegram's
+/// `ListViewItemConfigureNodeFlags`.
+public struct AetherListItemConfigureNodeFlags: OptionSet {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    public static let preferSynchronousDrawing = AetherListItemConfigureNodeFlags(rawValue: 1 << 0)
+    public static let preferSynchronousResourceLoading = AetherListItemConfigureNodeFlags(rawValue: 1 << 1)
 }
 
 // MARK: - Selection
@@ -204,12 +239,22 @@ public struct AetherListInsertItem {
     public let item: AetherListItem
     /// Animation direction.
     public let directionHint: AetherListItemOperationDirectionHint?
+    /// Force the node's own insertion animation even if the global transaction
+    /// only requested structural animation.
+    public let forceAnimateInsertion: Bool
 
-    public init(index: Int, previousIndex: Int? = nil, item: AetherListItem, directionHint: AetherListItemOperationDirectionHint? = nil) {
+    public init(
+        index: Int,
+        previousIndex: Int? = nil,
+        item: AetherListItem,
+        directionHint: AetherListItemOperationDirectionHint? = nil,
+        forceAnimateInsertion: Bool = false
+    ) {
         self.index = index
         self.previousIndex = previousIndex
         self.item = item
         self.directionHint = directionHint
+        self.forceAnimateInsertion = forceAnimateInsertion
     }
 }
 
@@ -247,9 +292,32 @@ public struct AetherListTransactionOptions: OptionSet {
     public static let synchronous = AetherListTransactionOptions(rawValue: 1 << 2)
     /// Crossfade updated items.
     public static let crossfade = AetherListTransactionOptions(rawValue: 1 << 3)
+    /// Prefer the low-latency path: execute without waiting for queued visual
+    /// work when possible.
+    public static let lowLatency = AetherListTransactionOptions(rawValue: 1 << 4)
+    /// Ask inserted rows to run their own insertion animation.
+    public static let requestItemInsertionAnimations = AetherListTransactionOptions(rawValue: 1 << 5)
+    /// Animate the top item's vertical origin when anchoring changes.
+    public static let animateTopItemPosition = AetherListTransactionOptions(rawValue: 1 << 6)
+    /// Prefer synchronous drawing in row implementations that expose it.
+    public static let preferSynchronousDrawing = AetherListTransactionOptions(rawValue: 1 << 7)
+    /// Prefer synchronous resource loading in row implementations that expose it.
+    public static let preferSynchronousResourceLoading = AetherListTransactionOptions(rawValue: 1 << 8)
+    /// Re-run visible node layout even when the size/inset values compare equal.
+    public static let forceUpdate = AetherListTransactionOptions(rawValue: 1 << 9)
+    /// Drive a full-row transition instead of only animating inserted/removed nodes.
+    public static let animateFullTransition = AetherListTransactionOptions(rawValue: 1 << 10)
+    /// Invert vertical offset direction for insertion/removal animations.
+    public static let invertOffsetDirection = AetherListTransactionOptions(rawValue: 1 << 11)
 }
 
 // MARK: - Scroll Position
+
+public enum AetherListScrollOverflow {
+    case top
+    case bottom
+    case custom((AetherListItemNode) -> CGFloat)
+}
 
 /// Where to position an item when scrolling to it.
 public enum AetherListScrollPosition {
@@ -261,6 +329,9 @@ public enum AetherListScrollPosition {
     case bottom(offset: CGFloat)
     /// Scroll so the item is centered.
     case center
+    /// Scroll so the item is centered, but choose a side when the row is taller
+    /// than the viewport.
+    case centerWithOverflow(AetherListScrollOverflow)
 }
 
 /// Describes a scroll-to-item request.
@@ -278,12 +349,62 @@ public struct AetherListScrollToItem {
 
 // MARK: - Visible Range
 
+public struct AetherListItemRange: Equatable {
+    public let firstIndex: Int
+    public let lastIndex: Int
+
+    public init(firstIndex: Int, lastIndex: Int) {
+        self.firstIndex = firstIndex
+        self.lastIndex = lastIndex
+    }
+}
+
+public struct AetherListVisibleItemRange: Equatable {
+    public let firstIndex: Int
+    public let firstIndexFullyVisible: Bool
+    public let lastIndex: Int
+
+    public init(firstIndex: Int, firstIndexFullyVisible: Bool, lastIndex: Int) {
+        self.firstIndex = firstIndex
+        self.firstIndexFullyVisible = firstIndexFullyVisible
+        self.lastIndex = lastIndex
+    }
+}
+
 /// Range of items currently loaded and visible.
 public struct AetherListDisplayedItemRange: Equatable {
     /// Range of all items in memory (visible + preload buffer).
     public let loadedRange: Range<Int>?
     /// Range of items actually visible on screen.
     public let visibleRange: Range<Int>?
+    /// Telegram-compatible inclusive loaded range.
+    public let loadedItemRange: AetherListItemRange?
+    /// Telegram-compatible visible range with first-item full-visibility info.
+    public let visibleItemRange: AetherListVisibleItemRange?
+
+    public init(
+        loadedRange: Range<Int>?,
+        visibleRange: Range<Int>?,
+        loadedItemRange: AetherListItemRange? = nil,
+        visibleItemRange: AetherListVisibleItemRange? = nil
+    ) {
+        self.loadedRange = loadedRange
+        self.visibleRange = visibleRange
+        if let loadedItemRange {
+            self.loadedItemRange = loadedItemRange
+        } else if let loadedRange, !loadedRange.isEmpty {
+            self.loadedItemRange = AetherListItemRange(firstIndex: loadedRange.lowerBound, lastIndex: loadedRange.upperBound - 1)
+        } else {
+            self.loadedItemRange = nil
+        }
+        if let visibleItemRange {
+            self.visibleItemRange = visibleItemRange
+        } else if let visibleRange, !visibleRange.isEmpty {
+            self.visibleItemRange = AetherListVisibleItemRange(firstIndex: visibleRange.lowerBound, firstIndexFullyVisible: false, lastIndex: visibleRange.upperBound - 1)
+        } else {
+            self.visibleItemRange = nil
+        }
+    }
 }
 
 // MARK: - Size and Insets Update
@@ -292,13 +413,33 @@ public struct AetherListDisplayedItemRange: Equatable {
 public struct AetherListUpdateSizeAndInsets {
     public let size: CGSize
     public let insets: UIEdgeInsets
+    public let headerInsets: UIEdgeInsets?
+    public let scrollIndicatorInsets: UIEdgeInsets?
+    public let itemOffsetInsets: UIEdgeInsets?
     public let duration: Double
     public let curve: ContainedViewLayoutTransitionCurve
+    public let ensureTopInsetForOverlayHighlightedItems: CGFloat?
+    public let customTransition: ContainedViewLayoutTransition?
 
-    public init(size: CGSize, insets: UIEdgeInsets, duration: Double = 0, curve: ContainedViewLayoutTransitionCurve = .easeInOut) {
+    public init(
+        size: CGSize,
+        insets: UIEdgeInsets,
+        headerInsets: UIEdgeInsets? = nil,
+        scrollIndicatorInsets: UIEdgeInsets? = nil,
+        itemOffsetInsets: UIEdgeInsets? = nil,
+        duration: Double = 0,
+        curve: ContainedViewLayoutTransitionCurve = .easeInOut,
+        ensureTopInsetForOverlayHighlightedItems: CGFloat? = nil,
+        customTransition: ContainedViewLayoutTransition? = nil
+    ) {
         self.size = size
         self.insets = insets
+        self.headerInsets = headerInsets
+        self.scrollIndicatorInsets = scrollIndicatorInsets
+        self.itemOffsetInsets = itemOffsetInsets
         self.duration = duration
         self.curve = curve
+        self.ensureTopInsetForOverlayHighlightedItems = ensureTopInsetForOverlayHighlightedItems
+        self.customTransition = customTransition
     }
 }

@@ -8,6 +8,7 @@ private struct WindowLayout: Equatable {
     var size: CGSize
     var metrics: LayoutMetrics
     var statusBarHeight: CGFloat?
+    var forceInCallStatusBarText: String?
     var inputHeight: CGFloat?
     var safeInsets: UIEdgeInsets
     var upperKeyboardInputPositionBound: CGFloat?
@@ -34,6 +35,11 @@ private struct UpdatingLayout {
         self.layout.size = size
         self.layout.metrics = metrics
         self.layout.safeInsets = safeInsets
+    }
+
+    mutating func updateForceInCallStatusBarText(_ text: String?, transition: ContainedViewLayoutTransition, overrideTransition: Bool) {
+        self.upgradeTransition(transition, override: overrideTransition)
+        self.layout.forceInCallStatusBarText = text
     }
 
     mutating func updateStatusBarHeight(_ statusBarHeight: CGFloat?, transition: ContainedViewLayoutTransition, overrideTransition: Bool) {
@@ -65,6 +71,9 @@ private func inputHeightOffset(for layout: WindowLayout) -> CGFloat {
 
 private func containedLayout(from layout: WindowLayout) -> ContainerViewLayout {
     var resolvedStatusBarHeight = layout.statusBarHeight
+    if layout.forceInCallStatusBarText != nil, resolvedStatusBarHeight != nil {
+        resolvedStatusBarHeight = max(40.0, layout.safeInsets.top)
+    }
     let isLandscape = layout.size.width > layout.size.height
     if statusBarHiddenInLandscape && isLandscape {
         resolvedStatusBarHeight = nil
@@ -225,6 +234,15 @@ public final class AetherWindow: UIWindow {
 
     // Status bar
     private var statusBarHidden = false
+    private var forceInCallStatusBarText: String?
+    private var forceInCallStatusBarView: UILabel?
+
+    // Global overlay / portal
+    private var _topLevelOverlayControllers: [UIViewController] = []
+    private var globalPortalHostViews: [UIView] = []
+    private var forceBadgeHidden = true
+    private var proximityDimView: UIView?
+    private var postUpdateToInterfaceOrientationBlocks: [() -> Void] = []
 
     // Debug tap
     private var debugTapCounter: (Double, Int) = (0.0, 0)
@@ -261,6 +279,41 @@ public final class AetherWindow: UIWindow {
         return containedLayout(from: windowLayout)
     }
 
+    /// Controllers displayed above the main root controller, matching
+    /// Telegram-iOS' top-level overlay surface. They receive the same
+    /// keyboard-aware `ContainerViewLayout` as the content controller.
+    public var topLevelOverlayControllers: [UIViewController] {
+        get {
+            return _topLevelOverlayControllers
+        }
+        set {
+            for controller in _topLevelOverlayControllers where !newValue.contains(where: { $0 === controller }) {
+                controller.willMove(toParent: nil)
+                controller.view.removeFromSuperview()
+                controller.removeFromParent()
+            }
+
+            _topLevelOverlayControllers = newValue
+
+            for controller in _topLevelOverlayControllers {
+                if controller.parent !== _rootController {
+                    _rootController.addChild(controller)
+                    _rootController.view.addSubview(controller.view)
+                    controller.didMove(toParent: _rootController)
+                } else if controller.view.superview == nil {
+                    _rootController.view.addSubview(controller.view)
+                }
+
+                if !windowLayout.size.width.isZero && !windowLayout.size.height.isZero {
+                    controller.view.frame = CGRect(origin: .zero, size: windowLayout.size)
+                    updateOverlayController(controller, layout: currentLayout, transition: .immediate)
+                }
+            }
+
+            reorderTopLevelSurfaces()
+        }
+    }
+
     /// Overlay view shown for app snapshot protection in the task switcher.
     /// Animates in/out with a fade when set/unset.
     public var coveringView: AetherWindowCoveringView? {
@@ -281,6 +334,7 @@ public final class AetherWindow: UIWindow {
                     covering.frame = CGRect(origin: .zero, size: windowLayout.size)
                     covering.updateLayout(windowLayout.size)
                 }
+                reorderTopLevelSurfaces()
             }
         }
     }
@@ -299,6 +353,112 @@ public final class AetherWindow: UIWindow {
                 _rootController.view.removeGestureRecognizer(recognizer)
             }
         }
+    }
+
+    public func presentInGlobalOverlay(_ controller: UIViewController, animated: Bool = true, completion: (() -> Void)? = nil) {
+        guard !topLevelOverlayControllers.contains(where: { $0 === controller }) else {
+            completion?()
+            return
+        }
+
+        var controllers = topLevelOverlayControllers
+        controllers.append(controller)
+        topLevelOverlayControllers = controllers
+
+        if animated {
+            controller.view.alpha = 0.0
+            controller.view.transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
+            UIView.animate(withDuration: 0.22, delay: 0.0, options: [.curveEaseOut, .beginFromCurrentState], animations: {
+                controller.view.alpha = 1.0
+                controller.view.transform = .identity
+            }, completion: { _ in
+                completion?()
+            })
+        } else {
+            controller.view.alpha = 1.0
+            controller.view.transform = .identity
+            completion?()
+        }
+    }
+
+    public func dismissGlobalOverlay(_ controller: UIViewController, animated: Bool = true, completion: (() -> Void)? = nil) {
+        guard topLevelOverlayControllers.contains(where: { $0 === controller }) else {
+            completion?()
+            return
+        }
+
+        let finish = { [weak self, weak controller] in
+            guard let self, let controller else {
+                completion?()
+                return
+            }
+            self.topLevelOverlayControllers = self.topLevelOverlayControllers.filter { $0 !== controller }
+            completion?()
+        }
+
+        if animated {
+            UIView.animate(withDuration: 0.18, delay: 0.0, options: [.curveEaseIn, .beginFromCurrentState], animations: {
+                controller.view.alpha = 0.0
+                controller.view.transform = CGAffineTransform(scaleX: 0.985, y: 0.985)
+            }, completion: { _ in
+                finish()
+            })
+        } else {
+            finish()
+        }
+    }
+
+    public func addGlobalPortalHostView(_ view: UIView) {
+        guard !globalPortalHostViews.contains(where: { $0 === view }) else {
+            return
+        }
+        globalPortalHostViews.append(view)
+        _rootController.view.addSubview(view)
+        view.frame = CGRect(origin: .zero, size: windowLayout.size)
+        reorderTopLevelSurfaces()
+    }
+
+    public func removeGlobalPortalHostView(_ view: UIView) {
+        globalPortalHostViews.removeAll { $0 === view }
+        view.removeFromSuperview()
+    }
+
+    public func setForceBadgeHidden(_ hidden: Bool) {
+        guard hidden != forceBadgeHidden else {
+            return
+        }
+        forceBadgeHidden = hidden
+    }
+
+    public func setProximityDimHidden(_ hidden: Bool) {
+        if hidden {
+            proximityDimView?.removeFromSuperview()
+            proximityDimView = nil
+        } else if proximityDimView == nil {
+            let dimView = UIView()
+            dimView.backgroundColor = UIColor.black.withAlphaComponent(0.92)
+            dimView.frame = CGRect(origin: .zero, size: windowLayout.size)
+            dimView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            _rootController.view.addSubview(dimView)
+            proximityDimView = dimView
+            reorderTopLevelSurfaces()
+        }
+    }
+
+    public func setForceInCallStatusBar(_ text: String?, transition: ContainedViewLayoutTransition = .animated(duration: 0.3, curve: .easeInOut)) {
+        guard forceInCallStatusBarText != text else {
+            return
+        }
+
+        forceInCallStatusBarText = text
+        updateForceInCallStatusBarView(text: text, transition: transition)
+        updateLayout {
+            $0.updateForceInCallStatusBarText(text, transition: transition, overrideTransition: true)
+        }
+    }
+
+    public func addPostUpdateToInterfaceOrientationBlock(_ block: @escaping () -> Void) {
+        postUpdateToInterfaceOrientationBlocks.append(block)
     }
 
     /// Programmatically cancel any in-progress interactive keyboard dismissal gesture.
@@ -353,6 +513,7 @@ public final class AetherWindow: UIWindow {
             size: boundsSize,
             metrics: layoutMetrics(for: boundsSize),
             statusBarHeight: statusBarHeight,
+            forceInCallStatusBarText: nil,
             inputHeight: nil,
             safeInsets: safeInsets,
             upperKeyboardInputPositionBound: nil,
@@ -378,6 +539,7 @@ public final class AetherWindow: UIWindow {
             size: frame.size,
             metrics: layoutMetrics(for: frame.size),
             statusBarHeight: statusBarHeight,
+            forceInCallStatusBarText: nil,
             inputHeight: nil,
             safeInsets: .zero,
             upperKeyboardInputPositionBound: nil,
@@ -461,6 +623,11 @@ public final class AetherWindow: UIWindow {
             self.updateLayout {
                 $0.updateSize(size, metrics: layoutMetrics(for: size), safeInsets: safeInsets, transition: transition, overrideTransition: true)
             }
+            let blocks = self.postUpdateToInterfaceOrientationBlocks
+            self.postUpdateToInterfaceOrientationBlocks.removeAll()
+            for block in blocks {
+                block()
+            }
         }
     }
 
@@ -504,6 +671,63 @@ public final class AetherWindow: UIWindow {
         recognizer.ended = { [weak self] point, velocity in self?.panGestureEnded(location: point, velocity: velocity) }
         windowPanRecognizer = recognizer
         _rootController.view.addGestureRecognizer(recognizer)
+    }
+
+    private func reorderTopLevelSurfaces() {
+        for controller in _topLevelOverlayControllers where controller.view.superview === _rootController.view {
+            _rootController.view.bringSubviewToFront(controller.view)
+        }
+        for view in globalPortalHostViews where view.superview === _rootController.view {
+            _rootController.view.bringSubviewToFront(view)
+        }
+        if let proximityDimView, proximityDimView.superview === _rootController.view {
+            _rootController.view.bringSubviewToFront(proximityDimView)
+        }
+        if let statusBarView = forceInCallStatusBarView, statusBarView.superview === _rootController.view {
+            _rootController.view.bringSubviewToFront(statusBarView)
+        }
+        if let covering = coveringView, covering.superview === _rootController.view {
+            _rootController.view.bringSubviewToFront(covering)
+        }
+    }
+
+    private func updateForceInCallStatusBarView(text: String?, transition: ContainedViewLayoutTransition) {
+        if let text {
+            let label: UILabel
+            if let current = forceInCallStatusBarView {
+                label = current
+            } else {
+                let current = UILabel()
+                current.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.92)
+                current.textColor = .white
+                current.textAlignment = .center
+                current.font = UIFont.systemFont(ofSize: 13.0, weight: .semibold)
+                current.alpha = 0.0
+                _rootController.view.addSubview(current)
+                forceInCallStatusBarView = current
+                label = current
+            }
+            label.text = text
+            label.frame = CGRect(x: 0.0, y: 0.0, width: windowLayout.size.width, height: max(40.0, windowLayout.safeInsets.top))
+            reorderTopLevelSurfaces()
+            transition.updateAlpha(view: label, alpha: 1.0)
+        } else if let label = forceInCallStatusBarView {
+            forceInCallStatusBarView = nil
+            transition.updateAlpha(view: label, alpha: 0.0, completion: { _ in
+                label.removeFromSuperview()
+            })
+        }
+    }
+
+    private func updateOverlayController(_ controller: UIViewController, layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        transition.updateFrame(view: controller.view, frame: CGRect(origin: .zero, size: layout.size))
+        if let tabBar = controller as? AetherTabBarController {
+            tabBar.containerLayoutUpdated(layout, transition: transition)
+        } else if let nav = controller as? AetherNavigationController {
+            nav.containerLayoutUpdated(layout, transition: transition)
+        } else if let vc = controller as? AetherViewController {
+            vc.containerLayoutUpdated(layout, transition: transition)
+        }
     }
 
     // MARK: - Size Update
@@ -858,6 +1082,7 @@ public final class AetherWindow: UIWindow {
             size: pending.layout.size,
             metrics: layoutMetrics(for: pending.layout.size),
             statusBarHeight: statusBarHeight,
+            forceInCallStatusBarText: pending.layout.forceInCallStatusBarText,
             inputHeight: pending.layout.inputHeight,
             safeInsets: safeInsets,
             upperKeyboardInputPositionBound: pending.layout.upperKeyboardInputPositionBound,
@@ -872,6 +1097,9 @@ public final class AetherWindow: UIWindow {
             if let controller = contentController {
                 pending.transition.updateFrame(view: controller.view, frame: CGRect(origin: .zero, size: windowLayout.size))
                 updateContentController(layout: childLayout, transition: pending.transition)
+            }
+            for controller in topLevelOverlayControllers {
+                updateOverlayController(controller, layout: childLayout, transition: pending.transition)
             }
         }
 
@@ -906,10 +1134,20 @@ public final class AetherWindow: UIWindow {
         }
 
         // Update covering view
+        for view in globalPortalHostViews {
+            view.frame = CGRect(origin: .zero, size: windowLayout.size)
+        }
+        if let proximityDimView {
+            proximityDimView.frame = CGRect(origin: .zero, size: windowLayout.size)
+        }
+        if let statusBarView = forceInCallStatusBarView {
+            statusBarView.frame = CGRect(x: 0.0, y: 0.0, width: windowLayout.size.width, height: max(40.0, windowLayout.safeInsets.top))
+        }
         if let covering = coveringView {
             covering.frame = CGRect(origin: .zero, size: windowLayout.size)
             covering.updateLayout(windowLayout.size)
         }
+        reorderTopLevelSurfaces()
     }
 
     // MARK: - Content Controller Layout Dispatch

@@ -33,13 +33,19 @@ final class LensSDFFilter {
     private var ownsBlurFilter: Bool = true
     private let emptyLayerDelegate = SDFEmptyLayerDelegate()
 
+    private static func keyframeSampleCount(duration: TimeInterval) -> Int {
+        let framesPerSecond = max(60, UIScreen.main.maximumFramesPerSecond)
+        let samples = Int(ceil(duration * Double(framesPerSecond))) + 1
+        return max(30, min(120, samples))
+    }
+
     // MARK: - Init
 
     init?() {
         guard
-            let sdfElement = aether_makeSDFObject("CASDFElementLayer") as? CALayer,
-            let sdf = aether_makeSDFObject("CASDFLayer") as? CALayer,
-            let effect = aether_makeSDFObject("CASDFGlassDisplacementEffect"),
+            let sdfElement = aether_makeSDFObject(ObfuscatedSymbols.caSDFElementLayer) as? CALayer,
+            let sdf = aether_makeSDFObject(ObfuscatedSymbols.caSDFLayer) as? CALayer,
+            let effect = aether_makeSDFObject(ObfuscatedSymbols.caSDFGlassDisplacementEffect),
             let blur = aether_makeCAFilter(name: ObfuscatedSymbols.gaussianBlur),
             let displacement = aether_makeCAFilter(name: ObfuscatedSymbols.displacementMap)
         else {
@@ -60,7 +66,7 @@ final class LensSDFFilter {
         displacementEffect.setValue(1.0, forKey: ObfuscatedSymbols.curvature)
         displacementEffect.setValue(0.0 as NSNumber, forKey: ObfuscatedSymbols.angle)
 
-        sdfLayer.name = "sdfLayer"
+        sdfLayer.name = ObfuscatedSymbols.sdfLayer
         sdfLayer.setValue(3.0, forKey: ObfuscatedSymbols.scale)
         sdfLayer.setValue(displacementEffect, forKey: ObfuscatedSymbols.effect)
         sdfLayer.delegate = emptyLayerDelegate
@@ -77,7 +83,7 @@ final class LensSDFFilter {
     private func configureFilters() {
         aether_setCAFilterName(blurFilter, ObfuscatedSymbols.gaussianBlur)
         aether_setCAFilterName(displacementFilter, ObfuscatedSymbols.displacementMap)
-        displacementFilter.setValue("sdfLayer", forKey: ObfuscatedSymbols.inputSourceSublayerName)
+        displacementFilter.setValue(ObfuscatedSymbols.sdfLayer, forKey: ObfuscatedSymbols.inputSourceSublayerName)
     }
 
     // MARK: - Install / uninstall
@@ -152,15 +158,33 @@ final class LensSDFFilter {
 
     // MARK: - Animation knobs
 
+    func setDisplacementHeight(_ height: CGFloat) {
+        guard let targetLayer else { return }
+        let clampedHeight = max(0.0, height)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        targetLayer.setValue(clampedHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.setValue(-clampedHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
+        CATransaction.commit()
+    }
+
+    func setBlurRadius(_ radius: CGFloat) {
+        guard ownsBlurFilter, let targetLayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        targetLayer.setValue(max(0.0, radius) as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+        CATransaction.commit()
+    }
+
     /// Animate `effect.height` (= `displacementMap.inputAmount` × -1) over
     /// `duration`. The keypath chain matches Telegram's `LensTransitionContainerImpl`
     /// so the linear `displacementFractionEase` keyframes carry over.
     func animateDisplacement(fromHeight: CGFloat, toHeight: CGFloat, duration: TimeInterval) {
         guard let targetLayer else { return }
 
-        // 30-sample keyframes via displacementFractionEase (linear blend
-        // between fromHeight and toHeight per sample).
-        let sampleCount = 30
+        // Match the display refresh rate so the SDF pulse does not step on
+        // every other frame on ProMotion devices.
+        let sampleCount = Self.keyframeSampleCount(duration: duration)
         let endIndex = CGFloat(sampleCount - 1)
         let heightKeyframes: [CGFloat] = (0 ..< sampleCount).map { i in
             let t = endIndex > 0 ? CGFloat(i) / endIndex : 1.0
@@ -177,18 +201,18 @@ final class LensSDFFilter {
         if ownsBlurFilter {
             targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         }
-        targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
 
         let scale = UIView.animationDurationFactor()
 
-        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         heightAnim.duration = duration * scale
         heightAnim.values = heightKeyframes.map { $0 as NSNumber }
         heightAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         heightAnim.isRemovedOnCompletion = true
         heightAnim.fillMode = .both
-        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
 
         let dispAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
         dispAnim.duration = duration * scale
@@ -199,46 +223,41 @@ final class LensSDFFilter {
         targetLayer.add(dispAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
     }
 
-    /// Animate `effect.height` as a HOLD-then-DECAY (or RISE-then-HOLD
-    /// when `reversed == true`) pulse. Open: stays at `peakHeight` for
-    /// the first ~55 % of the duration, smoothsteps to 0 between 55 %
-    /// and 88 %, holds 0 for the last 12 %. Close (`reversed: true`)
-    /// is the exact time-reverse — held at 0 for the first 12 %, rises
-    /// to peak between 12 % and 45 %, then holds peak to the end.
-    /// Using the same shape in both directions keeps the SDF
-    /// choreography symmetric to match the geometry spring.
+    /// Animate `effect.height` as a short rise, mid-morph pulse, and
+    /// full decay. Open rises to peak by ~10%, holds through ~55%,
+    /// then decays to zero by ~85% so no distortion remains at rest.
+    /// Close is the exact time-reverse.
     func animateDisplacementPulse(peakHeight: CGFloat, duration: TimeInterval, reversed: Bool = false) {
         guard let targetLayer else { return }
 
-        let sampleCount = 30
+        let sampleCount = Self.keyframeSampleCount(duration: duration)
         let endIndex = CGFloat(sampleCount - 1)
-        // Open shape: hold peak through the first 55 %, decay to 0
-        // between 55 % and 88 %, hold 0 for the last 12 % (visibly
-        // FINISHED before the geometry spring settles). Close shape
-        // is `open` played in reverse — same smoothstep, same three
-        // phases, just mirrored so the lens rises from 0 to peak as
-        // the menu collapses.
+        let riseEnd: CGFloat = 0.10
         let holdUntil: CGFloat = 0.55
-        let decayEnd: CGFloat = 0.88
+        let decayEnd: CGFloat = 0.85
         let heightKeyframes: [CGFloat] = (0 ..< sampleCount).map { i in
             let tRaw = endIndex > 0 ? CGFloat(i) / endIndex : 1.0
             let t = reversed ? (1.0 - tRaw) : tRaw
-            let decay: CGFloat
-            if t <= holdUntil {
-                decay = 0
+            let amount: CGFloat
+            if t <= 0 {
+                amount = 0
+            } else if t < riseEnd {
+                let localT = t / riseEnd
+                amount = localT * localT * (3 - 2 * localT)
+            } else if t <= holdUntil {
+                amount = 1
             } else if t >= decayEnd {
-                decay = 1
+                amount = 0
             } else {
                 let localT = (t - holdUntil) / (decayEnd - holdUntil)
-                decay = localT * localT * (3 - 2 * localT)
+                amount = 1.0 - localT * localT * (3 - 2 * localT)
             }
-            return peakHeight * (1.0 - decay)
+            return peakHeight * amount
         }
 
-        // Model value = last keyframe. For the open pulse that's 0 —
-        // lens finalises cleanly. For the reversed close pulse that's
-        // peakHeight, which doesn't matter visually because the host
-        // layer is torn down right after the close animation ends.
+        // Model value = last keyframe. Both open and reversed close end
+        // at zero, so no residual displacement survives cancellation or
+        // a delayed layer teardown.
         //
         // Critically send actual 0 on the open path (no `max(0.001, _)`
         // floor) — a residual -0.001 on `inputAmount` leaves the
@@ -251,18 +270,18 @@ final class LensSDFFilter {
         if ownsBlurFilter {
             targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         }
-        targetLayer.setValue(finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.setValue(finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         targetLayer.setValue(-finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
 
         let scale = UIView.animationDurationFactor()
 
-        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        let heightAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         heightAnim.duration = duration * scale
         heightAnim.values = heightKeyframes.map { $0 as NSNumber }
         heightAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         heightAnim.isRemovedOnCompletion = true
         heightAnim.fillMode = .both
-        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath("sublayers", "sdfLayer", ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
+        targetLayer.add(heightAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
 
         let dispAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
         dispAnim.duration = duration * scale
@@ -282,7 +301,7 @@ final class LensSDFFilter {
         guard ownsBlurFilter else { return }
         guard let targetLayer else { return }
 
-        let sampleCount = 30
+        let sampleCount = Self.keyframeSampleCount(duration: duration)
         let endIndex = CGFloat(sampleCount - 1)
         let blurKeyframes: [CGFloat] = (0 ..< sampleCount).map { i in
             let t = endIndex > 0 ? CGFloat(i) / endIndex : 1.0

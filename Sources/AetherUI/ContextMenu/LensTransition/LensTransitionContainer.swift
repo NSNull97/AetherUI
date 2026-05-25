@@ -89,6 +89,12 @@ private final class EmptyLayerDelegate: NSObject, CALayerDelegate {
     }
 }
 
+private func lensTransitionKeyframeSampleCount(duration: Double = 0.5) -> Int {
+    let framesPerSecond = max(60, UIScreen.main.maximumFramesPerSecond)
+    let samples = Int(ceil(duration * Double(framesPerSecond))) + 1
+    return max(30, min(120, samples))
+}
+
 public protocol LensTransitionContainerEffectView: UIView {
     func updateSize(duration: Double, keyframes: [CGSize])
     func updateSize(size: CGSize, transition: ContainedViewLayoutTransition)
@@ -128,9 +134,9 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         self.contentsEffectView = UIView()
         self.contentsView = UIView()
         
-        self.sdfElementLayer = createObject(className: "CASDFElementLayer") as? CALayer
-        self.sdfLayer = createObject(className: "CASDFLayer") as? CALayer
-        self.displacementEffect = createObject(className: "CASDFGlassDisplacementEffect")
+        self.sdfElementLayer = createObject(className: ObfuscatedSymbols.caSDFElementLayer) as? CALayer
+        self.sdfLayer = createObject(className: ObfuscatedSymbols.caSDFLayer) as? CALayer
+        self.displacementEffect = createObject(className: ObfuscatedSymbols.caSDFGlassDisplacementEffect)
         
         super.init(frame: CGRect())
         
@@ -149,7 +155,7 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         }
         
         if let sdfLayer = self.sdfLayer, let displacementEffect = self.displacementEffect {
-            sdfLayer.name = "sdfLayer"
+            sdfLayer.name = ObfuscatedSymbols.sdfLayer
             sdfLayer.setValue(3.0, forKey: ObfuscatedSymbols.scale)
             sdfLayer.setValue(displacementEffect, forKey: ObfuscatedSymbols.effect)
             sdfLayer.delegate = self.emptyLayerDelegate
@@ -180,7 +186,7 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
                 if let blurFilter = createFilter(name: ObfuscatedSymbols.gaussianBlur), let displacementFilter = createFilter(name: ObfuscatedSymbols.displacementMap) {
                     setFilterName(object: blurFilter, name: ObfuscatedSymbols.gaussianBlur)
                     setFilterName(object: displacementFilter, name: ObfuscatedSymbols.displacementMap)
-                    displacementFilter.setValue("sdfLayer", forKey: ObfuscatedSymbols.inputSourceSublayerName)
+                    displacementFilter.setValue(ObfuscatedSymbols.sdfLayer, forKey: ObfuscatedSymbols.inputSourceSublayerName)
                     
                     self.contentsEffectView.layer.rasterizationScale = 3.0
                     self.contentsEffectView.layer.filters = [
@@ -244,7 +250,7 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         let sourceFinalFurthestInsideDistance: CGFloat = -8.0
         let sourceFinalInsideStartFraction: CGFloat = 0.65
         let sourceFullInsideInset: CGFloat = max(1.0, min(fromRect.width, fromRect.height) * 0.5)
-        let sampleCount = 30
+        let sampleCount = lensTransitionKeyframeSampleCount()
         let sampleEndIndex = CGFloat(sampleCount - 1)
         let toSize = toRect.size
         let toHalf = CGPoint(x: toSize.width * 0.5, y: toSize.height * 0.5)
@@ -611,7 +617,7 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         let sourceFinalFurthestInsideDistance: CGFloat = -8.0
         let sourceFinalInsideStartFraction: CGFloat = 0.65
         let sourceFullInsideInset: CGFloat = max(1.0, min(fromRect.width, fromRect.height) * 0.5)
-        let sampleCount = 30
+        let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
         let sampleEndIndex = CGFloat(sampleCount - 1)
         let toSize = toRect.size
         let toHalf = CGPoint(x: toSize.width * 0.5, y: toSize.height * 0.5)
@@ -1021,26 +1027,29 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
             self.effectView.updateCornerRadius(duration: duration, keyframes: radiusKeyframes)
         }
         do {
+            let effectHeightKeyPath = ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height)
             self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
-            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: "sublayers.sdfLayer.effect.height")
+            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: effectHeightKeyPath)
             self.contentsEffectView.layer.setValue(-0.001 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
             
             let fromHeight: CGFloat = minSide * 0.25
             let toHeight: CGFloat = 0.001
-            let effectHeightKeyframes = (0 ..< 30).map { i -> CGFloat in
-                let t = CGFloat(i) / (30.0 - 1.0)
+            let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
+            let sampleEndIndex = CGFloat(sampleCount - 1)
+            let effectHeightKeyframes = (0 ..< sampleCount).map { i -> CGFloat in
+                let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 let fraction = CGFloat(max(0.0, min(1.0, displacementFractionEase(Double(t)))))
                 let value = (1.0 - fraction) * fromHeight + fraction * toHeight
                 return value
             }
             
-            let heightKeyframeAnimation = CAKeyframeAnimation(keyPath: "sublayers.sdfLayer.effect.height")
+            let heightKeyframeAnimation = CAKeyframeAnimation(keyPath: effectHeightKeyPath)
             heightKeyframeAnimation.duration = duration * UIView.animationDurationFactor()
             heightKeyframeAnimation.values = effectHeightKeyframes.map { $0 as NSNumber }
             heightKeyframeAnimation.timingFunction = CAMediaTimingFunction(name: .linear)
             heightKeyframeAnimation.isRemovedOnCompletion = true
             heightKeyframeAnimation.fillMode = .both
-            self.contentsEffectView.layer.add(heightKeyframeAnimation, forKey: "sublayers.sdfLayer.effect.height")
+            self.contentsEffectView.layer.add(heightKeyframeAnimation, forKey: effectHeightKeyPath)
             
             let displacementKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
             displacementKeyframeAnimation.duration = duration * UIView.animationDurationFactor()
@@ -1050,8 +1059,8 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
             displacementKeyframeAnimation.fillMode = .both
             self.contentsEffectView.layer.add(displacementKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
             
-            let blurKeyframes = (0 ..< 30).map { i -> CGFloat in
-                let t = CGFloat(i) / (30.0 - 1.0)
+            let blurKeyframes = (0 ..< sampleCount).map { i -> CGFloat in
+                let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 return CGFloat(blurEase(Double(t)))
             }
             let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
@@ -1063,8 +1072,10 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
             self.contentsEffectView.layer.add(blurKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
         }
         do {
-            let subScaleKeyframes = (0 ..< 30).map { i -> CGFloat in
-                let t = CGFloat(i) / (30.0 - 1.0)
+            let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
+            let sampleEndIndex = CGFloat(sampleCount - 1)
+            let subScaleKeyframes = (0 ..< sampleCount).map { i -> CGFloat in
+                let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 return CGFloat(subScaleEase(Double(t)))
             }
             let keyframeAnimation = CAKeyframeAnimation(keyPath: "sublayerTransform.scale")
@@ -1408,8 +1419,10 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         }
         do {
             self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
-            let blurKeyframes = (0 ..< 30).map { i -> CGFloat in
-                let t = CGFloat(i) / (30.0 - 1.0)
+            let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
+            let sampleEndIndex = CGFloat(sampleCount - 1)
+            let blurKeyframes = (0 ..< sampleCount).map { i -> CGFloat in
+                let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 return CGFloat(blurEase(Double(t)))
             }
             let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
@@ -1605,10 +1618,10 @@ private final class LensTransitionContainerFallbackImpl: UIView, LensTransitionC
         let radiusKeyframes: [CGFloat]
     }
 
-    /// Bakes 30 sample keyframes that replicate the size / position / corner
+    /// Bakes refresh-rate-aware keyframes that replicate the size / position / corner
     /// arc the iOS-26 impl produces. No displacement / SDF fields needed.
     private func computeKeyframes(fromRect: CGRect, toRect: CGRect, toCornerRadius: CGFloat) -> FallbackKeyframes {
-        let sampleCount = 30
+        let sampleCount = lensTransitionKeyframeSampleCount()
         let sampleEndIndex = CGFloat(sampleCount - 1)
         let toSize = toRect.size
         let minSide = min(toSize.width, toSize.height)

@@ -606,6 +606,7 @@ private final class ChatDetailController: AetherViewController {
     init(chat: ChatRowItem) {
         self.chat = chat
         super.init(navigationBarPresentationData: .defaultTheme(edgeColor: .systemBackground))
+        hidesBottomBarWhenPushed = true
     }
 
     required init(coder aDecoder: NSCoder) {
@@ -658,16 +659,8 @@ private final class ChatDetailController: AetherViewController {
         listView.transaction(insertIndicesAndItems: inserts)
     }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        // Hide the host tab bar so the chat fills the screen — same
-        // pattern as iMessage / Telegram chat detail.
-        aetherTabBarController?.updateIsTabBarHidden(true, transition: animated ? .animated(duration: 0.3, curve: .spring) : .immediate)
-    }
-
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        aetherTabBarController?.updateIsTabBarHidden(false, transition: animated ? .animated(duration: 0.3, curve: .spring) : .immediate)
         // Restore the window's keyboard pan recognizer for whoever
         // we're popping back to.
         if let cw = view.window as? AetherWindow {

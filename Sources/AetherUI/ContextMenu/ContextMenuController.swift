@@ -2,13 +2,10 @@ import UIKit
 
 // MARK: - ContextMenuController
 
-/// Presents a `ContextMenuActionsView` with a single-surface morph: a
-/// `ContextMenuMorphHostView` starts sized + cornered like the source
-/// button, then morphs to the menu rect under a single progress-driven
-/// timeline. Source-button snapshot fades out early, menu rows slide in
-/// late, shadow thickens with size, all choreographed off the same
-/// `progress: 0…1` the morph host exposes. Visually the button literally
-/// "unfolds" into the menu — no cross-fading two independent views.
+/// Presents a `ContextMenuActionsView` as a glass-owned interaction. The
+/// default `.morph` path keeps the older rounded-rect morph, while
+/// `.fluidMorph` uses a source-to-platter bloom: one visible glass surface
+/// expands from the source frame through a soft bubble into the final menu.
 ///
 /// Two presentation flavours:
 ///   - `.morph`   (default) — uses `ContextMenuMorphHostView`.
@@ -30,28 +27,24 @@ public final class ContextMenuController {
     /// as a convenient fallback (its internal progress driver reshapes them
     /// into its own phase budget).
     ///
-    ///   open    ~ 0.42s   spring with 0.72 damping → ~8% overshoot,
-    ///                     settles by ~0.36s, actions arrival curve
-    ///                     lands into place over the back half.
-    ///   dismiss ~ 0.30s   firmer (damping 0.86) so close feels decisive
-    ///                     without being stiff.
-    private static let morphDuration: TimeInterval = 0.475
-    // Dismiss is a literal time-reverse of the open. Same duration +
-    // damping keeps source/dest cross-fade windows and the geometry
-    // spring symmetric — no asymmetric "snappier close".
-    private static let dismissDuration: TimeInterval = 0.475
-    /// `damping` is the spring's damping ratio for
-    /// `UISpringTimingParameters` (see `ContextMenuFluidMorphHostView`).
+    ///   open    ~ 0.36s  soft spring-driven ease-out,
+    ///                    enough time for the menu/content crossfade to read
+    ///                    as one fluid motion instead of a snapped reveal.
+    ///   dismiss ~ 0.31s  reversed ease-out with a small inverse pulse
+    ///                    without being stiff.
+    private static let morphDuration: TimeInterval = 0.36
+    private static let dismissDuration: TimeInterval = 0.28
+    /// `damping` is the spring's damping ratio for the display-link solvers.
     ///   1.0 = critically damped (no bounce, just glides in)
     ///   0.7 = noticeable overshoot, ~one settle cycle — "fluid"
     ///   0.5 = lots of wobble
     /// 0.72 is the sweet spot for "tactile, playful, but not silly".
     /// Close uses 0.86 — much firmer, just enough give to not feel
     /// snap-to-invisibility.
-    private static let morphDamping: CGFloat = 0.68
-    private static let dismissDamping: CGFloat = 0.68
+    private static let morphDamping: CGFloat = 0.72
+    private static let dismissDamping: CGFloat = 0.84
 
-    private static let dimAlpha: CGFloat = 0.0  // very faint separation layer (rec: ≤0.06-0.10)
+    private static let dimAlpha: CGFloat = 0.08  // very faint separation veil (rec: ≤0.06-0.12)
     /// Radius of the backdrop blur applied to the dim layer, in points.
     /// Uses a raw CABackdropLayer + CAFilter("gaussianBlur"), so any
     /// non-negative radius works (unlike UIBlurEffect which snaps to
@@ -61,12 +54,6 @@ public final class ContextMenuController {
     /// unreadable.
     public static var dimBlurRadius: CGFloat = 0.05
     private static let menuCornerRadius: CGFloat = 34.0
-    /// Diameter of the initial "droplet bubble" for `.morph`. Smaller
-    /// values read as a "point" emerging → the menu inflates from a
-    /// dot rather than from a visible disc. 24 pt is small enough
-    /// that the start reads as a concentrated spark / drop, with
-    /// just enough size for the glass effect to be perceptible.
-    private static let dropletSize: CGFloat = 24.0
 
     // MARK: - Glass lift metrics
     //
@@ -101,17 +88,9 @@ public final class ContextMenuController {
     public struct Source {
         public weak var view: UIView?
         public var cornerRadius: CGFloat?
-        /// When `true`, the source view fades out as the menu morphs in
-        /// and fades back in on dismiss. The default (`false`) keeps the
-        /// source visible underneath the morph — that's what you want
-        /// for liquid-glass cards / list rows where the menu reads as a
-        /// lens magnifying the source.
-        ///
-        /// Set this to `true` for nav-bar buttons and similar capsule
-        /// cells: their own glass background reads as a duplicate of
-        /// the menu's morph, and visually it should "lift off" the bar
-        /// while the menu is up. Layout doesn't shift either way — we
-        /// drive `layer.opacity`, not `isHidden`.
+        /// Legacy opt-in for anchors that explicitly need the real source
+        /// hidden while the snapshot inside the morph surface replaces it.
+        /// Layout doesn't shift either way — we drive alpha, not `isHidden`.
         public var hidesDuringPresentation: Bool
 
         public init(view: UIView, cornerRadius: CGFloat? = nil, hidesDuringPresentation: Bool = false) {
@@ -131,32 +110,9 @@ public final class ContextMenuController {
     public enum PresentationStyle {
         case morph
         case preview(verticalSpacing: CGFloat = 12.0, lift: CGFloat = 1.04)
-        /// Fresh fluid morph using `UIViewPropertyAnimator` + spring
-        /// timing on `self.frame`, corner-anchored content containers
-        /// via `autoresizingMask`, and `CABasicAnimation` for layer-
-        /// only properties (`cornerRadius` / `shadowPath`).
-        ///
-        /// Directional correctness (right-side button's menu unfolds
-        /// leftward from the button's right edge; left-side unfolds
-        /// rightward from the left edge; vertical is handled the same
-        /// way for flip-upward) is STRUCTURAL, not hand-tuned:
-        ///
-        ///   - `computeMenuFrame` pins one on-screen edge of menu to
-        ///     source (e.g. `menu.maxX == source.maxX` right-aligned).
-        ///   - The host's `frame` spring then keeps that edge
-        ///     invariant — `frame.maxX(t) = source.maxX` for all `t`,
-        ///     mathematically, because position.x(t) and bounds.w(t)
-        ///     interpolate linearly and their derivatives cancel on
-        ///     the pinned edge.
-        ///   - Content containers (source snapshot, actions view) are
-        ///     pinned to the same anchor corner via `autoresizingMask`,
-        ///     so they stay STATIONARY in absolute screen coords while
-        ///     the glass envelope grows around them.
-        ///
-        /// Net result: no left-jumping, no unfolding from the wrong
-        /// side, and the source content and actions content never
-        /// physically move in absolute coords — only the glass moves.
-        /// See `ContextMenuFluidMorphHostView`.
+        /// Lens-bloom presentation. A small optical seed appears near the
+        /// future menu anchor, expands as a circular/oval lens, then rectifies
+        /// into the final rounded menu platter.
         case fluidMorph
     }
 
@@ -166,6 +122,11 @@ public final class ContextMenuController {
     private let items: [ContextMenuItem]
     private let presentationStyle: PresentationStyle
     private let onDismiss: (() -> Void)?
+    private let catchTapsOutside: Bool
+    private let hasHapticFeedback: Bool
+    private let blurred: Bool
+    private let isDark: Bool?
+    private let skipCoordinateConversion: Bool
 
     private weak var hostView: UIView?
     private var dimView: UIView?
@@ -175,11 +136,10 @@ public final class ContextMenuController {
     /// For `.preview` style: left `nil`; `sdfHost` is used as the outer
     /// wrapper instead.
     private var morphHost: ContextMenuMorphHostView?
-    /// For `.fluidMorph` style: the minimal host with UIViewPropertyAnimator
-    /// spring driving the frame morph, and corner-anchored content.
-    /// Independent of `morphHost` so both implementations can coexist
-    /// for A/B comparison.
-    private var fluidMorphHost: ContextMenuFluidMorphHostView?
+    /// For `.fluidMorph` style: source-to-platter bloom host. The host itself
+    /// is transparent; its single visible glass surface animates frame and
+    /// corner radius from source to menu.
+    private var platterBloomHost: ContextMenuSourcePlatterBloomTransitionView?
     /// For `.preview` style only: the outer wrapper holding the (static-
     /// size) glass menu. Left `nil` for `.morph` — morphHost plays that role.
     private var sdfHost: UIView?
@@ -188,12 +148,13 @@ public final class ContextMenuController {
     private var snapshotView: UIView?
     private var actionsView: ContextMenuActionsView?
     private var tapRecognizer: UITapGestureRecognizer?
+    private var sourcePresentationLease: SourcePresentationLease?
     /// The view that plays the role of "the glass surface hit-test target"
     /// for submenu + stretch purposes. For `.morph` this is `morphHost`;
-    /// for `.fluidMorph` it's `fluidMorphHost`; for `.preview` it's
+    /// for `.fluidMorph` it's the platter bloom glass surface; for `.preview` it's
     /// `sdfHost`. Collapsed into a single property so downstream wiring
     /// code doesn't have to branch on presentation style.
-    private var surfaceView: UIView? { morphHost ?? fluidMorphHost ?? sdfHost }
+    private var surfaceView: UIView? { morphHost ?? platterBloomHost?.finalMenuGlassSurfaceView ?? sdfHost }
     private var surfaceOverlayView: UIView? { surfaceView }
     /// Inline submenu overlay (Yandex Music style). When non-nil, the parent
     /// `actionsView` is dimmed + disabled and `submenuCard` is overlaid on
@@ -227,6 +188,11 @@ public final class ContextMenuController {
     /// Original `source.layer.opacity` captured on present when
     /// `Source.hidesDuringPresentation == true`, so dismiss can restore it.
     private var savedSourceOpacity: Float?
+    /// Original source transform captured while the menu owns the source
+    /// fade/scale. Restored on dismiss so anchors that already had a custom
+    /// transform are not flattened to identity.
+    private var savedSourceTransform: CGAffineTransform?
+    private var savedSourceIsUserInteractionEnabled: Bool?
 
     // MARK: - Init
 
@@ -234,11 +200,21 @@ public final class ContextMenuController {
         source: Source,
         items: [ContextMenuItem],
         presentationStyle: PresentationStyle = .morph,
+        catchTapsOutside: Bool = true,
+        hasHapticFeedback: Bool = true,
+        blurred: Bool = true,
+        isDark: Bool? = nil,
+        skipCoordinateConversion: Bool = false,
         onDismiss: (() -> Void)? = nil
     ) {
         self.source = source
         self.items = items
         self.presentationStyle = presentationStyle
+        self.catchTapsOutside = catchTapsOutside
+        self.hasHapticFeedback = hasHapticFeedback
+        self.blurred = blurred
+        self.isDark = isDark
+        self.skipCoordinateConversion = skipCoordinateConversion
         self.onDismiss = onDismiss
     }
 
@@ -249,6 +225,9 @@ public final class ContextMenuController {
         guard !isPresented, let source = source.view, let window = source.window else { return }
         isPresented = true
         ContextMenuController.presentedControllers.insert(retainBox)
+        if hasHapticFeedback {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
 
         let host = UIView(frame: window.bounds)
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -260,14 +239,21 @@ public final class ContextMenuController {
         // so the radius is continuously configurable via
         // `dimBlurRadius`. At the default 2pt radius the background
         // is just barely softened, not frosted.
-        let dim = ContextMenuDimBlurView(
-            blurRadius: ContextMenuController.dimBlurRadius,
-            tintAlpha: ContextMenuController.dimAlpha
-        )
+        let dim: UIView
+        if blurred {
+            dim = ContextMenuDimBlurView(
+                blurRadius: ContextMenuController.dimBlurRadius,
+                tintAlpha: ContextMenuController.dimAlpha
+            )
+        } else {
+            let plainDim = UIView()
+            plainDim.backgroundColor = UIColor.black.withAlphaComponent(ContextMenuController.dimAlpha)
+            dim = plainDim
+        }
         dim.frame = host.bounds
         dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         dim.alpha = 0
-        dim.isUserInteractionEnabled = true
+        dim.isUserInteractionEnabled = catchTapsOutside
         host.addSubview(dim)
         self.dimView = dim
 
@@ -275,9 +261,59 @@ public final class ContextMenuController {
         let actionsView = ContextMenuActionsView(items: items)
         let maxWidth = min(host.bounds.width - 24.0, ContextMenuActionsView.preferredWidth)
         let menuSize = actionsView.preferredSize(maxWidth: maxWidth)
-        let sourceRectInHost = source.convert(source.bounds, to: host)
+        var sourceCornerRadius = self.source.cornerRadius ?? source.layer.cornerRadius
+        let activeSourceLease: SourcePresentationLease?
+        let sourceVisualMode: ContextMenuSourceVisualMode?
+        let sourceRectInHost: CGRect
+
+        if case .fluidMorph = presentationStyle {
+            guard let descriptor = makeSourceDescriptor(hitView: source, overlayView: host) else {
+                host.removeFromSuperview()
+                isPresented = false
+                ContextMenuController.presentedControllers.remove(retainBox)
+                return
+            }
+            let mode = descriptor.sourceMode
+            let transitionMode: ContextMenuSourceVisualMode = .leasedGlassSource
+            #if DEBUG
+            print("ContextMenu source mode:", mode, "hit:", descriptor.hitView, "visual:", descriptor.visualView)
+            #endif
+            sourceVisualMode = transitionMode
+            sourceCornerRadius = descriptor.sourceCornerRadius
+            guard let lease = SourcePresentationLease(
+                sourceID: ObjectIdentifier(descriptor.visualView),
+                descriptor: descriptor,
+                overlayView: host
+            ) else {
+                host.removeFromSuperview()
+                isPresented = false
+                ContextMenuController.presentedControllers.remove(retainBox)
+                return
+            }
+            lease.acquire()
+            self.sourcePresentationLease = lease
+            activeSourceLease = lease
+            sourceRectInHost = lease.sourceFrameInOverlay
+            if sourceCornerRadius <= 0.0, Self.isGlassContextMenuSource(descriptor.visualView) || Self.isGlassContextMenuSource(descriptor.hitView) {
+                sourceCornerRadius = min(sourceRectInHost.width, sourceRectInHost.height) / 2.0
+            }
+        } else if skipCoordinateConversion {
+            activeSourceLease = nil
+            sourceVisualMode = nil
+            sourceRectInHost = source.frame
+        } else {
+            activeSourceLease = nil
+            sourceVisualMode = nil
+            sourceRectInHost = source.convert(source.bounds, to: host)
+        }
         let menuFrame = computeMenuFrame(sourceRect: sourceRectInHost, menuSize: menuSize, hostBounds: host.bounds)
-        let sourceCornerRadius = self.source.cornerRadius ?? source.layer.cornerRadius
+        #if DEBUG
+        if case .fluidMorph = presentationStyle {
+            assert(menuFrame.width <= host.bounds.width - 32.0 || host.bounds.width < 64.0, "Context menu target frame must be menu-sized, not overlay-sized.")
+            assert(menuFrame.height < host.bounds.height * 0.75 || host.bounds.height < 64.0, "Context menu target frame is too tall for platter bloom geometry.")
+            assert(menuFrame != host.bounds, "Context menu target frame must not equal overlay bounds.")
+        }
+        #endif
         self.menuFrameInHost = menuFrame
         self.sourceRectInHost = sourceRectInHost
         self.sourceCornerRadius = sourceCornerRadius
@@ -285,28 +321,32 @@ public final class ContextMenuController {
         // Branch on style — they're different enough (morph = progress-
         // driven single surface; preview = static glass + lifted snapshot)
         // that a shared setup path stopped paying its way.
-        let isDark = source.traitCollection.userInterfaceStyle == .dark
-        let snapshot = makeSourceSnapshot(
-            source: source,
-            preferRenderedImage: {
-                if case .morph = presentationStyle, #available(iOS 26.0, *) {
-                    return true
-                } else {
-                    return false
-                }
-            }()
-        )
+        let isDark = self.isDark ?? (source.traitCollection.userInterfaceStyle == .dark)
+        let snapshot: UIView?
+        if case .fluidMorph = presentationStyle {
+            snapshot = nil
+        } else {
+            snapshot = makeSourceSnapshot(
+                source: source,
+                preferRenderedImage: {
+                    if #available(iOS 26.0, *) {
+                        switch presentationStyle {
+                        case .morph, .fluidMorph:
+                            return true
+                        case .preview:
+                            return false
+                        }
+                    } else {
+                        return false
+                    }
+                }()
+            )
+        }
         self.snapshotView = snapshot
 
         switch presentationStyle {
-        case .morph, .fluidMorph:
-            // `.fluidMorph` aliased to `.morph` — both use the same
-            // droplet-at-source → travel-to-menu-centre → bilateral
-            // expand timeline. The older `ContextMenuFluidMorphHost-
-            // View` with its UIViewPropertyAnimator + frame-spring
-            // approach produced a different (edge-anchored) visual
-            // the user didn't want, so routing both styles through
-            // `setupMorphStyle` keeps behaviour identical.
+        case .morph:
+            guard let snapshot else { return }
             setupMorphStyle(
                 host: host,
                 source: source,
@@ -317,7 +357,20 @@ public final class ContextMenuController {
                 sourceCornerRadius: sourceCornerRadius,
                 menuFrame: menuFrame
             )
+        case .fluidMorph:
+            guard let sourceVisualMode else { return }
+            setupFluidMorphStyle(
+                host: host,
+                isDark: isDark,
+                sourceLease: activeSourceLease,
+                sourceMode: sourceVisualMode,
+                actionsView: actionsView,
+                sourceRectInHost: sourceRectInHost,
+                sourceCornerRadius: sourceCornerRadius,
+                menuFrame: menuFrame
+            )
         case .preview:
+            guard let snapshot else { return }
             setupPreviewStyle(
                 host: host,
                 source: source,
@@ -331,9 +384,11 @@ public final class ContextMenuController {
         self.actionsView = actionsView
 
         // Tap-outside to dismiss.
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
-        dim.addGestureRecognizer(tap)
-        self.tapRecognizer = tap
+        if catchTapsOutside {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(handleBackgroundTap(_:)))
+            dim.addGestureRecognizer(tap)
+            self.tapRecognizer = tap
+        }
 
         // Wire root actions view (callbacks + stretch hooks). `surfaceView`
         // is the view that both stretch and submenu positioning anchor to
@@ -347,27 +402,11 @@ public final class ContextMenuController {
         // Haptic.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Default: keep the source view visible — the SDF lens relies on
-        // `backgroundFilters` (i.e. the glass pill distorts whatever is
-        // rendered BEHIND it). If we hide the source, the lens has
-        // nothing to magnify and the glass reads as a flat pill growing
-        // over empty space. Layout stays untouched (no `isHidden` games)
-        // so the surrounding stack/collection doesn't shift.
-        //
-        // Exception: `.preview()` ALWAYS hides the source. The preview
-        // shape lifts the cell as its own snapshot — leaving the
-        // original visible behind the menu reads as a duplicate of
-        // the chat bubble (or whatever was tapped). Morph-style menus
-        // need the original for SDF backdrop magic, so we only fade
-        // for preview here; morph callers can still opt in via
-        // `Source.hidesDuringPresentation = true` per anchor.
-        let shouldFadeSource: Bool
+        // Preview hides the real source immediately because the lifted
+        // snapshot replaces it visually. Morph-style menus hide the source
+        // inside `animateInMorph`, in sync with the glass expansion, so the
+        // source does not sit there unchanged under the menu.
         if case .preview = presentationStyle {
-            shouldFadeSource = true
-        } else {
-            shouldFadeSource = self.source.hidesDuringPresentation
-        }
-        if shouldFadeSource {
             // Drive `UIView.alpha` (not `CALayer.opacity` directly) so
             // UIKit observers see the change — iOS 26's glass-effect
             // pipeline tracks alpha through the UIView setter, and a
@@ -376,7 +415,12 @@ public final class ContextMenuController {
             // "interactive but invisible" state where sibling glass
             // views in the same container also stop reacting to touch.
             self.savedSourceOpacity = Float(source.alpha)
-            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) {
+            self.savedSourceTransform = source.transform
+            UIView.animate(
+                withDuration: ContextMenuController.morphDuration * 0.42,
+                delay: 0,
+                options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]
+            ) {
                 source.alpha = 0
             }
         }
@@ -385,6 +429,107 @@ public final class ContextMenuController {
             dim: dim,
             sourceMinSide: min(sourceRectInHost.width, sourceRectInHost.height)
         )
+    }
+
+    private func makeSourceDescriptor(hitView: UIView, overlayView: UIView) -> ContextMenuSourceDescriptor? {
+        let visualView = Self.visualContextMenuSource(for: hitView)
+        let mode = resolvedContextMenuSourceMode(hitView: hitView, visualView: visualView)
+        let frame = visualView.convert(visualView.bounds, to: overlayView)
+        var radius = source.cornerRadius ?? visualView.layer.cornerRadius
+        if radius <= 0.0, mode == .leasedGlassSource {
+            radius = min(frame.width, frame.height) / 2.0
+        }
+        return ContextMenuSourceDescriptor(
+            sourceID: ObjectIdentifier(visualView),
+            hitView: hitView,
+            visualView: visualView,
+            overlayView: overlayView,
+            sourceCornerRadius: radius,
+            sourceMode: mode
+        )
+    }
+
+    private func resolvedContextMenuSourceMode(hitView: UIView, visualView: UIView) -> ContextMenuSourceVisualMode {
+        if source.hidesDuringPresentation {
+            return .leasedGlassSource
+        }
+        return Self.isGlassContextMenuSource(visualView) || Self.isGlassContextMenuSource(hitView) ? .leasedGlassSource : .persistentSource
+    }
+
+    private static func visualContextMenuSource(for hitView: UIView) -> UIView {
+        var current: UIView? = hitView
+        while let view = current {
+            if let group = view as? GlassControlGroup,
+               let visual = group.visualSourceView(containing: hitView) {
+                return visual
+            }
+            if let group = view.superview as? GlassControlGroup,
+               let visual = group.visualSourceView(containing: hitView) {
+                return visual
+            }
+            if isGlassVisualOwner(view) {
+                return view
+            }
+            current = view.superview
+        }
+        return hitView
+    }
+
+    private static func isGlassVisualOwner(_ view: UIView) -> Bool {
+        if view is GlassBarButtonView
+            || view is GlassButton
+            || view is GlassButtonView
+            || view is GlassControlGroup
+            || view is GlassControlPanel
+            || view is GlassContextExtractableContainerView
+            || view is GlassBackgroundView
+            || view is GlassBackgroundContainerView
+            || view is LiquidLensView
+            || view is MenuGlassSurfaceView {
+            return true
+        }
+
+        if #available(iOS 26.0, *),
+           let effectView = view as? UIVisualEffectView,
+           effectView.effect is UIGlassEffect {
+            return true
+        }
+
+        let className = NSStringFromClass(type(of: view))
+        return className.localizedCaseInsensitiveContains("Glass")
+    }
+
+    private static func isGlassContextMenuSource(_ view: UIView) -> Bool {
+        if view is GlassBarButtonView
+            || view is GlassButton
+            || view is GlassButtonView
+            || view is GlassControlGroup
+            || view is GlassControlPanel
+            || view is GlassContextExtractableContainerView
+            || view is GlassBackgroundView
+            || view is GlassBackgroundContainerView
+            || view is LiquidLensView
+            || view is MenuGlassSurfaceView {
+            return true
+        }
+
+        if #available(iOS 26.0, *),
+           let effectView = view as? UIVisualEffectView,
+           effectView.effect is UIGlassEffect {
+            return true
+        }
+
+        let className = NSStringFromClass(type(of: view))
+        if className.localizedCaseInsensitiveContains("Glass") {
+            return true
+        }
+
+        for subview in view.subviews {
+            if isGlassContextMenuSource(subview) {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Style-specific setup
@@ -404,63 +549,35 @@ public final class ContextMenuController {
         sourceCornerRadius: CGFloat,
         menuFrame: CGRect
     ) {
-        // Collapsed state is a small `dropletSize`pt circle at the
-        // menu's near edge, NOT the source button's rect. Matches
-        // iOS 26 native context-menu behaviour: a small bubble
-        // emerges in the gap between source and menu, then grows
-        // into the full menu. Starting from the full source rect
-        // (as the previous implementation did) looked wrong for any
-        // wide source — the morph appeared to "already be the menu
-        // width" from t=0 and only grew vertically.
-        //
-        // Droplet is centred horizontally on the source. Vertically
-        // it anchors to the menu-side closest to the source:
-        //   * menu below/overlapping source → droplet at menu.minY
-        //     (so it grows downward as the menu unfolds)
-        //   * menu flipped above source      → droplet at menu.maxY
-        //     (so it grows upward from the menu's bottom edge)
-        // Droplet centred on the SOURCE. The morph host then uses
-        // two separate time curves for position and size (see
-        // `updateForProgress`): position quickly lerps from
-        // `source.midX/midY` to `menu.midX/midY` in the first ~30 %
-        // of the animation, size expands bilaterally afterwards at
-        // the menu's midpoint. Net effect — the bubble emerges at
-        // the source, travels to the menu's landing spot, then
-        // inflates from there. No drift during the growth phase
-        // because by the time size is meaningfully lerping, the
-        // position has already arrived at menu.mid.
-        let dropletSize = Self.dropletSize
-        let dropletFrame = CGRect(
-            x: sourceRectInHost.midX - dropletSize / 2,
-            y: sourceRectInHost.midY - dropletSize / 2,
-            width: dropletSize,
-            height: dropletSize
-        )
-
         let morphHost = ContextMenuMorphHostView(isDark: isDark)
-        morphHost.frame = dropletFrame
+        morphHost.frame = sourceRectInHost
         host.addSubview(morphHost)
+
+        let collapsedCornerRadius: CGFloat = sourceCornerRadius > 0 ? sourceCornerRadius : min(sourceRectInHost.width, sourceRectInHost.height) / 2
         morphHost.configure(metrics: ContextMenuMorphHostView.Metrics(
-            collapsedFrame: dropletFrame,
-            collapsedCornerRadius: dropletSize / 2,
+            collapsedFrame: sourceRectInHost,
+            collapsedCornerRadius: collapsedCornerRadius,
             expandedFrame: menuFrame,
             expandedCornerRadius: ContextMenuActionsView.cornerRadius
         ))
         morphHost.progress = 0
 
-        // Source snapshot is INTENTIONALLY NOT embedded in the morph
-        // host. With the droplet pattern the source view stays
-        // visible in its original position — the bubble emerges
-        // NEXT TO the source, not out of it. `snapshot` is kept
-        // alive only because the preview style uses it; morph
-        // doesn't need it. Mark as unused to avoid warnings.
-        _ = snapshot
+        // Source snapshot is the visual seed: the user sees the tapped
+        // glass/source continue inside the morph surface immediately,
+        // then fade after the surface has started expanding.
+        snapshot.frame = morphHost.sourceContent.bounds
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        morphHost.sourceContent.addSubview(snapshot)
 
         // Actions view: (0,0), expanded size. Morph host handles alpha
         // + translateY per-progress internally.
         actionsView.frame = CGRect(origin: .zero, size: menuFrame.size)
         actionsView.autoresizingMask = []
+        actionsView.setRevealProgress(0)
         morphHost.destinationContent.addSubview(actionsView)
+        morphHost.destinationRevealProgressChanged = { [weak actionsView] progress in
+            actionsView?.setRevealProgress(progress)
+        }
 
         self.morphHost = morphHost
         self.menuContainer = morphHost.glass
@@ -481,8 +598,8 @@ public final class ContextMenuController {
         if #available(iOS 26.0, *), let filter = LensSDFFilter() {
             filter.install(
                 on: morphHost.lensContainer.layer,
-                size: dropletFrame.size,
-                cornerRadius: dropletSize / 2
+                size: sourceRectInHost.size,
+                cornerRadius: collapsedCornerRadius
             )
             self.sdfFilter = filter
         }
@@ -494,7 +611,7 @@ public final class ContextMenuController {
     /// referencing private class names in Swift.
     private static func findBackdropLayer(in root: CALayer) -> CALayer? {
         let className = NSStringFromClass(type(of: root))
-        if className.contains("BackdropLayer") {
+        if className.contains(ObfuscatedSymbols.caBackdropClass) {
             return root
         }
         guard let sublayers = root.sublayers else { return nil }
@@ -506,56 +623,49 @@ public final class ContextMenuController {
         return nil
     }
 
-    /// Wires up the `.fluidMorph` path:
-    ///
-    ///   1. Detect the anchor corner from source/menu geometry (which
-    ///      edges coincide — right for right-aligned, left for left-
-    ///      aligned, and similarly top vs. bottom when menu flips up).
-    ///
-    ///   2. Position the fluid host at source rect, glass fills host
-    ///      via autoresizing, and content containers are corner-pinned
-    ///      so they stay stationary in absolute coords while glass
-    ///      grows around them (see type doc on
-    ///      `ContextMenuFluidMorphHostView`).
-    ///
-    ///   3. Embed the source snapshot (filling `sourceContent`) and the
-    ///      actions view (filling `actionsContainer`). Both fill their
-    ///      parents via `[.flexibleWidth, .flexibleHeight]` — the
-    ///      parents themselves are the ones with the corner-anchor
-    ///      masks.
+    /// Wires up the `.fluidMorph` path. One glass surface starts at the
+    /// source frame, blooms into a bubble, then settles as the menu platter.
     private func setupFluidMorphStyle(
         host: UIView,
         isDark: Bool,
-        snapshot: UIView,
+        sourceLease: SourcePresentationLease?,
+        sourceMode: ContextMenuSourceVisualMode,
         actionsView: ContextMenuActionsView,
         sourceRectInHost: CGRect,
         sourceCornerRadius: CGFloat,
         menuFrame: CGRect
     ) {
-        let anchor = ContextMenuMorphAnchor.detect(source: sourceRectInHost, menu: menuFrame)
-
-        let fluidHost = ContextMenuFluidMorphHostView(isDark: isDark)
-        host.addSubview(fluidHost)
-        fluidHost.configure(metrics: ContextMenuFluidMorphHostView.Metrics(
-            sourceFrameInHost: sourceRectInHost,
+        let platterHost = ContextMenuSourcePlatterBloomTransitionView(
+            sourceFrameInOverlay: sourceRectInHost,
+            targetMenuFrameInOverlay: menuFrame,
+            finalCornerRadius: ContextMenuActionsView.cornerRadius,
             sourceCornerRadius: sourceCornerRadius,
-            menuFrameInHost: menuFrame,
-            menuCornerRadius: ContextMenuActionsView.cornerRadius,
-            anchor: anchor
-        ))
+            sourceMode: sourceMode,
+            isDark: isDark
+        )
+        platterHost.frame = host.bounds
+        platterHost.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.addSubview(platterHost)
 
-        // Snapshot fills sourceContent — parent is what's corner-anchored.
-        snapshot.frame = fluidHost.sourceContent.bounds
-        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        fluidHost.sourceContent.addSubview(snapshot)
+        // The platter bloom always owns the visual source while presented:
+        // glass and plain/content sources are represented by the leased proxy,
+        // so the real source never remains visible/interactive underneath.
+        sourceLease?.attachProxy(to: platterHost.sourceProxyContainer)
 
-        // Actions view fills actionsContainer — same deal.
-        actionsView.frame = fluidHost.actionsContainer.bounds
+        // Destination content is laid out at its final menu rect from the
+        // beginning. The lens mask reveals it as the bloom grows/sharpens.
+        actionsView.frame = platterHost.liveMenuContentView.bounds
         actionsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        fluidHost.actionsContainer.addSubview(actionsView)
+        actionsView.setRevealProgress(1)
+        platterHost.liveMenuContentView.addSubview(actionsView)
+        platterHost.prepareMenuContentSnapshots(from: actionsView)
+        actionsView.setRevealProgress(0)
+        platterHost.contentRevealProgressChanged = { [weak actionsView] progress in
+            actionsView?.setRevealProgress(progress)
+        }
 
-        self.fluidMorphHost = fluidHost
-        self.menuContainer = fluidHost.glass
+        self.platterBloomHost = platterHost
+        self.menuContainer = platterHost.finalMenuGlassSurfaceView
     }
 
     /// Wires up the `.preview` path: static glass menu + a lifted snapshot
@@ -609,25 +719,20 @@ public final class ContextMenuController {
         guard isPresented else { return }
         isPresented = false
 
-        // Source visibility is restored inside the `cleanup` block
-        // below — that block runs at the END of the close animation,
-        // when our preview snapshot has already been removed. A
-        // parallel fade-in here was racing the snapshot's slide-back
-        // and leaving both visible for a few frames — exactly the
-        // "preview held" symptom. Clear the saved-opacity bookmark
-        // so any later interruption still finds it nil and skips
-        // the restore.
-        self.savedSourceOpacity = nil
+        let sourceRestoreAlpha = savedSourceOpacity.map(CGFloat.init) ?? 1.0
+        let sourceRestoreTransform = savedSourceTransform ?? .identity
+        let sourceRestoreInteractionEnabled = savedSourceIsUserInteractionEnabled
 
         let host = hostView
         let dim = dimView
         let morphHost = self.morphHost
-        let fluidMorphHost = self.fluidMorphHost
+        let platterBloomHost = self.platterBloomHost
         let sdfHost = self.sdfHost
         let container = menuContainer
         let snapshot = snapshotView
         let actionsView = self.actionsView
         let sourceView = source.view
+        let sourcePresentationLease = self.sourcePresentationLease
 
         var didClean = false
         let cleanup: () -> Void = { [weak self] in
@@ -641,17 +746,31 @@ public final class ContextMenuController {
             // SDF backdrop distortion and never sets a mask — this is
             // a no-op on the current path but stays as a safety net for
             // any future path that might re-introduce hiding.
-            sourceView?.layer.mask = nil
+            if sourcePresentationLease == nil {
+                sourceView?.layer.mask = nil
+            }
             // Defensive: restore transform/alpha in case the dismiss
             // path was non-animated (animated: false) or interrupted
             // before the spring finished — otherwise the source would
             // stay collapsed after a rapid dismiss.
-            sourceView?.transform = .identity
-            sourceView?.alpha = 1.0
+            if sourcePresentationLease == nil {
+                sourceView?.transform = sourceRestoreTransform
+                sourceView?.alpha = sourceRestoreAlpha
+                if let sourceRestoreInteractionEnabled {
+                    sourceView?.isUserInteractionEnabled = sourceRestoreInteractionEnabled
+                }
+            }
             CATransaction.commit()
+            self?.savedSourceOpacity = nil
+            self?.savedSourceTransform = nil
+            self?.savedSourceIsUserInteractionEnabled = nil
             if #available(iOS 26.0, *), let filter = self?.sdfFilter as? LensSDFFilter {
                 filter.uninstall()
             }
+            // Restore the leased source while the bloom surface is still
+            // present at the source frame. Removing the host first leaves a
+            // one-frame hole where the original button flashes back late.
+            sourcePresentationLease?.release()
             // Tear down `UIGlassEffect` registrations BEFORE removing
             // the views from their superviews. iOS 26's
             // `UIGlassContainerEffect` keeps a list of registered
@@ -664,11 +783,11 @@ public final class ContextMenuController {
             // we own deregisters cleanly.
             container?.tearDownGlassEffect()
             self?.submenuCard?.tearDownGlassEffect()
-            (morphHost as? ContextMenuMorphHostView)?.glass.tearDownGlassEffect()
-            (fluidMorphHost as? ContextMenuFluidMorphHostView)?.glass.tearDownGlassEffect()
+            morphHost?.glass.tearDownGlassEffect()
+            platterBloomHost?.finalMenuGlassSurfaceView.tearDownGlassEffect()
             dim?.removeFromSuperview()
             morphHost?.removeFromSuperview()
-            fluidMorphHost?.removeFromSuperview()
+            platterBloomHost?.removeFromSuperview()
             sdfHost?.removeFromSuperview()
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
@@ -678,7 +797,8 @@ public final class ContextMenuController {
             self?.hostView = nil
             self?.dimView = nil
             self?.morphHost = nil
-            self?.fluidMorphHost = nil
+            self?.platterBloomHost = nil
+            self?.sourcePresentationLease = nil
             self?.sdfHost = nil
             self?.sdfFilter = nil
             self?.menuContainer = nil
@@ -698,16 +818,34 @@ public final class ContextMenuController {
 
         guard animated else { cleanup(); return }
 
+        // If an inline submenu card is open, fade it out *in parallel* with
+        // the main menu's dismiss morph — otherwise it would stay fully
+        // visible through the morph and then snap to invisible inside
+        // `cleanup` (which runs `removeFromSuperview` synchronously). The
+        // submenu's hit-target view is non-visual; nothing to animate there.
+        if let submenuCard {
+            UIView.animate(
+                withDuration: ContextMenuController.dismissDuration,
+                delay: 0,
+                usingSpringWithDamping: 0.95,
+                initialSpringVelocity: 0,
+                options: [.curveEaseIn, .beginFromCurrentState, .allowUserInteraction],
+                animations: {
+                    submenuCard.alpha = 0.0
+                    submenuCard.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+                },
+                completion: nil
+            )
+        }
+
         switch presentationStyle {
-        case .morph, .fluidMorph:
+        case .morph:
             animateOutMorph(dim: dim, cleanup: cleanup)
+        case .fluidMorph:
+            animateOutFluidMorph(dim: dim, cleanup: cleanup)
         case .preview:
             if let sdfHost {
-                animateOutPreview(sdfHost: sdfHost, dim: dim, preview: previewView)
-                // preview close doesn't currently wire a completion-cleanup
-                // callback; fire cleanup on the expected duration + safety.
-                DispatchQueue.main.asyncAfter(deadline: .now() + ContextMenuController.dismissDuration) { cleanup() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + ContextMenuController.dismissDuration + 0.2) { cleanup() }
+                animateOutPreview(sdfHost: sdfHost, dim: dim, preview: previewView, completion: cleanup)
             } else {
                 cleanup()
             }
@@ -753,16 +891,29 @@ public final class ContextMenuController {
 
         let dismissDuration = ContextMenuController.dismissDuration
 
-        // Read the source's current transform + alpha at the moment
-        // dismiss starts — the source is sitting in its "collapsed
-        // into droplet" pose from the open-time animation. The
-        // step-callback below interpolates from THIS pose back to
-        // identity/alpha=1 using the same spring progress that
-        // drives the morph collapse.
-        let sourceView = source.view
-        let startTransform = sourceView?.transform ?? .identity
-        let startAlpha = sourceView?.alpha ?? 1.0
+        // Morph anchors fade/scale out on open. Restore them with a single
+        // UIKit animation instead of mutating the source from the morph
+        // display-link; that keeps the source view out of the hot path that
+        // also drives the SDF/filter layout.
+        let shouldRestoreSourceView = savedSourceOpacity != nil || savedSourceTransform != nil || source.hidesDuringPresentation
+        let sourceView = shouldRestoreSourceView ? source.view : nil
+        let sourceTargetAlpha = savedSourceOpacity.map(CGFloat.init) ?? 1.0
+        let sourceTargetTransform = savedSourceTransform ?? .identity
         sourceView?.layer.removeAllAnimations()
+        if let sourceView {
+            UIView.animate(
+                withDuration: dismissDuration * 0.42,
+                delay: dismissDuration * 0.34,
+                usingSpringWithDamping: 0.9,
+                initialSpringVelocity: 0.0,
+                options: [.beginFromCurrentState, .allowUserInteraction],
+                animations: {
+                    sourceView.alpha = sourceTargetAlpha
+                    sourceView.transform = sourceTargetTransform
+                },
+                completion: nil
+            )
+        }
 
         // CADisplayLink-driven progress: 1 → 0 over dismiss duration.
         // The progress passed into `step` is the spring-eased value
@@ -779,51 +930,6 @@ public final class ContextMenuController {
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 defer { CATransaction.commit() }
-
-                if let sv = sourceView {
-                    // Mirror of the open-time fast-hide: source
-                    // re-materialises in the SECOND half of the
-                    // dismiss. `progress ∈ [0.5, 0]` (it falls 1 →
-                    // 0 over dismiss) maps to `t = 1` only after
-                    // progress drops below 0.5, so the menu has
-                    // already collapsed past the half-way point
-                    // before the source becomes visible again. No
-                    // overlap of the still-shrinking menu and the
-                    // re-emerging source button.
-                    let raw = max(0, min(1, (0.5 - progress) / 0.5))
-                    let t = raw * raw * raw * (raw * (6 * raw - 15) + 10)
-                    let s = startTransform
-                    // Real wobble: rising-amplitude oscillation
-                    // with explicit overshoot AND undershoot.
-                    // `bumpRaw ∈ [0, 1]` over `t ∈ [0.4, 1.0]`.
-                    // Three half-cycles of `sin(3π·bumpRaw)` give
-                    // peak / dip / peak at bumpRaw = 1/6, 1/2,
-                    // 5/6, multiplied by a linearly rising
-                    // envelope (`bumpRaw`) so each successive
-                    // swing is bigger than the previous. Values:
-                    //   bumpRaw=0.167 → +0.025 (small overshoot)
-                    //   bumpRaw=0.5   → -0.075 (visible dip)
-                    //   bumpRaw=0.833 → +0.125 (big overshoot)
-                    // Reads as a button on a spring that swings
-                    // back and forth, gathering amplitude before
-                    // settling. The dip below 1.0 is what makes
-                    // it read as oscillation instead of a series
-                    // of taps.
-                    let bumpRaw = max(0, min(1, (t - 0.4) / 0.6))
-                    let envelope = bumpRaw
-                    let oscillation = sin(3 * .pi * bumpRaw)
-                    let amp: CGFloat = 0.15
-                    let bump = 1 + amp * envelope * oscillation
-                    sv.transform = CGAffineTransform(
-                        a: s.a + (1 - s.a) * t,
-                        b: s.b + (0 - s.b) * t,
-                        c: s.c + (0 - s.c) * t,
-                        d: s.d + (1 - s.d) * t,
-                        tx: s.tx + (0 - s.tx) * t,
-                        ty: s.ty + (0 - s.ty) * t
-                    ).scaledBy(x: bump, y: bump)
-                    sv.alpha = startAlpha + (1 - startAlpha) * t
-                }
 
                 if #available(iOS 26.0, *),
                    let sdfFilter = self.sdfFilter as? LensSDFFilter {
@@ -847,7 +953,7 @@ public final class ContextMenuController {
                 return min(metrics.expandedFrame.width, metrics.expandedFrame.height)
             }()
             filter.animateDisplacementPulse(
-                peakHeight: menuMinSide * 0.22,
+                peakHeight: menuMinSide * 0.16,
                 duration: dismissDuration,
                 reversed: true
             )
@@ -860,7 +966,8 @@ public final class ContextMenuController {
     private func animateOutPreview(
         sdfHost: UIView,
         dim: UIView?,
-        preview: UIView?
+        preview: UIView?,
+        completion: @escaping () -> Void
     ) {
         let sourceView = self.source.view
         UIView.animate(
@@ -884,7 +991,7 @@ public final class ContextMenuController {
                 sourceView?.alpha = 1.0
                 dim?.alpha = 0.0
             },
-            completion: nil
+            completion: { _ in completion() }
         )
     }
 
@@ -901,58 +1008,46 @@ public final class ContextMenuController {
         })
 
         switch presentationStyle {
-        case .morph, .fluidMorph:
+        case .morph:
             animateInMorph(sourceMinSide: sourceMinSide)
+        case .fluidMorph:
+            animateInFluidMorph()
         case let .preview(_, lift):
             if let sdfHost { animateInPreview(sdfHost: sdfHost, lift: lift) }
         }
     }
 
-    /// Parallel open:
-    ///
-    ///   - **Source view**: scales + translates toward the droplet
-    ///     centre and fades alpha 1 → 0 over the FIRST ~30 % of the
-    ///     morph duration. Uses `CGAffineTransform`, so the real
-    ///     source view stays in its parent hierarchy untouched
-    ///     (Auto Layout doesn't fight us). The motion reads as the
-    ///     button "imploding" into the spot where the menu is about
-    ///     to emerge from.
-    ///
-    ///   - **morphHost**: visible from t=0 as a small droplet circle
-    ///     at the anchor position, spring-expands to the full menu
-    ///     rect over the ENTIRE duration. SDF pulse runs over the
-    ///     same window.
-    ///
-    /// Both animations start at t=0 — the source doesn't block the
-    /// menu from beginning to unfold. By the time the menu is
-    /// meaningfully large (~30 %), the source has already faded to
-    /// zero, so the two visuals never compete for the user's
-    /// attention.
+    /// Parallel open: the morph host owns all menu geometry. The real
+    /// source view is faded/scaled once with UIKit, outside the progress
+    /// display-link, so it visually disappears without becoming another
+    /// per-frame moving target.
     private func animateInMorph(sourceMinSide: CGFloat) {
         guard let morphHost else { return }
 
-        let dropletFrame = morphHost.metrics?.collapsedFrame ?? morphHost.frame
-        let sourceRect = self.sourceRectInHost
+        if source.hidesDuringPresentation, let sourceView = source.view {
+            if savedSourceOpacity == nil {
+                savedSourceOpacity = Float(sourceView.alpha)
+            }
+            if savedSourceTransform == nil {
+                savedSourceTransform = sourceView.transform
+            }
+            sourceView.layer.removeAllAnimations()
+            let baseTransform = savedSourceTransform ?? sourceView.transform
+            UIView.animate(
+                withDuration: ContextMenuController.morphDuration * 0.20,
+                delay: ContextMenuController.morphDuration * 0.08,
+                options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction],
+                animations: {
+                    sourceView.alpha = 0.0
+                    sourceView.transform = baseTransform.scaledBy(x: 0.985, y: 0.985)
+                },
+                completion: nil
+            )
+        }
 
-        // Source-view collapse: scale + fade IN PLACE. No horizontal
-        // or vertical translation — the source stays pinned to its
-        // original position while shrinking + fading out. The morph
-        // bubble appears separately at the menu's centre (see
-        // `setupMorphStyle`'s droplet placement) and grows from
-        // there. Translating the source toward the droplet caused a
-        // visible "source slides to a different spot" effect the
-        // user explicitly rejected.
-        _ = dropletFrame  // kept as a parameter signal but unused here
-        _ = sourceRect    // ditto
-        let sourceView = source.view
-        let finalScale = Self.dropletSize / max(sourceRect.width, sourceRect.height, 1)
-
-        sourceView?.layer.removeAllAnimations()
-
-        // Menu expansion starts IMMEDIATELY at t=0, in parallel with
-        // the source collapse. `step` drives both SDF layout AND
-        // source transform from the same spring-eased progress
-        // value — one animation clock, one settle moment.
+        // Menu expansion starts IMMEDIATELY at t=0. The display-link step
+        // is kept strictly to filter/layout updates; source animation runs
+        // on a separate UIKit animator above.
         morphHost.alpha = 1
         morphHost.animateProgress(
             to: 1,
@@ -964,21 +1059,6 @@ public final class ContextMenuController {
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 defer { CATransaction.commit() }
-
-                if let sv = sourceView {
-                    // Source vanishes inside the FIRST half of the
-                    // morph: `progress ∈ [0, 0.5]` ramps `t` from 0
-                    // → 1 via smootherstep, so by the time the
-                    // bubble is meaningfully large the source is
-                    // already gone. Smootherstep keeps the fade
-                    // C²-smooth at both ends — no kink at the
-                    // moment the source disappears.
-                    let raw = max(0, min(1, progress / 0.5))
-                    let t = raw * raw * raw * (raw * (6 * raw - 15) + 10)
-                    let scale = 1 + (finalScale - 1) * t
-                    sv.transform = CGAffineTransform(scaleX: scale, y: scale)
-                    sv.alpha = 1 - t
-                }
 
                 if #available(iOS 26.0, *),
                    let sdfFilter = self.sdfFilter as? LensSDFFilter {
@@ -1000,54 +1080,41 @@ public final class ContextMenuController {
                 return min(metrics.expandedFrame.width, metrics.expandedFrame.height)
             }()
             filter.animateDisplacementPulse(
-                peakHeight: menuMinSide * 0.22,
+                peakHeight: menuMinSide * 0.16,
                 duration: ContextMenuController.morphDuration
             )
             filter.animateBlur(duration: ContextMenuController.morphDuration)
         }
     }
 
-    /// Drive the `.fluidMorph` host from source → menu via
-    /// `UIViewPropertyAnimator` + spring on `self.frame`. Cross-fade
-    /// and layer-property (corner + shadow) animations all live inside
-    /// `ContextMenuFluidMorphHostView.animateExpand`.
-    ///
-    /// The key structural property that makes this "fluid" and fixes
-    /// the old left-jump bug: both content containers inside the host
-    /// are stationary in absolute screen coords throughout the morph.
-    /// Only the glass envelope moves, revealing or clipping more of
-    /// the actions view as it springs out.
+    /// Drive the `.fluidMorph` host as one source-to-platter surface.
     private func animateInFluidMorph() {
-        guard let fluidMorphHost else { return }
-        fluidMorphHost.animateExpand(
+        guard let platterBloomHost else { return }
+        platterBloomHost.animateExpand(
             duration: ContextMenuController.morphDuration,
             damping: ContextMenuController.morphDamping,
             completion: nil
         )
     }
 
-    /// Reverse of `animateInFluidMorph`: spring the frame back to
-    /// source rect with a shorter duration and a less-elastic damping.
-    /// Cleanup fires on the geometry animator's completion. If the
-    /// open animation is still running, the host's own
-    /// `cancelRunningAnimators` stops it at `.current` before the
-    /// collapse starts — no teleport.
+    /// Reverse of `animateInFluidMorph`: the menu platter shrinks back
+    /// through the bubble/source path before cleanup restores the source.
     private func animateOutFluidMorph(
         dim: UIView?,
         cleanup: @escaping () -> Void
     ) {
-        guard let fluidMorphHost else { cleanup(); return }
+        guard let platterBloomHost else { cleanup(); return }
 
         // Reset any active stretch transform first so the reverse morph
         // starts from identity, not from a press-release stretch left
         // over from the last touch.
-        fluidMorphHost.transform = .identity
+        platterBloomHost.finalMenuGlassSurfaceView.resetGlassInteractionTransform()
 
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn], animations: {
             dim?.alpha = 0.0
         })
 
-        fluidMorphHost.animateCollapse(
+        platterBloomHost.animateCollapse(
             duration: ContextMenuController.dismissDuration,
             damping: ContextMenuController.dismissDamping,
             completion: { cleanup() }
@@ -1161,16 +1228,32 @@ public final class ContextMenuController {
 
         let initialY: CGFloat
         switch presentationStyle {
-        case .morph, .fluidMorph:
+        case .morph:
             initialY = sourceRect.minY
+        case .fluidMorph:
+            // Lens bloom behaves like UIKit's menu platter: it may cover the
+            // original trigger. Keeping a source gap makes the lens look like
+            // a detached popover and also leaves the trigger awkwardly visible
+            // beside the menu.
+            let downward = sourceRect.minY
+            let upward = sourceRect.maxY - menuSize.height
+            if downward + menuSize.height <= hostBounds.maxY - safeBottom {
+                initialY = downward
+            } else if upward >= safeTop {
+                initialY = upward
+            } else {
+                initialY = min(
+                    max(safeTop, downward),
+                    hostBounds.maxY - safeBottom - menuSize.height
+                )
+            }
         case let .preview(spacing, _):
             initialY = sourceRect.maxY + spacing
         }
 
         var y = initialY
         if y + menuSize.height > hostBounds.maxY - safeBottom {
-            let menuToSourceGap: CGFloat = 12.0
-            let upward = sourceRect.minY - menuSize.height - menuToSourceGap
+            let upward = sourceRect.maxY - menuSize.height
             if upward >= safeTop {
                 y = upward
             } else {
@@ -1213,16 +1296,23 @@ public final class ContextMenuController {
             // for submenu cards.
             self?.collapseInlineSubmenu()
         }
-        view.onStretchUpdate = { [weak self, weak surfaceView, weak view] point in
-            guard let self, let surfaceView, let view else { return }
-            // Stretch only the parent host. Submenu cards don't carry the
-            // SDF lens — they're a lightweight popover.
-            if isSubmenu { return }
-            self.applyStretch(toContainer: surfaceView, touchInActions: point, actionsBounds: view.bounds, animated: false)
-        }
-        view.onStretchRelease = { [weak self, weak surfaceView] in
-            guard let self, let surfaceView, !isSubmenu else { return }
-            self.releaseStretch(onContainer: surfaceView)
+        view.onStretchUpdate = nil
+        view.onStretchRelease = nil
+
+        if let glassSurface = surfaceView as? MenuGlassSurfaceView {
+            glassSurface.gestureRecognizers?
+                .compactMap { $0 as? ContextMenuSurfaceInteractionGestureRecognizer }
+                .forEach { glassSurface.removeGestureRecognizer($0) }
+            glassSurface.routesTouchesToGlassSurface = true
+
+            // Selection/highlight is now driven by a recognizer installed on
+            // the glass surface itself. The actions view stays visual-only so
+            // iOS 26 `UIGlassEffect.isInteractive` and the legacy fallback
+            // stretch the menu container, not row labels/icons.
+            view.isUserInteractionEnabled = false
+            glassSurface.addGestureRecognizer(ContextMenuSurfaceInteractionGestureRecognizer(actionsView: view))
+        } else {
+            view.isUserInteractionEnabled = true
         }
     }
 
@@ -1268,7 +1358,7 @@ public final class ContextMenuController {
         submenuActions.frame = CGRect(origin: .zero, size: cardSize)
         submenuActions.autoresizingMask = [.flexibleWidth]
         card.contentView.addSubview(submenuActions)
-        wireActionsView(submenuActions, handle: handle, surfaceView: surfaceView, isSubmenu: true)
+        wireActionsView(submenuActions, handle: handle, surfaceView: card, isSubmenu: true)
 
         // Anchor card.minY to the source row's Y in screen coords. We can
         // approximate by finding the touched item's row in `parentActions`
@@ -1364,7 +1454,7 @@ public final class ContextMenuController {
         let teardown = {
             card.removeFromSuperview()
             hitView?.removeFromSuperview()
-            parentActions?.isUserInteractionEnabled = true
+            parentActions?.isUserInteractionEnabled = !(self.surfaceView is MenuGlassSurfaceView)
             self.submenuCard = nil
             self.submenuActions = nil
             self.submenuCollapseHitView = nil
@@ -1414,11 +1504,11 @@ public final class ContextMenuController {
                 withDuration: 0.28, delay: 0,
                 usingSpringWithDamping: 0.72, initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .allowUserInteraction],
-                animations: { container.transform = target },
+                animations: { self.setStretchTransform(target, on: container) },
                 completion: nil
             )
         } else {
-            container.transform = target
+            setStretchTransform(target, on: container)
         }
     }
 
@@ -1428,9 +1518,17 @@ public final class ContextMenuController {
             withDuration: 0.42, delay: 0,
             usingSpringWithDamping: 0.7, initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
-            animations: { container.transform = .identity },
+            animations: { self.setStretchTransform(.identity, on: container) },
             completion: nil
         )
+    }
+
+    private func setStretchTransform(_ transform: CGAffineTransform, on container: UIView) {
+        if let glassSurface = container as? MenuGlassSurfaceView {
+            glassSurface.setGlassInteractionTransform(transform)
+        } else {
+            container.transform = transform
+        }
     }
 
     // MARK: - Glass-lift transform math
@@ -1500,6 +1598,74 @@ public final class ContextMenuController {
     }
 }
 
+private final class ContextMenuSurfaceInteractionGestureRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private weak var actionsView: ContextMenuActionsView?
+    private var trackedTouch: UITouch?
+
+    init(actionsView: ContextMenuActionsView) {
+        self.actionsView = actionsView
+        super.init(target: nil, action: nil)
+        delegate = self
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        requiresExclusiveTouchType = false
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+        false
+    }
+
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+        false
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    override func reset() {
+        trackedTouch = nil
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard trackedTouch == nil, let touch = touches.first, let actionsView else {
+            state = .failed
+            return
+        }
+        trackedTouch = touch
+        actionsView.beginExternalInteraction(at: touch.location(in: actionsView))
+        state = .began
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let trackedTouch, touches.contains(trackedTouch), let actionsView else { return }
+        actionsView.updateExternalInteraction(at: trackedTouch.location(in: actionsView))
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let trackedTouch, touches.contains(trackedTouch), let actionsView else {
+            state = .ended
+            return
+        }
+        actionsView.endExternalInteraction(at: trackedTouch.location(in: actionsView))
+        self.trackedTouch = nil
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        if trackedTouch != nil {
+            actionsView?.cancelExternalInteraction()
+        }
+        trackedTouch = nil
+        state = .cancelled
+    }
+}
+
 // MARK: - Presentation convenience
 
 public extension ContextMenuController {
@@ -1509,12 +1675,22 @@ public extension ContextMenuController {
         cornerRadius: CGFloat? = nil,
         items: [ContextMenuItem],
         presentationStyle: PresentationStyle = .morph,
+        catchTapsOutside: Bool = true,
+        hasHapticFeedback: Bool = true,
+        blurred: Bool = true,
+        isDark: Bool? = nil,
+        skipCoordinateConversion: Bool = false,
         onDismiss: (() -> Void)? = nil
     ) -> ContextMenuController {
         let controller = ContextMenuController(
             source: Source(view: source, cornerRadius: cornerRadius),
             items: items,
             presentationStyle: presentationStyle,
+            catchTapsOutside: catchTapsOutside,
+            hasHapticFeedback: hasHapticFeedback,
+            blurred: blurred,
+            isDark: isDark,
+            skipCoordinateConversion: skipCoordinateConversion,
             onDismiss: onDismiss
         )
         controller.present()

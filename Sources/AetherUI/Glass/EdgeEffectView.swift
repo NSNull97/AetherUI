@@ -491,8 +491,7 @@ final class BackdropBlurHostView: UIView {
     }
 
     private static func createBackdropLayer() -> CALayer? {
-        let name = ("CA" as NSString).appendingFormat("BackdropLayer")
-        guard let cls = NSClassFromString(name as String) as AnyObject? else { return nil }
+        guard let cls = NSClassFromString(ObfuscatedSymbols.caBackdropClass) as AnyObject? else { return nil }
         let allocSel = NSSelectorFromString("alloc")
         let initSel = NSSelectorFromString("init")
         guard let alloc = cls.perform(allocSel)?.takeUnretainedValue() as AnyObject?,
@@ -565,9 +564,9 @@ public final class VariableBlurEffect {
                 variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
                 variableBlur.setValue("mask_source", forKey: ObfuscatedSymbols.inputSourceSublayerName)
                 if isTransparent {
-                    variableBlur.setValue(true, forKey: "inputNormalizeEdgesTransparent")
+                    variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
                 } else {
-                    variableBlur.setValue(true, forKey: "inputNormalizeEdges")
+                    variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
                 }
                 self.layer.filters = [variableBlur]
             }
@@ -711,9 +710,9 @@ public final class VariableBlurEffect {
 
         variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
         if self.isTransparent {
-            variableBlur.setValue(true, forKey: "inputNormalizeEdgesTransparent")
+            variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
         } else {
-            variableBlur.setValue(true, forKey: "inputNormalizeEdges")
+            variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
         }
 
         let image = generateImage(CGSize(width: 1.0, height: min(800.0, params.size.height)), rotatedContext: { size, context in
@@ -742,7 +741,7 @@ public final class VariableBlurEffect {
         })
 
         if let cgImage = image?.cgImage {
-            variableBlur.setValue(cgImage, forKey: "inputMaskImage")
+            variableBlur.setValue(cgImage, forKey: ObfuscatedSymbols.inputMaskImage)
         }
 
         self.layer.filters = [variableBlur]
@@ -808,8 +807,7 @@ public final class VariableBlurView: UIView {
     }
 
     private static func createBackdropLayer() -> CALayer? {
-        let name = ("CA" as NSString).appendingFormat("BackdropLayer")
-        guard let cls = NSClassFromString(name as String) as AnyObject? else { return nil }
+        guard let cls = NSClassFromString(ObfuscatedSymbols.caBackdropClass) as AnyObject? else { return nil }
         let allocSel = NSSelectorFromString("alloc")
         let initSel = NSSelectorFromString("init")
         guard let alloc = cls.perform(allocSel)?.takeUnretainedValue() as AnyObject?,

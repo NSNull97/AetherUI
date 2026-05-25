@@ -21,6 +21,7 @@ targets:
       path: Example/Info.plist
       properties:
         CFBundleDisplayName: Example
+        CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -56,6 +57,7 @@ targets:
       path: Showcase/Info.plist
       properties:
         CFBundleDisplayName: CrystalUI Showcase
+        CADisableMinimumFrameDurationOnPhone: true
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UIApplicationSceneManifest:

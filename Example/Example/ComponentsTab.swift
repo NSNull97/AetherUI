@@ -4,14 +4,215 @@ import AetherUI
 /// Tab 1 root — picker that pushes a demo per row.
 func makeComponentsRoot() -> AetherViewController {
     return DemoListController(title: "Components", rows: [
+        .init("Navigation + Window", "shared bar / modal nav / global overlay", { NavigationSurfaceDemoController() }),
         .init("Buttons", "UIKit + Glass", { ButtonsDemoController() }),
         .init("Alerts", "single / pair / stacked + поля", { AlertsDemoController() }),
         .init("ActionSheet", "buttons / checkbox / switch", { ActionSheetDemoController() }),
         .init("Floating Toolbar", "pill / standalone / search", { ToolbarDemoController() }),
         .init("Tooltip", "text / icon+text / attributed", { TooltipDemoController() }),
         .init("Context Menu", "morph / preview / submenu", { ContextMenuDemoController() }),
+        .init("Slider", "native glass track / thumb", { SliderDemoController() }),
         .init("Segmented Control", "glass lens", { SegmentedDemoController() })
     ])
+}
+
+// MARK: - Navigation / Window
+
+final class NavigationSurfaceDemoController: DemoController {
+    override var demoTitle: String { "Navigation + Window" }
+    private var detailCounter = 0
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "shield"), style: .plain, target: self, action: #selector(navButtonPressed)),
+            UIBarButtonItem(image: UIImage(systemName: "plus.circle"), style: .plain, target: self, action: #selector(navButtonPressed)),
+            UIBarButtonItem(image: UIImage(systemName: "square.and.pencil"), style: .plain, target: self, action: #selector(navButtonPressed))
+        ]
+
+        navigationItem.rightBarButtonItems?.first?.separatesSharedBackground = true
+        navigationItem.rightBarButtonItems?.last?.separatesSharedBackground = true
+    }
+
+    override func buildDemo() {
+        addLabel("Shared navigation bar: push/replace/pop use one bar hosted by AetherNavigationController.")
+        addButton("Push detail") { [weak self] in self?.pushDetail() }
+        addButton("Replace top") { [weak self] in self?.replaceTop() }
+        addButton("Present modal navigation") { [weak self] in self?.presentModalNavigation() }
+        addButton("Present global overlay") { [weak self] in self?.presentGlobalOverlay() }
+        addButton("Show in-call status bar") { [weak self] in self?.showInCallStatusBar() }
+        addButton("Toggle proximity dim") { [weak self] in self?.flashProximityDim() }
+    }
+
+    private func pushDetail() {
+        detailCounter += 1
+        let detail = NavigationDetailDemoController(index: detailCounter)
+        push(detail)
+    }
+
+    private func replaceTop() {
+        detailCounter += 1
+        let detail = NavigationDetailDemoController(index: detailCounter)
+        if let nav = parent as? AetherNavigationController, nav.viewControllerStack.count > 1 {
+            nav.replaceTopController(detail, animated: true)
+        } else {
+            push(detail)
+        }
+    }
+
+    private func presentModalNavigation() {
+        let root = NavigationDetailDemoController(index: 1)
+        root.navigationItem.title = "Modal Root"
+        let modal = AetherModalNavigationController(
+            rootViewController: root,
+            config: .init(detents: [.stage1, .stage2], initialDetent: .stage2)
+        )
+        present(modal, animated: true)
+    }
+
+    private func presentGlobalOverlay() {
+        let overlay = GlobalOverlayDemoController()
+        presentInGlobalOverlay(overlay, animated: true)
+    }
+
+    private func showInCallStatusBar() {
+        guard let window = view.window as? AetherWindow else { return }
+        window.setForceInCallStatusBar("AetherUI active call")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak window] in
+            window?.setForceInCallStatusBar(nil)
+        }
+    }
+
+    private func flashProximityDim() {
+        guard let window = view.window as? AetherWindow else { return }
+        window.setProximityDimHidden(false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak window] in
+            window?.setProximityDimHidden(true)
+        }
+    }
+
+    @objc private func navButtonPressed() {
+        AetherToastController(content: .text("Navigation bar button")).present()
+    }
+}
+
+private final class NavigationDetailDemoController: DemoController {
+    private let index: Int
+    override var demoTitle: String { "Detail \(index)" }
+
+    init(index: Int) {
+        self.index = index
+        super.init()
+    }
+
+    @MainActor required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "ellipsis.circle"),
+            style: .plain,
+            target: self,
+            action: #selector(navButtonPressed)
+        )
+    }
+
+    override func buildDemo() {
+        topBarAccessory = DetailTopAccessoryView(text: "Shared bar accessory #\(index)")
+        addLabel("This screen uses the same NavigationBarImpl instance as the previous screen.")
+        addButton("Push next detail") { [weak self] in
+            guard let self else { return }
+            self.push(NavigationDetailDemoController(index: self.index + 1))
+        }
+        addButton("Pop to root") { [weak self] in
+            (self?.parent as? AetherNavigationController)?.popToRoot(animated: true)
+        }
+        addButton("Dismiss if modal") { [weak self] in
+            self?.dismiss(animated: true)
+        }
+    }
+
+    @objc private func navButtonPressed() {
+        AetherToastController(content: .text("Detail nav button")).present()
+    }
+}
+
+private final class DetailTopAccessoryView: NavigationBarContentView {
+    private let glass = GlassBackgroundView(style: .regular)
+    private let label = UILabel()
+
+    override var nominalHeight: CGFloat { 40 }
+    override var mode: NavigationBarContentMode { .expansion }
+
+    init(text: String) {
+        super.init(frame: .zero)
+        addSubview(glass)
+        label.text = text
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .label
+        label.textAlignment = .center
+        glass.contentView.addSubview(label)
+    }
+
+    @MainActor required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        glass.frame = bounds.insetBy(dx: 16, dy: 4)
+        glass.update(size: glass.bounds.size, cornerRadius: 16, transition: .immediate)
+        label.frame = glass.contentView.bounds
+    }
+}
+
+private final class GlobalOverlayDemoController: AetherViewController {
+    private let card = GlassBackgroundView(style: .regular)
+    private let label = UILabel()
+    private let close = UIButton(type: .system)
+
+    init() {
+        super.init(navigationBarPresentationData: nil)
+        displayNavigationBar = false
+    }
+
+    required init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        view.addSubview(card)
+
+        label.text = "Global overlay"
+        label.font = .systemFont(ofSize: 18, weight: .semibold)
+        label.textAlignment = .center
+        card.contentView.addSubview(label)
+
+        close.setTitle("Dismiss", for: .normal)
+        close.addAction(UIAction { [weak self] _ in
+            guard let self, let window = self.view.window as? AetherWindow else { return }
+            window.dismissGlobalOverlay(self, animated: true)
+        }, for: .touchUpInside)
+        card.contentView.addSubview(close)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = min(320, view.bounds.width - 48)
+        card.frame = CGRect(
+            x: floor((view.bounds.width - width) / 2),
+            y: floor((view.bounds.height - 150) / 2),
+            width: width,
+            height: 150
+        )
+        card.update(size: card.bounds.size, cornerRadius: 26, transition: .immediate)
+        label.frame = CGRect(x: 16, y: 28, width: card.bounds.width - 32, height: 30)
+        close.frame = CGRect(x: 16, y: 86, width: card.bounds.width - 32, height: 44)
+    }
 }
 
 // MARK: - Buttons
@@ -32,8 +233,14 @@ final class ButtonsDemoController: DemoController {
             title: "Glass Bar Button",
             state: .glass
         )
-        glassBar.action = { _ in
-            AetherToastController(content: .text("Glass tapped")).present()
+        glassBar.contentTintColor = .secondaryLabel
+        glassBar.action = { button in
+            let menu = ContextMenuController(
+                source: ContextMenuController.Source(view: button, cornerRadius: button.bounds.height / 2),
+                items: self.sampleItems(),
+                presentationStyle: .fluidMorph
+            )
+            menu.present()
         }
         addCenteredView(glassBar, height: 44)
 
@@ -43,10 +250,63 @@ final class ButtonsDemoController: DemoController {
             title: "Tinted Glass",
             state: .tintedGlass
         )
-        tinted.action = { _ in
-            AetherToastController(content: .text("Tinted tapped")).present()
+        tinted.tintColor = .systemBlue
+        tinted.action = { button in
+            let menu = ContextMenuController(
+                source: ContextMenuController.Source(view: button, cornerRadius: button.bounds.height / 2),
+                items: self.sampleItems(),
+                presentationStyle: .morph
+            )
+            menu.present()
         }
         addCenteredView(tinted, height: 44)
+    }
+
+    private func sampleItems() -> [ContextMenuItem] {
+        return [
+            .action(ContextMenuActionItem(
+                title: "Копировать",
+                icon: UIImage(systemName: "doc.on.doc"),
+                action: { _, handle in
+                    AetherToastController(content: .text("Copied")).present()
+                    handle.dismiss()
+                }
+            )),
+            .action(ContextMenuActionItem(
+                title: "Поделиться",
+                icon: UIImage(systemName: "square.and.arrow.up"),
+                action: { _, handle in
+                    AetherToastController(content: .text("Shared")).present()
+                    handle.dismiss()
+                }
+            )),
+            .action(ContextMenuActionItem(
+                title: "Ещё",
+                icon: UIImage(systemName: "chevron.right"),
+                submenu: [
+                    .action(ContextMenuActionItem(
+                        title: "Пункт 1",
+                        icon: UIImage(systemName: "1.circle"),
+                        action: { _, handle in handle.dismiss() }
+                    )),
+                    .action(ContextMenuActionItem(
+                        title: "Пункт 2",
+                        icon: UIImage(systemName: "2.circle"),
+                        action: { _, handle in handle.dismiss() }
+                    ))
+                ]
+            )),
+            .separator,
+            .action(ContextMenuActionItem(
+                title: "Удалить",
+                icon: UIImage(systemName: "trash"),
+                textColor: .destructive,
+                action: { _, handle in
+                    AetherToastController(content: .text("Deleted")).present()
+                    handle.dismiss()
+                }
+            ))
+        ]
     }
 }
 
@@ -61,6 +321,7 @@ final class AlertsDemoController: DemoController {
         addButton("Stacked — Primary / Destructive / Secondary") { [weak self] in self?.showStacked() }
         addButton("1 поле ввода") { [weak self] in self?.showWithField() }
         addButton("2 поля (login / password)") { [weak self] in self?.showWithTwoFields() }
+        addButton("Custom content + willDismiss") { [weak self] in self?.showCustomContent() }
     }
 
     private func showSingle() {
@@ -129,6 +390,25 @@ final class AlertsDemoController: DemoController {
         )
         present(alert, animated: false)
     }
+
+    private func showCustomContent() {
+        let slider = UISlider()
+        slider.value = 0.65
+        let alert = AetherAlertController(
+            title: "Custom content",
+            message: "Alert can host an arbitrary UIKit view between text and actions.",
+            actions: [
+                AetherAlertAction(title: "Cancel", style: .secondary),
+                AetherAlertAction(title: "Apply", style: .primary)
+            ],
+            customContentView: slider,
+            theme: .system
+        )
+        alert.willDismiss = { cancelled in
+            AetherToastController(content: .text(cancelled ? "Will dismiss: outside/cancel" : "Will dismiss: action")).present()
+        }
+        present(alert, animated: false)
+    }
 }
 
 // MARK: - ActionSheet
@@ -140,6 +420,7 @@ final class ActionSheetDemoController: DemoController {
         addButton("3 кнопки") { [weak self] in self?.showButtonsOnly() }
         addButton("С заголовком + Destructive") { [weak self] in self?.showWithHeader() }
         addButton("Checkbox + Switch mix") { [weak self] in self?.showMixed() }
+        addButton("Markdown text + overlay") { [weak self] in self?.showMarkdownOverlay() }
     }
 
     private func showButtonsOnly() {
@@ -161,13 +442,47 @@ final class ActionSheetDemoController: DemoController {
         let sheet = AetherActionSheetController(theme: .light)
         sheet.setItemGroups([
             AetherActionSheetItemGroup(items: [
-                AetherActionSheetTextItem(title: "Удалить запись? Это действие необратимо."),
+                AetherActionSheetTextItem(title: "**Удалить запись?** Это действие необратимо.", parseMarkdown: true),
                 AetherActionSheetButtonItem(title: "Удалить", color: .destructive, action: { [weak sheet] in sheet?.dismissAnimated() })
             ]),
             AetherActionSheetItemGroup(items: [
                 AetherActionSheetButtonItem(title: "Отмена", font: .bold, action: { [weak sheet] in sheet?.dismissAnimated() })
             ])
         ])
+        present(sheet, animated: false)
+    }
+
+    private func showMarkdownOverlay() {
+        let sheet = AetherActionSheetController(theme: .light)
+        sheet.setItemGroups([
+            AetherActionSheetItemGroup(items: [
+                AetherActionSheetTextItem(title: "**Markdown** text item with an overlay badge.", font: .large, parseMarkdown: true),
+                AetherActionSheetButtonItem(title: "Confirm", action: { [weak sheet] in sheet?.dismissAnimated() })
+            ]),
+            AetherActionSheetItemGroup(items: [
+                AetherActionSheetButtonItem(title: "Cancel", font: .bold, action: { [weak sheet] in sheet?.dismissAnimated() })
+            ])
+        ])
+
+        let badge = UILabel()
+        badge.text = "overlay"
+        badge.textAlignment = .center
+        badge.font = .systemFont(ofSize: 11, weight: .semibold)
+        badge.textColor = .white
+        badge.backgroundColor = .systemBlue
+        badge.layer.cornerRadius = 12
+        badge.layer.masksToBounds = true
+        let host = UIView()
+        host.isUserInteractionEnabled = false
+        host.addSubview(badge)
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            badge.topAnchor.constraint(equalTo: host.topAnchor, constant: 10),
+            badge.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -10),
+            badge.widthAnchor.constraint(equalToConstant: 68),
+            badge.heightAnchor.constraint(equalToConstant: 24)
+        ])
+        sheet.setItemGroupOverlayView(groupIndex: 0, view: host)
         present(sheet, animated: false)
     }
 
@@ -310,6 +625,19 @@ final class ContextMenuDemoController: DemoController {
     private weak var previewAnchor: UIView?
     private weak var tapAnchor: UIView?
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "gear"),
+            primaryAction: UIAction { _ in
+                AetherToastController(content: .text("Navbar button")).present()
+            },
+            contextMenuItemsProvider: { [weak self] in
+                self?.sampleItems() ?? []
+            }
+        )
+    }
+
     override func buildDemo() {
         addLabel("Long-press для morph / preview, tap — открыть меню.")
 
@@ -405,6 +733,58 @@ final class ContextMenuDemoController: DemoController {
                 }
             ))
         ]
+    }
+}
+
+// MARK: - Slider
+
+final class SliderDemoController: DemoController {
+    override var demoTitle: String { "Slider" }
+
+    private let valueLabel = UILabel()
+
+    override func buildDemo() {
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 18, weight: .semibold)
+        valueLabel.textAlignment = .center
+        valueLabel.textColor = .label
+        valueLabel.text = "64%"
+        stack.addArrangedSubview(valueLabel)
+
+        addGlassSlider(title: "Default", value: 0.64, tint: .systemBlue)
+        addGlassSlider(title: "Warm tint", value: 0.35, tint: .systemOrange)
+        addGlassSlider(title: "Compact", value: 0.82, tint: .systemGreen, trackHeight: 26, thumbSize: CGSize(width: 38, height: 32))
+
+        addLabel("Disabled")
+        let disabled = AetherSlider(value: 0.48, theme: .init(minimumTrackTintColor: .systemPurple))
+        disabled.isEnabled = false
+        addSliderView(disabled)
+    }
+
+    private func addGlassSlider(
+        title: String,
+        value: Float,
+        tint: UIColor,
+        trackHeight: CGFloat = 32,
+        thumbSize: CGSize = CGSize(width: 44, height: 38)
+    ) {
+        addLabel(title)
+        let slider = AetherSlider(value: value, theme: .init(minimumTrackTintColor: tint))
+        slider.trackHeight = trackHeight
+        slider.thumbSize = thumbSize
+        slider.valueChanged = { [weak self] value in
+            self?.valueLabel.text = "\(Int(round(value * 100)))%"
+        }
+        slider.addAction(UIAction { [weak self, weak slider] _ in
+            guard let slider else { return }
+            self?.valueLabel.text = "\(Int(round(slider.value * 100)))%"
+        }, for: .valueChanged)
+        addSliderView(slider)
+    }
+
+    private func addSliderView(_ slider: AetherSlider) {
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(slider)
+        slider.heightAnchor.constraint(equalToConstant: 54).isActive = true
     }
 }
 

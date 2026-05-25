@@ -556,6 +556,38 @@ open class AetherTabBarController: AetherViewController {
     }
 
     private var tabBarHidden: Bool = false
+    private struct TabBarVisibilityTransitionState {
+        let sourceHidden: Bool
+        let targetHidden: Bool
+        var progress: CGFloat
+    }
+    private var tabBarVisibilityTransitionState: TabBarVisibilityTransitionState?
+
+    private var effectiveTabBarHiddenProgress: CGFloat {
+        if let state = tabBarVisibilityTransitionState {
+            let progress = max(0.0, min(1.0, state.progress))
+            let source: CGFloat = state.sourceHidden ? 1.0 : 0.0
+            let target: CGFloat = state.targetHidden ? 1.0 : 0.0
+            return source + (target - source) * progress
+        }
+        return tabBarHidden ? 1.0 : 0.0
+    }
+
+    /// Layout reservation for `hidesBottomBarWhenPushed`.
+    ///
+    /// The tab bar's visual hide/show is interactive, but mutating
+    /// `additionalSafeAreaInsets` on every navigation-progress tick causes
+    /// UIKit to re-enter the child navigation controller while its own push/pop
+    /// coordinator is still installing frames. Keep the reservation on the
+    /// source controller's value for the duration of the nav transition and
+    /// apply the final inset once the transition has settled. The chrome itself
+    /// still fades with `effectiveTabBarHiddenProgress`.
+    private var tabBarLayoutVisibleProgress: CGFloat {
+        if let state = tabBarVisibilityTransitionState {
+            return state.sourceHidden ? 0.0 : 1.0
+        }
+        return tabBarHidden ? 0.0 : 1.0
+    }
 
     /// Re-entry guard for `containerLayoutUpdated`. Setting
     /// `additionalSafeAreaInsets` synchronously triggers UIKit's safe-area
@@ -831,6 +863,7 @@ open class AetherTabBarController: AetherViewController {
 
         self._controllers = controllers
         self._selectedIndex = selectedIndex ?? min(_selectedIndex, max(0, controllers.count - 1))
+        controllers.forEach(installBottomBarVisibilityCallbacks(on:))
 
         // Build tab items
         let items = controllers.map { controller -> AetherTabBarItem in
@@ -860,6 +893,7 @@ open class AetherTabBarController: AetherViewController {
     }
 
     public func updateIsTabBarHidden(_ hidden: Bool, transition: ContainedViewLayoutTransition) {
+        tabBarVisibilityTransitionState = nil
         self.tabBarHidden = hidden
         if let layout = currentlyAppliedLayout {
             containerLayoutUpdated(layout, transition: transition)
@@ -880,6 +914,9 @@ open class AetherTabBarController: AetherViewController {
     }
 
     public func isPointInsideContentArea(point: CGPoint) -> Bool {
+        if effectiveTabBarHiddenProgress >= 0.999 {
+            return true
+        }
         let tabBarFrame = tabBarView.frame
         return point.y < tabBarFrame.minY
     }
@@ -934,10 +971,13 @@ open class AetherTabBarController: AetherViewController {
 
         // TabBarView is at most 103pt TOTAL (safe area included inside).
         let tabBarHeight: CGFloat = TabBarView.defaultHeight // 103, never more
+        let hiddenProgress = effectiveTabBarHiddenProgress
+        let chromeVisibleProgress = 1.0 - hiddenProgress
+        let layoutVisibleProgress = tabBarLayoutVisibleProgress
         // Use RAW device safe area (not layout.safeInsets which includes
         // our own additionalSafeAreaInsets — using that causes infinite recursion).
         let rawSafeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
-        let tabBarContentInset = tabBarHidden ? 0.0 : max(0.0, tabBarHeight - rawSafeBottom)
+        let tabBarContentInset = layoutVisibleProgress * max(0.0, tabBarHeight - rawSafeBottom)
 
         // Accessory chrome pushed onto children in addition to the pill.
         // Hidden when the tab bar itself hides (the accessory has no
@@ -946,9 +986,9 @@ open class AetherTabBarController: AetherViewController {
         // (between the two 48×48 circles), so it no longer reserves
         // vertical space above the pill — children get only the tab
         // bar height and the accessory shares the same row.
-        let accessoryHeight: CGFloat = (!tabBarHidden && !isTabBarMinimized) ? (_bottomBarAccessory?.height ?? 0) : 0
+        let accessoryHeight: CGFloat = !isTabBarMinimized ? (_bottomBarAccessory?.height ?? 0) : 0
         let accessoryTotalReservation: CGFloat = accessoryHeight > 0
-            ? accessoryHeight + Self.bottomBarAccessoryBottomGap
+            ? layoutVisibleProgress * (accessoryHeight + Self.bottomBarAccessoryBottomGap)
             : 0
 
         // Propagate the tab-bar height + accessory reservation to embedded
@@ -969,9 +1009,12 @@ open class AetherTabBarController: AetherViewController {
         // When tab bar search is active AND keyboard is visible, lift the tab bar above the keyboard
         let isKeyboardVisible = (layout.inputHeight ?? 0) > 0
         let keyboardLift: CGFloat = tabBarView.isSearchActive ? (layout.inputHeight ?? 0) : 0
-        let tabBarY: CGFloat = tabBarHidden ? layout.size.height : (layout.size.height - tabBarHeight - keyboardLift)
+        let visibleTabBarY: CGFloat = layout.size.height - tabBarHeight - keyboardLift
+        let tabBarY: CGFloat = visibleTabBarY
         let tabBarFrame = CGRect(x: 0, y: tabBarY, width: layout.size.width, height: tabBarHeight)
         transition.updateFrame(view: tabBarView, frame: tabBarFrame)
+        transition.updateAlpha(view: tabBarView, alpha: chromeVisibleProgress)
+        tabBarView.isUserInteractionEnabled = chromeVisibleProgress > 0.01
 
         // Drive search-mode chrome that depends on keyboard state — the
         // active-tab circle inside `TabBarView` cross-fades through this
@@ -1020,7 +1063,7 @@ open class AetherTabBarController: AetherViewController {
         // resumes its normal control once the dismiss morph finishes.
         let updateAccessoryAlpha = { [weak self] (wrapper: GlassBackgroundView) in
             guard let _ = self else { return }
-            let target: CGFloat = shouldFadeAccessoryForSearch ? 0.0 : 1.0
+            let target: CGFloat = (shouldFadeAccessoryForSearch ? 0.0 : 1.0) * chromeVisibleProgress
             if abs(wrapper.alpha - target) > 0.001 {
                 transition.updateAlpha(view: wrapper, alpha: target)
             }
@@ -1028,7 +1071,7 @@ open class AetherTabBarController: AetherViewController {
 
         if expandedAccessoryViewController != nil {
             // Don't touch wrapper geometry while expanded.
-        } else if isTabBarMinimized, _bottomBarAccessory != nil, let wrapper = bottomBarAccessoryWrapper, !tabBarHidden {
+        } else if isTabBarMinimized, _bottomBarAccessory != nil, let wrapper = bottomBarAccessoryWrapper, chromeVisibleProgress > 0.001 {
             let pillSize = TabBarView.minimizedButtonSize
             let sideInset = tabBarTheme.sideInset
             // Gap between each circle and the accessory pill in the row.
@@ -1060,9 +1103,11 @@ open class AetherTabBarController: AetherViewController {
                 height: accessoryHeight
             )
             applyAccessoryFrame(wrapper, frame: accessoryFrame, transition: transition)
-            wrapper.isHidden = false
+            wrapper.isHidden = chromeVisibleProgress <= 0.001
             updateAccessoryAlpha(wrapper)
-            view.bringSubviewToFront(wrapper)
+            if chromeVisibleProgress > 0.001 {
+                view.bringSubviewToFront(wrapper)
+            }
         } else if let wrapper = bottomBarAccessoryWrapper {
             // Tab bar hidden (or accessory set but h == 0) — park wrapper
             // off-screen so child layout isn't affected by stale frames.
@@ -1082,7 +1127,7 @@ open class AetherTabBarController: AetherViewController {
         // the keyboard toggles.
         let visibleAccessoryReservation: CGFloat = shouldFadeAccessoryForSearch
             ? 0
-            : max(0, accessoryTotalReservation - searchTopAdjustment)
+            : layoutVisibleProgress * max(0, (accessoryHeight > 0 ? accessoryHeight + Self.bottomBarAccessoryBottomGap : 0) - searchTopAdjustment)
         if tabBarView.bottomAccessoryReservedHeight != visibleAccessoryReservation {
             transition.animateView { [weak tabBarView] in
                 tabBarView?.bottomAccessoryReservedHeight = visibleAccessoryReservation
@@ -1115,7 +1160,16 @@ open class AetherTabBarController: AetherViewController {
                 inVoiceOver: layout.inVoiceOver
             )
             if let navController = current as? AetherNavigationController {
-                navController.containerLayoutUpdated(childLayout, transition: transition)
+                // During an interactive/programmatic nav transition where only
+                // `hidesBottomBarWhenPushed` visibility is changing, do not
+                // re-enter the child navigation controller on every tab-bar
+                // alpha tick. Its root container already owns the active
+                // push/pop layers; reapplying the updated stack here can make
+                // the lower transition layer resolve to the top controller's
+                // view, which looks like the pushed screen was duplicated.
+                if tabBarVisibilityTransitionState == nil {
+                    navController.containerLayoutUpdated(childLayout, transition: transition)
+                }
             } else if let tgController = current as? AetherViewController {
                 tgController.containerLayoutUpdated(childLayout, transition: transition)
             }
@@ -1152,6 +1206,7 @@ open class AetherTabBarController: AetherViewController {
     /// chrome is currently showing.
     public func chromeTopY(in targetView: UIView) -> CGFloat? {
         guard isViewLoaded, tabBarView.bounds.width > 0 else { return nil }
+        guard effectiveTabBarHiddenProgress < 0.999 else { return nil }
         if let wrapper = bottomBarAccessoryWrapper, !wrapper.isHidden {
             let origin = wrapper.convert(CGPoint.zero, to: targetView)
             return origin.y
@@ -1192,6 +1247,132 @@ open class AetherTabBarController: AetherViewController {
     }
 
     // MARK: - Private
+
+    private func installBottomBarVisibilityCallbacks(on controller: UIViewController) {
+        guard let navigationController = controller as? AetherNavigationController else {
+            return
+        }
+
+        navigationController.bottomBarVisibilityTransitionBegan = { [weak self, weak navigationController] _, sourceController, targetController, _ in
+            guard let self, let navigationController, self.currentController === navigationController else {
+                return
+            }
+            self.beginBottomBarVisibilityTransition(
+                in: navigationController,
+                sourceController: sourceController,
+                targetController: targetController
+            )
+        }
+        navigationController.bottomBarVisibilityTransitionProgress = { [weak self, weak navigationController] progress, transition in
+            guard let self, let navigationController, self.currentController === navigationController else {
+                return
+            }
+            self.updateBottomBarVisibilityTransition(progress: progress, transition: transition)
+        }
+        navigationController.bottomBarVisibilityTransitionResolutionBegan = { [weak self, weak navigationController] completed, transition in
+            guard let self, let navigationController, self.currentController === navigationController else {
+                return
+            }
+            self.resolveBottomBarVisibilityTransition(completed: completed, transition: transition)
+        }
+        navigationController.bottomBarVisibilityTransitionEnded = { [weak self, weak navigationController] completed in
+            guard let self, let navigationController, self.currentController === navigationController else {
+                return
+            }
+            self.finishBottomBarVisibilityTransition(completed: completed)
+        }
+    }
+
+    private func bottomBarHidden(for controller: AetherViewController, in navigationController: AetherNavigationController) -> Bool {
+        guard controller.hidesBottomBarWhenPushed else {
+            return false
+        }
+        guard let rootController = navigationController.viewControllerStack.first else {
+            return controller.hidesBottomBarWhenPushed
+        }
+        return controller !== rootController
+    }
+
+    private func bottomBarHiddenForCurrentController() -> Bool {
+        guard let navigationController = currentController as? AetherNavigationController,
+              let topController = navigationController.topController
+        else {
+            return false
+        }
+        return bottomBarHidden(for: topController, in: navigationController)
+    }
+
+    private func syncTabBarHiddenForCurrentController(transition: ContainedViewLayoutTransition) {
+        guard tabBarVisibilityTransitionState == nil else {
+            return
+        }
+        let hidden = bottomBarHiddenForCurrentController()
+        guard tabBarHidden != hidden else {
+            return
+        }
+        tabBarHidden = hidden
+        if let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: transition)
+        }
+    }
+
+    private func beginBottomBarVisibilityTransition(
+        in navigationController: AetherNavigationController,
+        sourceController: AetherViewController,
+        targetController: AetherViewController
+    ) {
+        let sourceHidden = bottomBarHidden(for: sourceController, in: navigationController)
+        let targetHidden = bottomBarHidden(for: targetController, in: navigationController)
+        tabBarHidden = targetHidden
+
+        if sourceHidden == targetHidden {
+            tabBarVisibilityTransitionState = nil
+        } else {
+            tabBarVisibilityTransitionState = TabBarVisibilityTransitionState(
+                sourceHidden: sourceHidden,
+                targetHidden: targetHidden,
+                progress: 0.0
+            )
+        }
+
+        if let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: .immediate)
+        }
+    }
+
+    private func updateBottomBarVisibilityTransition(progress: CGFloat, transition: ContainedViewLayoutTransition) {
+        guard var state = tabBarVisibilityTransitionState else {
+            return
+        }
+        state.progress = progress
+        tabBarVisibilityTransitionState = state
+        if let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: transition)
+        }
+    }
+
+    private func resolveBottomBarVisibilityTransition(completed: Bool, transition: ContainedViewLayoutTransition) {
+        guard var state = tabBarVisibilityTransitionState else {
+            return
+        }
+        state.progress = completed ? 1.0 : 0.0
+        tabBarVisibilityTransitionState = state
+        if let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: transition)
+        }
+    }
+
+    private func finishBottomBarVisibilityTransition(completed: Bool) {
+        if let state = tabBarVisibilityTransitionState {
+            tabBarHidden = completed ? state.targetHidden : state.sourceHidden
+        } else {
+            tabBarHidden = bottomBarHiddenForCurrentController()
+        }
+        tabBarVisibilityTransitionState = nil
+        if let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: .immediate)
+        }
+    }
 
     /// Respond to a tap on the already-selected tab.
     ///
@@ -1255,6 +1436,7 @@ open class AetherTabBarController: AetherViewController {
     private func transitionToController(at index: Int, from previousIndex: Int, animated: Bool) {
         guard index < _controllers.count else { return }
         let newController = _controllers[index]
+        installBottomBarVisibilityCallbacks(on: newController)
 
         for (controllerIndex, controller) in _controllers.enumerated() where controller.isViewLoaded {
             controller.view.layer.removeAllAnimations()
@@ -1276,6 +1458,7 @@ open class AetherTabBarController: AetherViewController {
                 newController.didMove(toParent: self)
             }
             view.bringSubviewToFront(tabBarView)
+            syncTabBarHiddenForCurrentController(transition: .animated(duration: 0.22, curve: .navigationEaseOut))
 
             UIView.animate(
                 withDuration: 0.22,
@@ -1304,6 +1487,7 @@ open class AetherTabBarController: AetherViewController {
     }
 
     private func showController(_ controller: UIViewController, animated: Bool) {
+        installBottomBarVisibilityCallbacks(on: controller)
         let didAttach = attachControllerIfNeeded(controller)
         controller.view.frame = view.bounds
         view.insertSubview(controller.view, belowSubview: tabBarView)
@@ -1311,6 +1495,7 @@ open class AetherTabBarController: AetherViewController {
             controller.didMove(toParent: self)
         }
         view.bringSubviewToFront(tabBarView)
+        syncTabBarHiddenForCurrentController(transition: animated ? .animated(duration: 0.22, curve: .navigationEaseOut) : .immediate)
 
         if let layout = currentlyAppliedLayout {
             containerLayoutUpdated(layout, transition: .immediate)

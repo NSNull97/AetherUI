@@ -13,6 +13,7 @@ final class AetherActionSheetItemGroupView: UIView {
     }
 
     private(set) var itemViews: [AetherActionSheetItemView] = []
+    private var overlayView: UIView?
 
     private let blurView: UIVisualEffectView
 
@@ -53,6 +54,16 @@ final class AetherActionSheetItemGroupView: UIView {
         setNeedsLayout()
     }
 
+    func setOverlayView(_ view: UIView?) {
+        guard overlayView !== view else { return }
+        overlayView?.removeFromSuperview()
+        overlayView = view
+        if let view {
+            addSubview(view)
+        }
+        setNeedsLayout()
+    }
+
     private func updateSeparators() {
         guard let last = itemViews.last else { return }
         for view in itemViews {
@@ -85,5 +96,6 @@ final class AetherActionSheetItemGroupView: UIView {
             view.frame = CGRect(x: 0, y: y, width: bounds.width, height: h)
             y += h
         }
+        overlayView?.frame = bounds
     }
 }
