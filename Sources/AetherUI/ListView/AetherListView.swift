@@ -236,8 +236,16 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// Called when the range of visible items changes.
     public var displayedItemRangeChanged: ((AetherListDisplayedItemRange) -> Void)?
 
+    /// Current loaded/visible item range snapshot.
+    public var displayedItemRange: AetherListDisplayedItemRange {
+        computeDisplayedRange()
+    }
+
     /// Called on every scroll offset change.
     public var visibleContentOffsetChanged: ((CGFloat) -> Void)?
+
+    /// Telegram-compatible scroll delta callback.
+    public var didScrollWithOffset: ((CGFloat, ContainedViewLayoutTransition, AetherListItemNode?, Bool) -> Void)?
 
     /// Called when the user begins dragging.
     public var beganInteractiveDragging: (() -> Void)?
@@ -258,11 +266,25 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// Size of the visible viewport.
     public var visibleSize: CGSize { scrollView.bounds.size }
 
+    /// Telegram-compatible access to the underlying scrolling view.
+    public var scroller: UIScrollView { scrollView }
+
     /// Whether the user is currently touching the scroll view.
     public var isTracking: Bool { scrollView.isTracking }
 
     /// Whether the user is currently dragging.
     public var isDragging: Bool { scrollView.isDragging }
+
+    /// Whether UIKit is currently decelerating after a drag.
+    public var isDecelerating: Bool { scrollView.isDecelerating }
+
+    /// Whether the list is in any active scrolling state.
+    public var isScrolling: Bool {
+        return scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating
+    }
+
+    /// Minimum logical visible offset accepted by `setVisibleContentOffset`.
+    public var minimumVisibleContentOffset: CGFloat = 0.0
 
     /// Total number of items currently in the list (loaded + virtualised).
     public var itemCount: Int { items.count }
@@ -639,6 +661,7 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     // MARK: - Private State
 
     private let scrollView = UIScrollView()
+    private var previousDidScrollContentOffsetY: CGFloat?
 
     /// All item models in order.
     private var items: [AetherListItem] = []
@@ -823,6 +846,24 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     /// Stop any ongoing scrolling animation.
     public func stopScrolling() {
         scrollView.setContentOffset(scrollView.contentOffset, animated: false)
+    }
+
+    /// Velocity of the underlying pan gesture in the requested coordinate space.
+    public func panVelocity(in view: UIView?) -> CGPoint {
+        return scrollView.panGestureRecognizer.velocity(in: view)
+    }
+
+    /// Set a logical visible content offset and return whether the offset changed.
+    @discardableResult
+    public func setVisibleContentOffset(_ offset: CGFloat, animated: Bool) -> Bool {
+        let clampedOffset = max(minimumVisibleContentOffset, offset)
+        let targetY = clampedOffset - scrollView.contentInset.top
+        let target = CGPoint(x: scrollView.contentOffset.x, y: targetY)
+        guard abs(scrollView.contentOffset.y - target.y) > CGFloat.ulpOfOne else {
+            return false
+        }
+        scrollView.setContentOffset(target, animated: animated)
+        return true
     }
 
     /// Iterate over all currently visible item nodes.
@@ -1848,9 +1889,13 @@ open class AetherListView: UIView, UIScrollViewDelegate {
     // MARK: - UIScrollViewDelegate
 
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        let currentOffsetY = scrollView.contentOffset.y
+        let deltaY = currentOffsetY - (previousDidScrollContentOffsetY ?? currentOffsetY)
+        previousDidScrollContentOffsetY = currentOffsetY
         updateVisibleNodes()
         applyStickyHeaderLayout()
         visibleContentOffsetChanged?(scrollView.contentOffset.y + scrollView.contentInset.top)
+        didScrollWithOffset?(deltaY, .immediate, nil, scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating)
     }
 
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

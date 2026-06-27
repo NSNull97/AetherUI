@@ -81,6 +81,8 @@ public final class AetherFloatingToolbarView: UIView {
         case standalone(Button)
         /// A glass search field (flex-width).
         case search(SearchConfig)
+        /// Flexible empty space between fixed toolbar segments.
+        case spacer
     }
 
     /// Visual theme — icon/text colors + dark-mode override.
@@ -262,6 +264,7 @@ public final class AetherFloatingToolbarView: UIView {
             stackView.addArrangedSubview(view)
             segmentViews.append(view)
             if case .search = segment { hasFlex = true }
+            if case .spacer = segment { hasFlex = true }
         }
 
         // Centering on/off: when there's a flex segment (search), pin to
@@ -318,6 +321,8 @@ public final class AetherFloatingToolbarView: UIView {
             return StandaloneSegmentView(button: button)
         case .search(let config):
             return SearchSegmentView(config: config)
+        case .spacer:
+            return SpacerSegmentView()
         }
     }
 }
@@ -327,6 +332,24 @@ public final class AetherFloatingToolbarView: UIView {
 private protocol ToolbarSegmentView: UIView {
     func applyTheme(_ theme: AetherFloatingToolbarView.Theme, isDark: Bool)
     func updateFixedSizing(pillHeight: CGFloat, pillButtonWidth: CGFloat)
+}
+
+private final class SpacerSegmentView: UIView, ToolbarSegmentView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func applyTheme(_ theme: AetherFloatingToolbarView.Theme, isDark: Bool) {
+    }
+
+    func updateFixedSizing(pillHeight: CGFloat, pillButtonWidth: CGFloat) {
+    }
 }
 
 // MARK: - Standalone

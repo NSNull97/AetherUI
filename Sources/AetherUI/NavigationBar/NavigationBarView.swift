@@ -6,7 +6,7 @@ public protocol NavigationBarView: UIView {
     var backPressed: () -> Void { get set }
     var userInfo: Any? { get set }
 
-    var item: UINavigationItem? { get set }
+    var item: NavigationBarItem? { get set }
     var previousItem: NavigationPreviousAction? { get set }
     var enableAutomaticBackButton: Bool { get set }
 

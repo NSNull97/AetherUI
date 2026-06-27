@@ -51,6 +51,10 @@ public final class ContextMenuController {
     /// soften the edges of background content without making it
     /// unreadable.
     public static var dimBlurRadius: CGFloat = 0.05
+    public static var previewBlurRadius: CGFloat {
+        get { dimBlurRadius }
+        set { dimBlurRadius = newValue }
+    }
     private static let menuCornerRadius: CGFloat = 34.0
 
     // MARK: - Glass lift metrics
@@ -98,6 +102,26 @@ public final class ContextMenuController {
         }
     }
 
+    public struct PreviewContent {
+        public let view: UIView
+        public let preferredSize: CGSize
+
+        public init(view: UIView, preferredSize: CGSize) {
+            self.view = view
+            self.preferredSize = preferredSize
+        }
+    }
+
+    public struct PreviewAccessory {
+        public let view: UIView
+        public let spacing: CGFloat
+
+        public init(view: UIView, spacing: CGFloat = 0.0) {
+            self.view = view
+            self.spacing = spacing
+        }
+    }
+
     /// Two presentation flavours.
     ///   - `.morph` (default): the source view fades and the menu morphs
     ///     out of its rect — ideal for nav-bar buttons and pills (Phase 1).
@@ -107,7 +131,12 @@ public final class ContextMenuController {
     ///     a peek of the source content while choosing an action.
     public enum PresentationStyle {
         case morph
-        case preview(verticalSpacing: CGFloat = 12.0, lift: CGFloat = 1.04)
+        case preview(
+            verticalSpacing: CGFloat = 12.0,
+            lift: CGFloat = 1.04,
+            content: PreviewContent? = nil,
+            accessory: PreviewAccessory? = nil
+        )
         /// Lens-bloom presentation. A small optical seed appears near the
         /// future menu anchor, expands as a circular/oval lens, then rectifies
         /// into the final rounded menu platter.
@@ -119,6 +148,7 @@ public final class ContextMenuController {
     private let source: Source
     private let items: [ContextMenuItem]
     private let presentationStyle: PresentationStyle
+    private let onWillRemoveOverlay: (() -> Void)?
     private let onDismiss: (() -> Void)?
     private let catchTapsOutside: Bool
     private let hasHapticFeedback: Bool
@@ -203,6 +233,7 @@ public final class ContextMenuController {
         blurred: Bool = true,
         isDark: Bool? = nil,
         skipCoordinateConversion: Bool = false,
+        onWillRemoveOverlay: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.source = source
@@ -213,6 +244,7 @@ public final class ContextMenuController {
         self.blurred = blurred
         self.isDark = isDark
         self.skipCoordinateConversion = skipCoordinateConversion
+        self.onWillRemoveOverlay = onWillRemoveOverlay
         self.onDismiss = onDismiss
     }
 
@@ -783,6 +815,7 @@ public final class ContextMenuController {
             self?.submenuCard?.tearDownGlassEffect()
             morphHost?.glass.tearDownGlassEffect()
             platterBloomHost?.finalMenuGlassSurfaceView.tearDownGlassEffect()
+            self?.onWillRemoveOverlay?()
             dim?.removeFromSuperview()
             morphHost?.removeFromSuperview()
             platterBloomHost?.removeFromSuperview()
@@ -1010,7 +1043,7 @@ public final class ContextMenuController {
             animateInMorph(sourceMinSide: sourceMinSide)
         case .fluidMorph:
             animateInFluidMorph()
-        case let .preview(_, lift):
+        case let .preview(_, lift, _, _):
             if let sdfHost { animateInPreview(sdfHost: sdfHost, lift: lift) }
         }
     }
@@ -1245,7 +1278,7 @@ public final class ContextMenuController {
                     hostBounds.maxY - safeBottom - menuSize.height
                 )
             }
-        case let .preview(spacing, _):
+        case let .preview(spacing, _, _, _):
             initialY = sourceRect.maxY + spacing
         }
 
@@ -1678,6 +1711,7 @@ public extension ContextMenuController {
         blurred: Bool = true,
         isDark: Bool? = nil,
         skipCoordinateConversion: Bool = false,
+        onWillRemoveOverlay: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) -> ContextMenuController {
         let controller = ContextMenuController(
@@ -1689,6 +1723,7 @@ public extension ContextMenuController {
             blurred: blurred,
             isDark: isDark,
             skipCoordinateConversion: skipCoordinateConversion,
+            onWillRemoveOverlay: onWillRemoveOverlay,
             onDismiss: onDismiss
         )
         controller.present()

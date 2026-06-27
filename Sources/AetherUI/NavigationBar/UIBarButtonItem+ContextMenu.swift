@@ -31,6 +31,44 @@ private extension UIBarButtonItem {
 /// and replaces the `GlassControlGroup` action with a "show menu" closure
 /// when present.
 public extension UIBarButtonItem {
+    convenience init(imageURL: URL?, target: Any?, action: Selector?) {
+        self.init(
+            imageURL: imageURL,
+            placeholderImage: UIImage(systemName: "person.crop.circle.fill"),
+            target: target,
+            action: action
+        )
+    }
+
+    convenience init(imageURL: URL?, placeholderImage: UIImage?, target: Any?, action: Selector?) {
+        let button = UIButton(type: .custom)
+        button.frame = CGRect(x: 0.0, y: 0.0, width: 34.0, height: 34.0)
+        button.layer.cornerRadius = 17.0
+        button.clipsToBounds = true
+        button.backgroundColor = UIColor.secondarySystemFill
+        button.tintColor = .label
+        button.imageView?.contentMode = .scaleAspectFill
+        button.setImage(placeholderImage, for: .normal)
+        if let target, let action {
+            button.addTarget(target, action: action, for: .touchUpInside)
+        }
+
+        self.init(customView: button)
+
+        guard let imageURL else {
+            return
+        }
+
+        URLSession.shared.dataTask(with: imageURL) { [weak button] data, _, _ in
+            guard let data, let image = UIImage(data: data) else {
+                return
+            }
+            DispatchQueue.main.async {
+                button?.setImage(image.withRenderingMode(.alwaysOriginal), for: .normal)
+            }
+        }.resume()
+    }
+
     /// Convenience for "title/image bar item that opens a AetherUI
     /// context menu on tap". `primaryAction` is optional and preserved
     /// for non-tap entry points (accessibility, keyboard activation).

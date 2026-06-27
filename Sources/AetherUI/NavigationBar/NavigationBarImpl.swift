@@ -130,6 +130,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     private let backButtonView: NavigationBackButtonView
     private let backArrowView: UIImageView
     private let titleLabel: UILabel
+    private let subtitleLabel: UILabel
     private let leftButtonContainer: UIView
     private let rightButtonContainer: UIView
     private let leftButtonGlassContainer: GlassBackgroundContainerView
@@ -182,7 +183,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     public var backPressed: () -> Void = {}
     public var userInfo: Any?
 
-    public var item: UINavigationItem? {
+    public var item: NavigationBarItem? {
         didSet {
             updateItemContent()
         }
@@ -257,6 +258,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         self.backButtonView = NavigationBackButtonView()
         self.backArrowView = UIImageView()
         self.titleLabel = UILabel()
+        self.subtitleLabel = UILabel()
         self.leftButtonContainer = UIView()
         self.rightButtonContainer = UIView()
         self.leftButtonGlassContainer = GlassBackgroundContainerView(spacing: 7.0)
@@ -306,6 +308,14 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         titleLabel.numberOfLines = 1
         titleLabel.lineBreakMode = .byTruncatingTail
         buttonsContainerView.addSubview(titleLabel)
+
+        subtitleLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .medium)
+        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textAlignment = .center
+        subtitleLabel.numberOfLines = 1
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.isHidden = true
+        buttonsContainerView.addSubview(subtitleLabel)
 
         // Left/Right button containers
         leftButtonContainer.clipsToBounds = false
@@ -1075,8 +1085,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         backgroundView.updateColor(color: theme.backgroundColor, enableBlur: theme.enableBackgroundBlur, transition: transition)
         stripeView.backgroundColor = theme.separatorColor
         titleLabel.font = UIFont.systemFont(ofSize: 17.0, weight: .semibold)
+        subtitleLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .medium)
         clippingView.clipsToBounds = theme.style != .glass
         titleLabel.textColor = theme.primaryTextColor
+        subtitleLabel.textColor = .secondaryLabel
         backButtonView.color = theme.buttonColor
         backButtonView.contentTintColor = theme.buttonColor
         backButtonView.isDark = theme.overallDarkAppearance
@@ -1517,14 +1529,50 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             titleFrame.origin.x = min(max(titleFrame.origin.x, titleLeftInset), max(titleLeftInset, width - titleRightInset - titleFrame.width))
             geometryTransition.updateFrame(view: titleContentView, frame: titleFrame)
         } else {
-            let measuredTitleSize = titleLabel.sizeThatFits(CGSize(width: titleMaxWidth, height: buttonHeight))
-            let titleSize = CGSize(
-                width: min(titleMaxWidth, max(0.0, measuredTitleSize.width)),
-                height: min(buttonHeight, max(0.0, measuredTitleSize.height))
-            )
-            var titleFrame = CGRect(x: floor((width - titleSize.width) / 2.0), y: floor((buttonHeight - titleSize.height) / 2.0) + (usesGlassStyle ? 1.0 : 0.0), width: titleSize.width, height: titleSize.height)
-            titleFrame.origin.x = min(max(titleFrame.origin.x, titleLeftInset), max(titleLeftInset, width - titleRightInset - titleFrame.width))
-            geometryTransition.updateFrame(view: titleLabel, frame: titleFrame)
+            let hasSubtitle = !(item?.subtitle?.isEmpty ?? true)
+            if hasSubtitle {
+                let titleMeasure = titleLabel.sizeThatFits(CGSize(width: titleMaxWidth, height: buttonHeight))
+                let subtitleMeasure = subtitleLabel.sizeThatFits(CGSize(width: titleMaxWidth, height: buttonHeight))
+                let stackSpacing: CGFloat = 1.0
+                let titleHeight = min(22.0, max(0.0, titleMeasure.height))
+                let subtitleHeight = min(16.0, max(0.0, subtitleMeasure.height))
+                let stackHeight = min(buttonHeight, titleHeight + stackSpacing + subtitleHeight)
+                let stackWidth = min(titleMaxWidth, max(titleMeasure.width, subtitleMeasure.width))
+                var stackFrame = CGRect(
+                    x: floor((width - stackWidth) / 2.0),
+                    y: floor((buttonHeight - stackHeight) / 2.0) + (usesGlassStyle ? 1.0 : 0.0),
+                    width: stackWidth,
+                    height: stackHeight
+                )
+                stackFrame.origin.x = min(max(stackFrame.origin.x, titleLeftInset), max(titleLeftInset, width - titleRightInset - stackFrame.width))
+                geometryTransition.updateFrame(
+                    view: titleLabel,
+                    frame: CGRect(
+                        x: stackFrame.minX,
+                        y: stackFrame.minY,
+                        width: stackFrame.width,
+                        height: titleHeight
+                    )
+                )
+                geometryTransition.updateFrame(
+                    view: subtitleLabel,
+                    frame: CGRect(
+                        x: stackFrame.minX,
+                        y: stackFrame.minY + titleHeight + stackSpacing,
+                        width: stackFrame.width,
+                        height: subtitleHeight
+                    )
+                )
+            } else {
+                let measuredTitleSize = titleLabel.sizeThatFits(CGSize(width: titleMaxWidth, height: buttonHeight))
+                let titleSize = CGSize(
+                    width: min(titleMaxWidth, max(0.0, measuredTitleSize.width)),
+                    height: min(buttonHeight, max(0.0, measuredTitleSize.height))
+                )
+                var titleFrame = CGRect(x: floor((width - titleSize.width) / 2.0), y: floor((buttonHeight - titleSize.height) / 2.0) + (usesGlassStyle ? 1.0 : 0.0), width: titleSize.width, height: titleSize.height)
+                titleFrame.origin.x = min(max(titleFrame.origin.x, titleLeftInset), max(titleLeftInset, width - titleRightInset - titleFrame.width))
+                geometryTransition.updateFrame(view: titleLabel, frame: titleFrame)
+            }
         }
     }
 
@@ -2033,6 +2081,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     private func updateItemContent() {
         titleLabel.text = item?.title
+        subtitleLabel.text = item?.subtitle
         if let existingTitleContentView = titleContentView, existingTitleContentView !== item?.titleView {
             existingTitleContentView.removeFromSuperview()
             titleContentView = nil
@@ -2047,6 +2096,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             measuredTitleHeight = 0
         }
         titleLabel.isHidden = titleContentView != nil
+        subtitleLabel.isHidden = titleContentView != nil || (item?.subtitle?.isEmpty ?? true)
         updateBackButton()
         // Do NOT schedule any layout here. The caller — syncNavigationItem
         // in TabBarController, wireControllers in NavigationController, etc.

@@ -474,6 +474,20 @@ public final class AetherWindow: UIWindow {
         keyboardGestureBeginLocation = nil
     }
 
+    public func simulateKeyboardDismiss(transition: ContainedViewLayoutTransition = .animated(duration: 0.25, curve: .spring)) {
+        let shouldSimulate = topLevelOverlayControllers.contains { controller in
+            controller.isViewLoaded && controller.view.window !== _rootController.view.window
+        }
+
+        if shouldSimulate {
+            updateLayout {
+                $0.updateUpperKeyboardInputPositionBound(windowLayout.size.height, transition: transition, overrideTransition: false)
+            }
+        } else {
+            _rootController.view.endEditing(true)
+        }
+    }
+
     /// Update the status bar style and visibility.
     public func updateStatusBar(style: UIStatusBarStyle, hidden: Bool, transition: ContainedViewLayoutTransition) {
         _rootController.updateStatusBar(style: style, hidden: hidden, transition: transition)

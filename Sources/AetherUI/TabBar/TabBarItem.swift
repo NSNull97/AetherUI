@@ -16,3 +16,5 @@ public final class AetherTabBarItem {
         self.isEnabled = isEnabled
     }
 }
+
+public typealias SearchTabBarItem = UITabBarItem

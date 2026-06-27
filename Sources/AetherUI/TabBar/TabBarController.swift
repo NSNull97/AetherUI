@@ -58,6 +58,15 @@ open class AetherTabBarController: AetherViewController {
         didSet { tabBarView.searchShowcase = searchShowcase }
     }
 
+    public var searchTabBarItem: TabBarView.SearchShowcase? {
+        get {
+            return searchShowcase
+        }
+        set {
+            searchShowcase = newValue
+        }
+    }
+
     /// Closure returning the `ContextMenuItem`s for a tab on long-press.
     /// Called with the tab index; return an empty array to suppress the
     /// menu for that tab. Setup-time configuration path — preferred over
@@ -707,6 +716,11 @@ open class AetherTabBarController: AetherViewController {
         observedScrollView = nil
     }
 
+    public func invalidateTabBarMinimizeScrollView() {
+        observedScrollView = nil
+        attachScrollObserverIfPossible()
+    }
+
     /// BFS for the first scroll view inside the current tab's view tree.
     /// Mirrors `firstScrollView` used by the active-tab re-tap handler so
     /// both behaviours target the same scroll view.
@@ -716,6 +730,9 @@ open class AetherTabBarController: AetherViewController {
             target = nav.topController
         } else {
             target = currentController
+        }
+        if let explicit = (target as? AetherViewController)?.primaryScrollViewForChrome {
+            return explicit
         }
         guard let root = target?.view else { return nil }
         return Self.firstScrollView(in: root)

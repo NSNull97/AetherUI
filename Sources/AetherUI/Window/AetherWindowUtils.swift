@@ -1,5 +1,5 @@
 import UIKit
-import AetherUIBridging
+@_exported import AetherUIBridging
 
 // MARK: - Input Accessory Height
 
@@ -50,7 +50,17 @@ public func getFirstResponderAndAccessoryHeight(_ view: UIView, _ accessoryHeigh
 /// Thin wrapper over the Obj-C impl in `AetherUIBridging` so call sites
 /// can keep the pre-bridging import-free Swift signature.
 public func doesViewTreeDisableInteractiveKeyboardGestureRecognizer(_ view: UIView) -> Bool {
-    return AetherViewTreeDisablesInteractiveKeyboardGesture(view)
+    var current: UIView? = view
+    while let view = current {
+        if view.disablesInteractiveKeyboardGestureRecognizer {
+            return true
+        }
+        if let shouldDisable = view.disablesInteractiveTransitionGestureRecognizerNow, shouldDisable() {
+            return true
+        }
+        current = view.superview
+    }
+    return false
 }
 
 /// Walks the superview chain from `view` upward, returning `true` if any

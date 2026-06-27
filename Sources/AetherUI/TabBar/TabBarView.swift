@@ -10,6 +10,44 @@ public final class TabBarView: UIView {
         case liquidGlass
     }
 
+    public struct TabBarAppearance {
+        public struct EdgeEffect {
+            public let alpha: CGFloat
+            public let blurRadiusAtEdge: CGFloat
+            public let blurRadiusAtFade: CGFloat
+            public let tintColor: UIColor?
+
+            public init(
+                alpha: CGFloat = 0.75,
+                blurRadiusAtEdge: CGFloat = 2.0,
+                blurRadiusAtFade: CGFloat = 0.0,
+                tintColor: UIColor? = nil
+            ) {
+                self.alpha = alpha
+                self.blurRadiusAtEdge = blurRadiusAtEdge
+                self.blurRadiusAtFade = blurRadiusAtFade
+                self.tintColor = tintColor
+            }
+        }
+
+        public let backgroundColor: UIColor
+        public let separatorColor: UIColor
+        public let enableBlur: Bool
+        public let edgeEffect: EdgeEffect?
+
+        public init(
+            backgroundColor: UIColor = .clear,
+            separatorColor: UIColor = .separator,
+            enableBlur: Bool = true,
+            edgeEffect: EdgeEffect? = EdgeEffect()
+        ) {
+            self.backgroundColor = backgroundColor
+            self.separatorColor = separatorColor
+            self.enableBlur = enableBlur
+            self.edgeEffect = edgeEffect
+        }
+    }
+
     public struct Theme {
         public let tabBarBackgroundColor: UIColor
         public let tabBarSeparatorColor: UIColor
@@ -56,6 +94,7 @@ public final class TabBarView: UIView {
             enableBlur: Bool = true,
             isDark: Bool = false,
             style: Style = .liquidGlass,
+            tabBarAppearance: TabBarAppearance? = nil,
             outerInsets: UIEdgeInsets = UIEdgeInsets(top: 4.0, left: 25.0, bottom: 4.0, right: 25.0),
             pillHeight: CGFloat = 62.0,
             totalHeight: CGFloat = 103.0,
@@ -68,8 +107,8 @@ public final class TabBarView: UIView {
             edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
             edgeEffectTintColor: UIColor? = nil
         ) {
-            self.tabBarBackgroundColor = tabBarBackgroundColor
-            self.tabBarSeparatorColor = tabBarSeparatorColor
+            self.tabBarBackgroundColor = tabBarAppearance?.backgroundColor ?? tabBarBackgroundColor
+            self.tabBarSeparatorColor = tabBarAppearance?.separatorColor ?? tabBarSeparatorColor
             self.tabBarIconColor = tabBarIconColor
             self.tabBarSelectedIconColor = tabBarSelectedIconColor
             self.tabBarTextColor = tabBarTextColor
@@ -77,7 +116,7 @@ public final class TabBarView: UIView {
             self.tabBarBadgeBackgroundColor = tabBarBadgeBackgroundColor
             self.tabBarBadgeStrokeColor = tabBarBadgeStrokeColor
             self.tabBarBadgeTextColor = tabBarBadgeTextColor
-            self.enableBlur = enableBlur
+            self.enableBlur = tabBarAppearance?.enableBlur ?? enableBlur
             self.isDark = isDark
             self.style = style
             self.outerInsets = outerInsets
@@ -87,10 +126,17 @@ public final class TabBarView: UIView {
             self.sideInset = sideInset
             self.innerPadding = innerPadding
             self.showcaseSpacing = showcaseSpacing
-            self.edgeEffectAlpha = edgeEffectAlpha
-            self.edgeEffectBlurRadiusAtEdge = edgeEffectBlurRadiusAtEdge
-            self.edgeEffectBlurRadiusAtFade = edgeEffectBlurRadiusAtFade
-            self.edgeEffectTintColor = edgeEffectTintColor
+            if let tabBarAppearance {
+                self.edgeEffectAlpha = tabBarAppearance.edgeEffect?.alpha ?? 0.0
+                self.edgeEffectBlurRadiusAtEdge = tabBarAppearance.edgeEffect?.blurRadiusAtEdge ?? edgeEffectBlurRadiusAtEdge
+                self.edgeEffectBlurRadiusAtFade = tabBarAppearance.edgeEffect?.blurRadiusAtFade ?? edgeEffectBlurRadiusAtFade
+                self.edgeEffectTintColor = tabBarAppearance.edgeEffect?.tintColor
+            } else {
+                self.edgeEffectAlpha = edgeEffectAlpha
+                self.edgeEffectBlurRadiusAtEdge = edgeEffectBlurRadiusAtEdge
+                self.edgeEffectBlurRadiusAtFade = edgeEffectBlurRadiusAtFade
+                self.edgeEffectTintColor = edgeEffectTintColor
+            }
         }
     }
 
@@ -153,6 +199,15 @@ public final class TabBarView: UIView {
 
     public var searchShowcase: SearchShowcase? {
         didSet { rebuildSearchShowcase() }
+    }
+
+    public var searchTabBarItem: SearchShowcase? {
+        get {
+            return searchShowcase
+        }
+        set {
+            searchShowcase = newValue
+        }
     }
 
     // MARK: - Minimize Mode (iOS 26 `tabBarMinimizeBehavior`)

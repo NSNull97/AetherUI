@@ -1,4 +1,5 @@
 import UIKit
+import AetherUIBridging
 
 /// Base ViewController with glass-style navigation support.
 /// Pure UIKit replacement for Display.ViewController.
@@ -73,6 +74,20 @@ import UIKit
     open var previousItem: NavigationPreviousAction?
     open var navigationPresentation: AetherViewController.NavigationPresentation = .default
     open var _hasGlassStyle: Bool = false
+    public private(set) lazy var navigationBarItem: NavigationBarItem = {
+        let item = NavigationBarItem(navigationItem: self.navigationItem)
+        item.searchBarControllerChanged = { [weak self] _, newValue in
+            guard let self, self.searchController !== newValue else { return }
+            self.searchController = newValue
+        }
+        item.topBarAccessoryChanged = { [weak self] _, newValue, transition in
+            self?.applyNavigationBarItemTopBarAccessory(newValue, transition: transition)
+        }
+        item.chromeContentDidChange = { [weak self] in
+            self?.navigationBarItemContentDidChange()
+        }
+        return item
+    }()
 
     // MARK: - Tab Bar
 
@@ -101,6 +116,9 @@ import UIKit
     /// Set to `nil` to remove the search pill from the nav bar.
     public var searchController: AetherSearchController? {
         didSet {
+            if navigationBarItem.searchBarController !== searchController {
+                navigationBarItem.searchBarController = searchController
+            }
             cachedStackedTopBarAccessory = nil
             oldValue?.uninstall()
             if let sc = searchController {
@@ -190,6 +208,91 @@ import UIKit
         return floatingToolbar != nil ? AetherFloatingToolbarView.defaultHeight : 0
     }
 
+    // MARK: - Input Bar Accessory
+
+    private var _inputBarAccessoryReservedHeight: CGFloat?
+    public private(set) var inputBarAccessoryFrame: CGRect = .zero
+
+    /// Bottom input accessory hosted by the controller itself.
+    ///
+    /// Use this for chat-style input bars that should sit above the keyboard
+    /// but remain a regular view in this controller hierarchy. The view is
+    /// laid out at the bottom, above the keyboard when it is visible and
+    /// above ancestor bottom chrome / the home indicator otherwise.
+    public var inputBarAccessoryView: UIView? {
+        didSet {
+            guard inputBarAccessoryView !== oldValue else { return }
+            oldValue?.input_setInputAccessoryHeightProvider(nil)
+            oldValue?.removeFromSuperview()
+
+            if let accessory = inputBarAccessoryView {
+                installInputBarAccessoryHeightProvider(on: accessory)
+                if isViewLoaded {
+                    view.addSubview(accessory)
+                    view.bringSubviewToFront(accessory)
+                }
+            }
+
+            syncInputBarAccessoryHeightWithWindow()
+            if isViewLoaded, let layout = currentlyAppliedLayout {
+                containerLayoutUpdated(layout, transition: .immediate)
+            }
+        }
+    }
+
+    /// Default height used when the accessory has no measured frame or
+    /// intrinsic Auto Layout height yet. Subclasses can override this for
+    /// custom compose bars.
+    open var inputBarAccessoryDefaultHeight: CGFloat {
+        return 49.0
+    }
+
+    open var inputBarAccessoryUsesBottomEdgeEffect: Bool {
+        return false
+    }
+
+    open var primaryScrollViewForChrome: UIScrollView? {
+        return nil
+    }
+
+    /// Height reserved for `inputBarAccessoryView` in safe-area propagation.
+    ///
+    /// Assigning this pins the reserved height. Use
+    /// `setInputBarAccessoryReservedHeight(_:transition:)` with `nil` to
+    /// return to automatic measurement.
+    open var inputBarAccessoryReservedHeight: CGFloat {
+        get {
+            if let reservedHeight = _inputBarAccessoryReservedHeight {
+                return reservedHeight
+            }
+            let fallbackWidth = isViewLoaded ? view.bounds.width : 0.0
+            return resolvedInputBarAccessoryHeight(width: currentlyAppliedLayout?.size.width ?? fallbackWidth)
+        }
+        set {
+            setInputBarAccessoryReservedHeight(newValue, transition: .immediate)
+        }
+    }
+
+    public func setInputBarAccessoryReservedHeight(_ height: CGFloat?, transition: ContainedViewLayoutTransition = .immediate) {
+        let clampedHeight = height.map { max(0.0, $0) }
+        guard _inputBarAccessoryReservedHeight != clampedHeight else {
+            return
+        }
+        _inputBarAccessoryReservedHeight = clampedHeight
+        syncInputBarAccessoryHeightWithWindow()
+        if isViewLoaded, let layout = currentlyAppliedLayout {
+            containerLayoutUpdated(layout, transition: transition)
+        }
+    }
+
+    public func invalidateInputBarAccessoryLayout(transition: ContainedViewLayoutTransition = .immediate) {
+        syncInputBarAccessoryHeightWithWindow()
+        guard isViewLoaded, let layout = currentlyAppliedLayout else {
+            return
+        }
+        containerLayoutUpdated(layout, transition: transition)
+    }
+
     /// Top-bar accessory view installed below the nav bar title row in
     /// `.expansion` mode (filter chips, segmented controls, etc.).
     ///
@@ -204,18 +307,29 @@ import UIKit
         get { _rawTopBarAccessory }
         set {
             guard _rawTopBarAccessory !== newValue else { return }
-            _rawTopBarAccessory = newValue
-            cachedStackedTopBarAccessory = nil
-            if searchController != nil {
-                rebuildTopBarAccessory()
-            } else {
-                if navigationBarView != nil, displayNavigationBar {
-                    navigationBarView?.setContentView(newValue, animated: false)
-                } else {
-                    navigationBarView?.setContentView(nil, animated: false)
-                }
-                topBarAccessoryDidChange?()
+            if navigationBarItem.topBarAccessory !== newValue {
+                navigationBarItem.setTopBarAccessory(newValue, transition: .immediate)
+                return
             }
+            applyNavigationBarItemTopBarAccessory(newValue, transition: .immediate)
+        }
+    }
+
+    private func applyNavigationBarItemTopBarAccessory(_ accessory: NavigationBarContentView?, transition: ContainedViewLayoutTransition) {
+        guard _rawTopBarAccessory !== accessory else { return }
+        let animated = transition.isAnimated
+        let newValue = accessory
+        _rawTopBarAccessory = newValue
+        cachedStackedTopBarAccessory = nil
+        if searchController != nil {
+            rebuildTopBarAccessory()
+        } else {
+            if navigationBarView != nil, displayNavigationBar {
+                navigationBarView?.setContentView(newValue, animated: animated)
+            } else {
+                navigationBarView?.setContentView(nil, animated: false)
+            }
+            topBarAccessoryDidChange?()
         }
     }
 
@@ -435,11 +549,40 @@ import UIKit
             pillOrSafeTopY = layout.size.height - rawSafeBottom
         }
 
+        let keyboardHeight = max(0.0, layout.inputHeight ?? 0.0)
+        let inputAnchorTopY = keyboardHeight > 0.0
+            ? layout.size.height - keyboardHeight
+            : pillOrSafeTopY
+
+        var inputBarAccessoryTopY = inputAnchorTopY
+        let inputBarHeight: CGFloat
+        if let inputBarAccessoryView {
+            inputBarHeight = resolvedInputBarAccessoryHeight(width: layout.size.width)
+            inputBarAccessoryTopY = inputAnchorTopY - inputBarHeight
+            if inputBarAccessoryView.superview !== view {
+                view.addSubview(inputBarAccessoryView)
+            }
+            let accessoryFrame = CGRect(
+                x: 0.0,
+                y: inputBarAccessoryTopY,
+                width: layout.size.width,
+                height: inputBarHeight
+            )
+            inputBarAccessoryFrame = accessoryFrame
+            transition.updateFrame(view: inputBarAccessoryView, frame: accessoryFrame)
+            view.bringSubviewToFront(inputBarAccessoryView)
+        } else {
+            inputBarHeight = 0.0
+            inputBarAccessoryFrame = .zero
+        }
+        syncInputBarAccessoryHeightWithWindow()
+
         let toolbarHeight = floatingToolbarHeight
         let toolbarBottomGap: CGFloat = 12
+        let toolbarAnchorTopY = inputBarAccessoryView != nil ? inputBarAccessoryTopY : pillOrSafeTopY
         var toolbarTopY: CGFloat = layout.size.height
         if let toolbar = floatingToolbar {
-            let toolbarY = pillOrSafeTopY - toolbarBottomGap - toolbarHeight
+            let toolbarY = toolbarAnchorTopY - toolbarBottomGap - toolbarHeight
             toolbarTopY = toolbarY
             let toolbarFrame = CGRect(
                 x: 0,
@@ -463,9 +606,18 @@ import UIKit
         // folds it into its own additional inset). Reading only the
         // propagated side reconciles the TabBar/Nav dispatch paths.
         let previousContentBottomY = layout.size.height - layout.safeInsets.bottom
-        let addedChromeBottom: CGFloat = floatingToolbar != nil
-            ? max(0, previousContentBottomY - toolbarTopY)
-            : 0
+        let addedInputBarBottom: CGFloat = inputBarAccessoryView != nil ? inputBarHeight : 0.0
+        let addedToolbarBottom: CGFloat
+        if floatingToolbar != nil {
+            if inputBarAccessoryView != nil {
+                addedToolbarBottom = toolbarHeight + toolbarBottomGap
+            } else {
+                addedToolbarBottom = max(0, previousContentBottomY - toolbarTopY)
+            }
+        } else {
+            addedToolbarBottom = 0.0
+        }
+        let addedChromeBottom: CGFloat = addedInputBarBottom + addedToolbarBottom
 
         let topInset = max(0.0, navLayout.navigationFrame.maxY - layout.safeInsets.top) + layout.additionalInsets.top
         let updatedInsets = UIEdgeInsets(
@@ -529,13 +681,17 @@ import UIKit
             view.addSubview(host)
         }
 
+        if let inputBarAccessoryView, inputBarAccessoryView.superview == nil {
+            view.addSubview(inputBarAccessoryView)
+        }
+
         updateScrollToTopView()
     }
 
     override open func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // Re-pick up `navigationItem` contents now that viewDidLoad has run.
-        // NavigationController wires `bar.item = navigationItem` at setViewControllers
+        // Re-pick up `navigationBarItem` contents now that viewDidLoad has run.
+        // NavigationController wires `bar.item = navigationBarItem` at setViewControllers
         // time, which can happen BEFORE the view is loaded — on that path the
         // subclass hasn't yet had a chance to assign title, titleView, or bar
         // button items in viewDidLoad. Re-assigning the same UINavigationItem
@@ -543,14 +699,23 @@ import UIKit
         // state. Idempotent for unchanged screens (reference-equality checks
         // inside updateItemContent skip redundant work).
         if let bar = navigationBarView {
-            bar.item = navigationItem
+            bar.item = navigationBarItem
             bar.requestContainerLayout?(.immediate)
         }
+    }
+
+    private func navigationBarItemContentDidChange() {
+        if let bar = navigationBarView {
+            bar.item = navigationBarItem
+            bar.requestContainerLayout?(.immediate)
+        }
+        topBarAccessoryDidChange?()
     }
 
     override open func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isInFocus = true
+        syncInputBarAccessoryHeightWithWindow()
     }
 
     override open func viewWillDisappear(_ animated: Bool) {
@@ -560,6 +725,7 @@ import UIKit
     override open func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         isInFocus = false
+        (view.window as? AetherWindow)?.setManualKeyboardGestureAccessoryHeight(nil)
     }
 
     // MARK: - Navigation Bar
@@ -567,6 +733,15 @@ import UIKit
     public func setNavigationBarPresentationData(_ presentationData: NavigationBarPresentationData, animated: Bool) {
         explicitNavigationBarPresentationData = presentationData
         navigationBarView?.updatePresentationData(presentationData, transition: animated ? .animated(duration: 0.3, curve: .easeInOut) : .immediate)
+    }
+
+    open func updateNavigationBarScrollEdgeOffset(
+        for scrollView: UIScrollView,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let visibleOffset = scrollView.contentOffset.y + scrollView.contentInset.top
+        let alpha = min(1.0, max(0.0, visibleOffset / 16.0))
+        navigationBarView?.updateBackgroundAlpha(alpha, transition: transition)
     }
 
     open func updateNavigationCustomData(_ data: Any?, progress: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -602,6 +777,46 @@ import UIKit
     }
 
     // MARK: - Private
+
+    private func installInputBarAccessoryHeightProvider(on view: UIView) {
+        view.input_setInputAccessoryHeightProvider { [weak self] in
+            return self?.inputBarAccessoryReservedHeight ?? 0.0
+        }
+    }
+
+    private func resolvedInputBarAccessoryHeight(width: CGFloat) -> CGFloat {
+        if let reservedHeight = _inputBarAccessoryReservedHeight {
+            return reservedHeight
+        }
+        guard let inputBarAccessoryView else {
+            return 0.0
+        }
+        if inputBarAccessoryView.bounds.height > 0.0 {
+            return inputBarAccessoryView.bounds.height
+        }
+
+        let fittingWidth = width > 0.0 ? width : UIView.layoutFittingCompressedSize.width
+        let fittingSize = inputBarAccessoryView.systemLayoutSizeFitting(
+            CGSize(width: fittingWidth, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: width > 0.0 ? .required : .defaultLow,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        if fittingSize.height > 0.0 {
+            return fittingSize.height
+        }
+        return inputBarAccessoryDefaultHeight
+    }
+
+    private func syncInputBarAccessoryHeightWithWindow() {
+        guard isViewLoaded, isInFocus, let window = view.window as? AetherWindow else {
+            return
+        }
+        if inputBarAccessoryView != nil {
+            window.setManualKeyboardGestureAccessoryHeight(inputBarAccessoryReservedHeight)
+        } else {
+            window.setManualKeyboardGestureAccessoryHeight(nil)
+        }
+    }
 
     private func updateScrollToTopView() {
         if let scrollToTop = self.scrollToTop {

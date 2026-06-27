@@ -35,6 +35,8 @@ public final class EdgeEffectView: UIView {
         let edgeSize: CGFloat
         let blurRadiusAtEdge: CGFloat
         let blurRadiusAtFade: CGFloat
+        let solidBlur: Bool
+        let fadeCurveExponent: CGFloat
     }
     private var lastUpdateSignature: UpdateSignature?
 
@@ -77,6 +79,8 @@ public final class EdgeEffectView: UIView {
         edgeSize: CGFloat,
         blurRadiusAtEdge: CGFloat = 3.0,
         blurRadiusAtFade: CGFloat = 3.0,
+        solidBlur: Bool = false,
+        fadeCurveExponent: CGFloat = 1.0,
         transition: ContainedViewLayoutTransition
     ) {
         // Fast-path early return when layout is driven by a non-animated
@@ -91,7 +95,9 @@ public final class EdgeEffectView: UIView {
                 edge: edge,
                 edgeSize: edgeSize,
                 blurRadiusAtEdge: blurRadiusAtEdge,
-                blurRadiusAtFade: blurRadiusAtFade
+                blurRadiusAtFade: blurRadiusAtFade,
+                solidBlur: solidBlur,
+                fadeCurveExponent: fadeCurveExponent
             )
             if signature == lastUpdateSignature {
                 return
@@ -132,7 +138,8 @@ public final class EdgeEffectView: UIView {
             contentMaskView.image = EdgeEffectView.generateTaperedGradient(
                 totalHeight: bounds.height,
                 fadeHeight: min(edgeSize, bounds.height),
-                edge: edge
+                edge: edge,
+                curveExponent: fadeCurveExponent
             )
         } else {
             contentMaskView.image = nil
@@ -141,7 +148,7 @@ public final class EdgeEffectView: UIView {
         if blur {
             let blurFrame = CGRect(origin: .zero, size: bounds.size)
             let fadeHeight = min(edgeSize, blurFrame.size.height)
-            let useVariable = abs(blurRadiusAtEdge - blurRadiusAtFade) > 0.01
+            let useVariable = !solidBlur && abs(blurRadiusAtEdge - blurRadiusAtFade) > 0.01
 
             if useVariable {
                 // Variable radius: use the private `CAFilter.variableBlur`
@@ -216,20 +223,26 @@ public final class EdgeEffectView: UIView {
                 blurHost.inputRadius = blurRadiusAtEdge
                 blurHost.frame = blurFrame
 
-                let mask: UIImageView
-                if let current = blurMaskView {
-                    mask = current
+                if solidBlur {
+                    blurHost.mask = nil
+                    blurMaskView = nil
                 } else {
-                    mask = UIImageView()
-                    blurMaskView = mask
-                    blurHost.mask = mask
+                    let mask: UIImageView
+                    if let current = blurMaskView {
+                        mask = current
+                    } else {
+                        mask = UIImageView()
+                        blurMaskView = mask
+                        blurHost.mask = mask
+                    }
+                    mask.frame = CGRect(origin: .zero, size: blurFrame.size)
+                    mask.image = EdgeEffectView.generateTaperedGradient(
+                        totalHeight: blurFrame.size.height,
+                        fadeHeight: fadeHeight,
+                        edge: edge,
+                        curveExponent: fadeCurveExponent
+                    )
                 }
-                mask.frame = CGRect(origin: .zero, size: blurFrame.size)
-                mask.image = EdgeEffectView.generateTaperedGradient(
-                    totalHeight: blurFrame.size.height,
-                    fadeHeight: fadeHeight,
-                    edge: edge
-                )
 
                 transition.setFrame(view: blurHost, frame: blurFrame)
 
@@ -295,17 +308,24 @@ public final class EdgeEffectView: UIView {
         return (ri << 24) | (gi << 16) | (bi << 8) | ai
     }
 
-    static func generateTaperedGradient(totalHeight: CGFloat, fadeHeight: CGFloat, edge: Edge) -> UIImage? {
+    static func generateTaperedGradient(
+        totalHeight: CGFloat,
+        fadeHeight: CGFloat,
+        edge: Edge,
+        curveExponent: CGFloat = 1.0
+    ) -> UIImage? {
         let height = max(1.0, totalHeight)
         let size = CGSize(width: 1.0, height: height)
         let clampedFade = min(max(0.0, fadeHeight), height)
         let solidHeight = max(0.0, height - clampedFade)
+        let exponent = max(0.01, curveExponent)
 
         // Quantize to tenths of a point — sub-pixel changes on float h
         // would otherwise miss the cache on every layoutSubviews.
         let keyHeight = Int((height * 10.0).rounded())
         let keyFade = Int((clampedFade * 10.0).rounded())
-        let key = "\(edge == .top ? "t" : "b")-\(keyHeight)-\(keyFade)" as NSString
+        let keyExponent = Int((exponent * 100.0).rounded())
+        let key = "\(edge == .top ? "t" : "b")-\(keyHeight)-\(keyFade)-\(keyExponent)" as NSString
         if let cached = taperedGradientCache.object(forKey: key) {
             return cached
         }
@@ -335,7 +355,8 @@ public final class EdgeEffectView: UIView {
             fadeLocations.reserveCapacity(steps + 1)
             for i in 0...steps {
                 let t = CGFloat(i) / CGFloat(steps)
-                let alpha = minAlpha + (1.0 - minAlpha) * 0.5 * (1.0 + cos(.pi * t))
+                let easedT = pow(t, exponent)
+                let alpha = minAlpha + (1.0 - minAlpha) * 0.5 * (1.0 + cos(.pi * easedT))
                 fadeColors.append(UIColor.white.withAlphaComponent(alpha).cgColor)
                 fadeLocations.append(t)
             }

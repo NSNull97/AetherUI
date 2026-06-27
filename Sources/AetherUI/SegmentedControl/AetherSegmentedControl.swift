@@ -375,6 +375,7 @@ public final class AetherSegmentedControl: UIView {
 
     @objc private func itemButtonPressed(_ button: SegmentedItemButton) {
         guard let index = itemButtons.firstIndex(of: button) else { return }
+        guard index != _selectedIndex else { return }
         selectedIndexShouldChange(index) { [weak self] commit in
             guard let self, commit else { return }
             self._selectedIndex = index
@@ -394,7 +395,7 @@ public final class AetherSegmentedControl: UIView {
         case .changed:
             dragState?.currentX = location.x
             updateLayoutInternal(transition: .animated(duration: 0.15, curve: .easeInOut))
-        case .ended, .cancelled, .failed:
+        case .ended:
             // Snap to the nearest item slot.
             let endingState = dragState
             dragState = nil
@@ -410,15 +411,20 @@ public final class AetherSegmentedControl: UIView {
                         if commit {
                             self._selectedIndex = snappedIndex
                             self.selectedIndexChanged(snappedIndex)
+                            self.updateLayoutInternal(transition: .animated(duration: 0.4, curve: .spring))
+                        } else {
+                            self.updateLayoutInternal(transition: .immediate)
                         }
-                        self.updateLayoutInternal(transition: .animated(duration: 0.4, curve: .spring))
                     }
                 } else {
                     updateLayoutInternal(transition: .animated(duration: 0.4, curve: .spring))
                 }
             } else {
-                updateLayoutInternal(transition: .animated(duration: 0.4, curve: .spring))
+                updateLayoutInternal(transition: .immediate)
             }
+        case .cancelled, .failed:
+            dragState = nil
+            updateLayoutInternal(transition: .immediate)
         default:
             break
         }

@@ -18,13 +18,24 @@ public final class NavigationControllerTheme {
         self.emptyAreaColor = emptyAreaColor
     }
 
-    public static func liquidGlass(overallDarkAppearance: Bool = false, emptyAreaColor: UIColor = .systemBackground) -> NavigationControllerTheme {
+    public static func liquidGlass(
+        overallDarkAppearance: Bool = false,
+        emptyAreaColor: UIColor = .systemBackground,
+        edgeEffectAlpha: CGFloat = 0.75,
+        edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
+        edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectStyle: SystemGlassEffectStyle = .regular
+    ) -> NavigationControllerTheme {
         return NavigationControllerTheme(
             statusBar: overallDarkAppearance ? .white : .black,
             navigationBar: .liquidGlass(
                 overallDarkAppearance: overallDarkAppearance,
                 buttonColor: overallDarkAppearance ? .white : .label,
-                primaryTextColor: overallDarkAppearance ? .white : .label
+                primaryTextColor: overallDarkAppearance ? .white : .label,
+                edgeEffectAlpha: edgeEffectAlpha,
+                edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge,
+                edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade,
+                edgeEffectStyle: edgeEffectStyle
             ),
             emptyAreaColor: emptyAreaColor
         )
@@ -817,7 +828,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         guard let index = stack.firstIndex(where: { $0 === controller }), index > 0 else {
             return nil
         }
-        return .item(stack[index - 1].navigationItem)
+        return .item(stack[index - 1].navigationBarItem)
     }
 
     @discardableResult
@@ -837,7 +848,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             bar.updatePresentationData(presentationData, transition: transition)
         }
 
-        bar.item = controller.navigationItem
+        bar.item = controller.navigationBarItem
         bar.previousItem = previousAction(for: controller, in: stack)
         bar.backPressed = { [weak self] in
             self?.popViewController(animated: true)
