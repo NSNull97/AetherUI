@@ -10,6 +10,7 @@ final class ListDemoController: AetherViewController {
     private var controls: ListDemoTopAccessoryView!
 
     private var nextChatId: Int = 0
+    private var debugOverlayEnabled = false
 
     private let deleteAnimations: [AetherListItemDeleteAnimation] = [
         .fade,
@@ -63,6 +64,7 @@ final class ListDemoController: AetherViewController {
         controls.onUpdate = { [weak self] in self?.updateRandom() }
         controls.onMove = { [weak self] in self?.moveRandom() }
         controls.onDelete = { [weak self] in self?.deleteRandom() }
+        controls.onDebug = { [weak self] in self?.toggleDebugOverlay() }
         topBarAccessory = controls
 
         seedInitialItems()
@@ -85,24 +87,15 @@ final class ListDemoController: AetherViewController {
     // MARK: - Seed
 
     private func seedInitialItems() {
-        // Three sticky date sections; chat-row counts vary so the
-        // user can scroll long enough to see the headers actually
-        // pin and push.
+        // Stress dataset: 10k mixed-height rows with sticky date
+        // headers. AetherListView should keep only visible + preload
+        // views alive, not 10k UIViews.
         var items: [AetherListItem] = []
-
-        items.append(DateSectionHeaderItem(title: "Сегодня"))
-        for _ in 0..<5 {
-            items.append(makeRandomChat(today: true))
-        }
-
-        items.append(DateSectionHeaderItem(title: "Вчера"))
-        for _ in 0..<6 {
-            items.append(makeRandomChat(today: false))
-        }
-
-        items.append(DateSectionHeaderItem(title: "На прошлой неделе"))
-        for _ in 0..<8 {
-            items.append(makeRandomChat(today: false))
+        for index in 0..<10_000 {
+            if index % 500 == 0 {
+                items.append(DateSectionHeaderItem(title: "Section \(index / 500 + 1)"))
+            }
+            items.append(makeRandomChat(today: index < 200))
         }
 
         let inserts = items.enumerated().map { i, item in
@@ -148,7 +141,14 @@ final class ListDemoController: AetherViewController {
             ? String(format: "%02d:%02d", Int.random(in: 8...23), Int.random(in: 0...59))
             : ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].randomElement() ?? ""
         let unread = Int.random(in: 0...50) < 12 ? Int.random(in: 1...9) : 0
-        return ChatRowItem(id: id, name: name, preview: preview, time: time, unread: unread, color: color)
+        let height: CGFloat = [64, 72, 88, 104][id % 4]
+        let amplifiedPreview: String
+        if height > 80 {
+            amplifiedPreview = preview + " · " + (Self.previews.randomElement() ?? preview)
+        } else {
+            amplifiedPreview = preview
+        }
+        return ChatRowItem(id: id, name: name, preview: amplifiedPreview, time: time, unread: unread, color: color, height: height)
     }
 
     private var loadedCount: Int { listView.itemCount }
@@ -195,6 +195,13 @@ final class ListDemoController: AetherViewController {
         )
     }
 
+    private func toggleDebugOverlay() {
+        debugOverlayEnabled.toggle()
+        listView.debugInfo = debugOverlayEnabled
+        listView.showsDebugOverlay = debugOverlayEnabled
+        listView.usesCustomScrollIndicator = debugOverlayEnabled
+    }
+
     /// Inject fresh chats below the "Сегодня" header — fired by the
     /// pull-to-refresh handler. Falls back to inserting at the top
     /// if no header is found (shouldn't happen with the seed).
@@ -231,6 +238,7 @@ private final class ListDemoTopAccessoryView: NavigationBarContentView {
     var onUpdate: (() -> Void)?
     var onMove: (() -> Void)?
     var onDelete: (() -> Void)?
+    var onDebug: (() -> Void)?
 
     private(set) var deleteAnimationIndex: Int = 0
 
@@ -259,6 +267,7 @@ private final class ListDemoTopAccessoryView: NavigationBarContentView {
         actionsStack.addArrangedSubview(makeButton("Update") { [weak self] in self?.onUpdate?() })
         actionsStack.addArrangedSubview(makeButton("Move") { [weak self] in self?.onMove?() })
         actionsStack.addArrangedSubview(makeButton("Delete") { [weak self] in self?.onDelete?() })
+        actionsStack.addArrangedSubview(makeButton("Debug") { [weak self] in self?.onDebug?() })
 
         pickerLabel.text = "Delete:"
         pickerLabel.font = .systemFont(ofSize: 13, weight: .medium)
@@ -382,17 +391,21 @@ private final class ChatRowItem: AetherListItem {
     let time: String
     let unread: Int
     let color: UIColor
+    let height: CGFloat
 
-    init(id: Int, name: String, preview: String, time: String, unread: Int, color: UIColor) {
+    init(id: Int, name: String, preview: String, time: String, unread: Int, color: UIColor, height: CGFloat = 72) {
         self.id = id
         self.name = name
         self.preview = preview
         self.time = time
         self.unread = unread
         self.color = color
+        self.height = height
     }
 
-    var approximateHeight: CGFloat { 72 }
+    var stableId: AnyHashable { id }
+    var approximateHeight: CGFloat { height }
+    var estimatedHeight: CGFloat { height }
     var selectable: Bool { true }
 
     func createNode(
@@ -403,7 +416,7 @@ private final class ChatRowItem: AetherListItem {
         let node = ChatRowNode()
         node.configure(item: self)
         return (node, AetherListItemNodeLayout(
-            contentSize: CGSize(width: params.width, height: 72),
+            contentSize: CGSize(width: params.width, height: height),
             insets: .zero
         ))
     }
@@ -419,7 +432,7 @@ private final class ChatRowItem: AetherListItem {
             row.configure(item: self, animation: animation)
         }
         return AetherListItemNodeLayout(
-            contentSize: CGSize(width: params.width, height: 72),
+            contentSize: CGSize(width: params.width, height: height),
             insets: .zero
         )
     }
@@ -468,6 +481,7 @@ private final class ChatRowNode: AetherListItemNode {
 
         previewLabel.font = .systemFont(ofSize: 14)
         previewLabel.textColor = .secondaryLabel
+        previewLabel.numberOfLines = 2
         addSubview(previewLabel)
 
         timeLabel.font = .systemFont(ofSize: 13)
@@ -531,9 +545,9 @@ private final class ChatRowNode: AetherListItemNode {
             let badgeWidth = max(badgeSize, (badgeLabel.text?.size(withAttributes: [.font: badgeLabel.font!]).width ?? 0) + 12)
             badge.frame = CGRect(x: textRight - badgeWidth, y: bounds.height - 36, width: badgeWidth, height: badgeSize)
             badgeLabel.frame = badge.bounds
-            previewLabel.frame = CGRect(x: textX, y: badge.frame.minY - 1, width: badge.frame.minX - textX - 8, height: 20)
+            previewLabel.frame = CGRect(x: textX, y: nameLabel.frame.maxY + 4, width: badge.frame.minX - textX - 8, height: max(20, bounds.height - nameLabel.frame.maxY - 16))
         } else {
-            previewLabel.frame = CGRect(x: textX, y: bounds.height - 35, width: textRight - textX, height: 20)
+            previewLabel.frame = CGRect(x: textX, y: nameLabel.frame.maxY + 4, width: textRight - textX, height: max(20, bounds.height - nameLabel.frame.maxY - 16))
         }
 
         let pixel: CGFloat = 1.0 / UIScreen.main.scale

@@ -7,6 +7,16 @@ import UIKit
 /// Each item knows how to create and update its view (node). The list view
 /// manages the node lifecycle, reuse, and layout.
 public protocol AetherListItem: AnyObject {
+    /// Stable identity used for layout cache, selection continuity, and
+    /// animation anchoring. The default is object identity, so existing class
+    /// based item implementations keep their old behaviour. Data-source backed
+    /// lists should override this with their model id.
+    var stableId: AnyHashable { get }
+
+    /// Reuse bucket identifier. Items with the same identifier may receive a
+    /// previously displayed node via `updateNode`.
+    var reuseIdentifier: String { get }
+
     /// Create a new node for this item.
     ///
     /// - Parameters:
@@ -30,6 +40,11 @@ public protocol AetherListItem: AnyObject {
     /// Approximate height for placeholder layout before the node is created.
     var approximateHeight: CGFloat { get }
 
+    /// Preferred estimate for the current layout pass. Defaults to
+    /// `approximateHeight`; split out so callers can keep approximate legacy
+    /// values while supplying a better variable-height estimate.
+    var estimatedHeight: CGFloat { get }
+
     /// Whether the item can be selected (tapped).
     var selectable: Bool { get }
 
@@ -46,11 +61,10 @@ public protocol AetherListItem: AnyObject {
     /// Called when the item is selected.
     func selected(listView: AetherListView)
 
-    /// `true` if this item should "pin" to the top of the viewport
-    /// while items below it scroll past — classic sticky-header
-    /// behaviour. The list view keeps a node alive for the currently-
-    /// pinned header even if the index is outside the preload range,
-    /// and pushes it down when the next floating header reaches it.
+    /// `true` if this item should use classic top sticky-header behaviour.
+    /// The list view keeps a node alive for currently pinned headers even if
+    /// their indices are outside the preload range, and pushes top headers
+    /// away when the next top header reaches them.
     var isFloatingHeader: Bool { get }
 
     /// Whether the item participates in drag-to-reorder. Headers /
@@ -63,11 +77,39 @@ public protocol AetherListItem: AnyObject {
     /// this flag is kept separate for call sites that only need pin-aware
     /// scroll alignment.
     var pinToEdgeWithInset: Bool { get }
+
+    /// Optional logical header id. Defaults to `stableId` for floating headers.
+    var headerId: AnyHashable? { get }
+
+    /// Visual header affinity. Defaults to `.top` for `isFloatingHeader`
+    /// items; explicit `.bottom` headers pin to the viewport bottom until
+    /// their natural slot enters the visible area.
+    var headerAffinity: AetherListHeaderAffinity { get }
+
+    /// Called after a node enters the loaded range.
+    func willDisplay(node: AetherListItemNode, at index: Int)
+
+    /// Called before a node leaves the loaded range or is recycled.
+    func didEndDisplay(node: AetherListItemNode, at index: Int)
+
+    /// Optional off-main layout preparation. Implementations may do expensive
+    /// text/image measurement elsewhere, then return an apply closure that the
+    /// list invokes on main after the view exists.
+    @discardableResult
+    func asyncLayout(
+        params: AetherListItemLayoutParams,
+        previousItem: AetherListItem?,
+        nextItem: AetherListItem?,
+        completion: @escaping (AetherListPreparedItemLayout) -> Void
+    ) -> AetherListLayoutTask?
 }
 
 // Default implementations
 public extension AetherListItem {
+    var stableId: AnyHashable { AnyHashable(ObjectIdentifier(self)) }
+    var reuseIdentifier: String { String(reflecting: type(of: self)) }
     var approximateHeight: CGFloat { 44.0 }
+    var estimatedHeight: CGFloat { approximateHeight }
     var selectable: Bool { false }
     var accessoryItem: Any? { nil }
     var headerAccessoryItem: Any? { nil }
@@ -76,6 +118,19 @@ public extension AetherListItem {
     var isFloatingHeader: Bool { false }
     var canReorder: Bool { true }
     var pinToEdgeWithInset: Bool { false }
+    var headerId: AnyHashable? { isFloatingHeader ? stableId : nil }
+    var headerAffinity: AetherListHeaderAffinity { isFloatingHeader ? .top : .none }
+    func willDisplay(node: AetherListItemNode, at index: Int) {}
+    func didEndDisplay(node: AetherListItemNode, at index: Int) {}
+    @discardableResult
+    func asyncLayout(
+        params: AetherListItemLayoutParams,
+        previousItem: AetherListItem?,
+        nextItem: AetherListItem?,
+        completion: @escaping (AetherListPreparedItemLayout) -> Void
+    ) -> AetherListLayoutTask? {
+        return nil
+    }
 }
 
 // MARK: - Layout Parameters
@@ -407,6 +462,93 @@ public struct AetherListDisplayedItemRange: Equatable {
     }
 }
 
+// MARK: - Boundary Loading
+
+public enum AetherListBoundaryEdge: Hashable {
+    case top
+    case bottom
+}
+
+public enum AetherListBoundaryTriggerReason: Hashable {
+    case distance
+    case itemThreshold
+}
+
+/// Declarative edge trigger configuration for paged/infinite lists.
+///
+/// `topDistance` / `bottomDistance` are measured from the corresponding
+/// visible edge in points. Item thresholds fire when the loaded or visible
+/// range is within N rows of either edge.
+public struct AetherListBoundaryTriggerConfiguration: Equatable {
+    public let topDistance: CGFloat?
+    public let bottomDistance: CGFloat?
+    public let topItemThreshold: Int?
+    public let bottomItemThreshold: Int?
+    public let triggersDuringProgrammaticScroll: Bool
+
+    public init(
+        topDistance: CGFloat? = nil,
+        bottomDistance: CGFloat? = nil,
+        topItemThreshold: Int? = nil,
+        bottomItemThreshold: Int? = nil,
+        triggersDuringProgrammaticScroll: Bool = true
+    ) {
+        self.topDistance = topDistance.map { $0.isFinite ? max(0, $0) : 0 }
+        self.bottomDistance = bottomDistance.map { $0.isFinite ? max(0, $0) : 0 }
+        self.topItemThreshold = topItemThreshold.map { max(0, $0) }
+        self.bottomItemThreshold = bottomItemThreshold.map { max(0, $0) }
+        self.triggersDuringProgrammaticScroll = triggersDuringProgrammaticScroll
+    }
+}
+
+public struct AetherListBoundaryTriggerContext {
+    public let edge: AetherListBoundaryEdge
+    public let reasons: [AetherListBoundaryTriggerReason]
+    public let displayedRange: AetherListDisplayedItemRange
+    public let visibleContentOffset: CGFloat
+    public let visibleBottomContentOffset: CGFloat
+    public let contentSize: CGSize
+    public let visibleSize: CGSize
+    public let isUserInitiated: Bool
+
+    public init(
+        edge: AetherListBoundaryEdge,
+        reasons: [AetherListBoundaryTriggerReason],
+        displayedRange: AetherListDisplayedItemRange,
+        visibleContentOffset: CGFloat,
+        visibleBottomContentOffset: CGFloat,
+        contentSize: CGSize,
+        visibleSize: CGSize,
+        isUserInitiated: Bool
+    ) {
+        self.edge = edge
+        self.reasons = reasons
+        self.displayedRange = displayedRange
+        self.visibleContentOffset = visibleContentOffset
+        self.visibleBottomContentOffset = visibleBottomContentOffset
+        self.contentSize = contentSize
+        self.visibleSize = visibleSize
+        self.isUserInitiated = isUserInitiated
+    }
+}
+
+// MARK: - Virtual Content Extents
+
+/// Estimated offscreen content that exists outside the currently materialized
+/// item array. Use this for paged/infinite histories where older/newer rows
+/// are known to occupy space but have not been loaded yet.
+public struct AetherListVirtualContentInsets: Equatable {
+    public static let zero = AetherListVirtualContentInsets()
+
+    public let top: CGFloat
+    public let bottom: CGFloat
+
+    public init(top: CGFloat = 0, bottom: CGFloat = 0) {
+        self.top = top.isFinite ? max(0, top) : 0
+        self.bottom = bottom.isFinite ? max(0, bottom) : 0
+    }
+}
+
 // MARK: - Size and Insets Update
 
 /// Bundle of size/inset changes to apply in a transaction.
@@ -416,6 +558,7 @@ public struct AetherListUpdateSizeAndInsets {
     public let headerInsets: UIEdgeInsets?
     public let scrollIndicatorInsets: UIEdgeInsets?
     public let itemOffsetInsets: UIEdgeInsets?
+    public let virtualContentInsets: AetherListVirtualContentInsets?
     public let duration: Double
     public let curve: ContainedViewLayoutTransitionCurve
     public let ensureTopInsetForOverlayHighlightedItems: CGFloat?
@@ -427,6 +570,7 @@ public struct AetherListUpdateSizeAndInsets {
         headerInsets: UIEdgeInsets? = nil,
         scrollIndicatorInsets: UIEdgeInsets? = nil,
         itemOffsetInsets: UIEdgeInsets? = nil,
+        virtualContentInsets: AetherListVirtualContentInsets? = nil,
         duration: Double = 0,
         curve: ContainedViewLayoutTransitionCurve = .easeInOut,
         ensureTopInsetForOverlayHighlightedItems: CGFloat? = nil,
@@ -437,6 +581,7 @@ public struct AetherListUpdateSizeAndInsets {
         self.headerInsets = headerInsets
         self.scrollIndicatorInsets = scrollIndicatorInsets
         self.itemOffsetInsets = itemOffsetInsets
+        self.virtualContentInsets = virtualContentInsets
         self.duration = duration
         self.curve = curve
         self.ensureTopInsetForOverlayHighlightedItems = ensureTopInsetForOverlayHighlightedItems

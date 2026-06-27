@@ -221,7 +221,9 @@ listView.keyboardDismissMode = .interactive
 При `automaticallyAdjustsContentInsetForKeyboard = true` listView
 наблюдает `keyboardWillChangeFrame`/`keyboardWillHide` и накладывает
 keyboard bottom inset поверх user-supplied `insets`. Анимируется
-keyboard curve/duration.
+keyboard curve/duration. Если список находится у нижнего края,
+`updateInsets` / keyboard transitions сохраняют bottom anchor и не
+сдвигают видимые последние rows над input bar.
 
 ## Scroll API
 
@@ -418,9 +420,37 @@ dustView.becameEmpty = {
 |---|---|---|
 | `displayedItemRangeChanged` | `(AetherListDisplayedItemRange) -> Void` | Изменение visible/loaded range. |
 | `visibleContentOffsetChanged` | `(CGFloat) -> Void` | Изменение content offset. |
+| `boundaryReached` | `(AetherListBoundaryTriggerContext) -> Void` | Top/bottom edge trigger для paged/infinite loading. |
 | `beganInteractiveDragging` | `() -> Void` | Начало interactive drag. |
 | `didEndScrolling` | `() -> Void` | Окончание scroll (включая deceleration). |
 | `itemTapped` | `(Int) -> Void` | Tap по item (только при `selectionMode == .none`). |
+
+## Boundary loading
+
+```swift
+listView.boundaryTriggerConfiguration = AetherListBoundaryTriggerConfiguration(
+    topDistance: 640,
+    bottomDistance: 480,
+    topItemThreshold: 24,
+    bottomItemThreshold: 12,
+    triggersDuringProgrammaticScroll: false
+)
+
+listView.boundaryReached = { context in
+    switch context.edge {
+    case .top:
+        loadOlder()
+    case .bottom:
+        loadNewer()
+    }
+}
+```
+
+`boundaryReached` дедуплицируется по текущему item/range snapshot и
+снова срабатывает после ухода от edge или изменения loaded/visible
+range. Для paged histories этот API обычно используется вместе с
+`virtualContentInsets`, чтобы показать оценочный размер еще не
+загруженной истории без spacer rows.
 
 ## Item delete animations
 
@@ -456,6 +486,7 @@ AetherListItemDeleteAnimation.particles   // .particleDissolve(tileSize: 1.0)
 - Reorder: `allowsReorder`, `canMoveItem`, `didMoveItem`.
 - Refresh: `refreshHandler`, `beginRefreshing()`, `isRefreshing`.
 - Callbacks: `displayedItemRangeChanged`, `visibleContentOffsetChanged`,
+  `boundaryTriggerConfiguration`, `boundaryReached`,
   `beganInteractiveDragging`, `didEndScrolling`, `itemTapped`.
 - Dust effect: `particleDissolveOverlayHost`.
 

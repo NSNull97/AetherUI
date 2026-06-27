@@ -1,5 +1,38 @@
 import UIKit
 
+/// List-owned gestures that may be routed through an item node.
+public enum AetherListItemGesture: Equatable {
+    case tap
+    case reorder
+}
+
+/// Current sticky-header presentation state for a list item node.
+public struct AetherListStickyHeaderState: Equatable {
+    public let affinity: AetherListHeaderAffinity
+    public let isPinned: Bool
+    public let isFloating: Bool
+    public let isFlashing: Bool
+
+    public init(
+        affinity: AetherListHeaderAffinity,
+        isPinned: Bool,
+        isFloating: Bool,
+        isFlashing: Bool
+    ) {
+        self.affinity = affinity
+        self.isPinned = isPinned
+        self.isFloating = isFloating
+        self.isFlashing = isFlashing
+    }
+
+    public static let none = AetherListStickyHeaderState(
+        affinity: .none,
+        isPinned: false,
+        isFloating: false,
+        isFlashing: false
+    )
+}
+
 /// Base view class for items displayed in a `AetherListView`.
 ///
 /// Subclass this to create custom list item views. Override lifecycle hooks
@@ -8,6 +41,13 @@ import UIKit
 /// The node manages its own layout through `contentSize` and `insets`,
 /// which the list view uses to compute the total frame.
 open class AetherListItemNode: UIView {
+    private struct AccessorySlot {
+        var stableId: AnyHashable
+        var item: AetherListAccessoryItem
+        var view: UIView
+    }
+
+    private var accessorySlots: [AetherListAccessoryPlacement: AccessorySlot] = [:]
 
     // MARK: - Layout Properties
 
@@ -36,6 +76,9 @@ open class AetherListItemNode: UIView {
 
     /// Vertical offset applied during insertion/deletion transitions.
     public var transitionOffset: CGFloat = 0
+
+    /// Sticky-header state assigned by `AetherListView`.
+    public private(set) var stickyHeaderState: AetherListStickyHeaderState = .none
 
     /// Extra insets used only for scroll positioning. Telegram rows use this
     /// to align the meaningful visual content instead of the whole backing
@@ -100,12 +143,102 @@ open class AetherListItemNode: UIView {
 
     // MARK: - Layout
 
+    open override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutAccessoryViews()
+    }
+
     /// Apply a layout result. Called by the list view after item creation or update.
     public func applyLayout(_ layout: AetherListItemNodeLayout) {
         self.layout = layout
         self.contentSize = layout.contentSize
         self.insets = layout.insets
         self.apparentHeight = layout.totalHeight
+        setNeedsLayout()
+    }
+
+    public final func setAccessoryItem(_ item: AetherListAccessoryItem?, placement: AetherListAccessoryPlacement) {
+        guard let item else {
+            if let slot = accessorySlots.removeValue(forKey: placement) {
+                slot.view.removeFromSuperview()
+                setNeedsLayout()
+            }
+            return
+        }
+
+        if var slot = accessorySlots[placement], slot.stableId == item.stableId {
+            slot.item = item
+            item.updateView(slot.view)
+            accessorySlots[placement] = slot
+            setNeedsLayout()
+            return
+        }
+
+        if let oldSlot = accessorySlots.removeValue(forKey: placement) {
+            oldSlot.view.removeFromSuperview()
+        }
+
+        let view = item.makeView()
+        item.updateView(view)
+        addSubview(view)
+        accessorySlots[placement] = AccessorySlot(stableId: item.stableId, item: item, view: view)
+        setNeedsLayout()
+    }
+
+    open func accessoryFrame(
+        for placement: AetherListAccessoryPlacement,
+        accessorySize: CGSize,
+        bounds: CGRect
+    ) -> CGRect {
+        let size = CGSize(
+            width: min(max(0.0, accessorySize.width), bounds.width),
+            height: min(max(0.0, accessorySize.height), bounds.height)
+        )
+        switch placement {
+        case .accessory:
+            return CGRect(
+                x: bounds.maxX - size.width - 16.0,
+                y: bounds.midY - size.height / 2.0,
+                width: size.width,
+                height: size.height
+            )
+        case .headerAccessory:
+            return CGRect(
+                x: bounds.maxX - size.width - 16.0,
+                y: bounds.minY,
+                width: size.width,
+                height: size.height
+            )
+        }
+    }
+
+    private func layoutAccessoryViews() {
+        guard !accessorySlots.isEmpty else { return }
+        for (placement, slot) in accessorySlots {
+            let accessorySize = slot.item.size(constrainedTo: bounds.size)
+            slot.view.frame = accessoryFrame(
+                for: placement,
+                accessorySize: accessorySize,
+                bounds: bounds
+            )
+        }
+    }
+
+    /// Called before the node enters the reuse pool. Subclasses should cancel
+    /// image/text work, clear transient gesture state, and reset content that
+    /// is not overwritten by `updateNode`.
+    open func prepareForReuse() {
+        for slot in accessorySlots.values {
+            slot.view.removeFromSuperview()
+        }
+        accessorySlots.removeAll()
+        updateStickyHeaderState(.none, animated: false)
+    }
+
+    internal func updateStickyHeaderState(_ state: AetherListStickyHeaderState, animated: Bool) {
+        guard stickyHeaderState != state else { return }
+        stickyHeaderState = state
+        stickyHeaderStateDidChange(state, animated: animated)
     }
 
     // MARK: - Lifecycle Hooks (Override in Subclasses)
@@ -118,6 +251,12 @@ open class AetherListItemNode: UIView {
     /// Called whenever `isSelected` flips. Override to render the
     /// highlight / checkmark / accessory. Default is a no-op.
     open func didChangeSelection(animated: Bool) {
+    }
+
+    /// Called when the node starts/stops acting as a sticky header. `isFlashing`
+    /// is true while the header is temporarily overlaid outside its natural slot
+    /// during pin/push transitions.
+    open func stickyHeaderStateDidChange(_ state: AetherListStickyHeaderState, animated: Bool) {
     }
 
     /// Subview that owns the visual the particle-dissolve delete
@@ -179,6 +318,20 @@ open class AetherListItemNode: UIView {
 
     // MARK: - Interaction Hooks
 
+    /// Insets applied to the node frame before list-level gesture hit testing.
+    /// Positive values shrink the active row area, negative values expand it.
+    open func listGestureHitTestInsets(for gesture: AetherListItemGesture) -> UIEdgeInsets {
+        return .zero
+    }
+
+    /// Return `false` to let nested controls or custom gestures own the touch.
+    /// The default blocks list-level tap/reorder when the touched descendant is
+    /// a `UIControl`, `UITextView`, nested `UIScrollView`, or has its own
+    /// gesture recognizer.
+    open func allowsListGesture(_ gesture: AetherListItemGesture, at point: CGPoint) -> Bool {
+        return !containsInteractiveDescendantForListGesture(at: point)
+    }
+
     /// Called when the node is highlighted (touch down).
     open func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
     }
@@ -193,5 +346,23 @@ open class AetherListItemNode: UIView {
 
     /// Called when the node's item is selected.
     open func selected() {
+    }
+
+    private func containsInteractiveDescendantForListGesture(at point: CGPoint) -> Bool {
+        guard bounds.contains(point), let hitView = hitTest(point, with: nil) else {
+            return false
+        }
+
+        var current: UIView? = hitView
+        while let view = current, view !== self {
+            if view is UIControl || view is UITextView || view is UIScrollView {
+                return true
+            }
+            if let recognizers = view.gestureRecognizers, !recognizers.isEmpty {
+                return true
+            }
+            current = view.superview
+        }
+        return false
     }
 }

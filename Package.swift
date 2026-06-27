@@ -35,5 +35,10 @@ let package = Package(
                 .process("ListView/DustEffect/Metal")
             ]
         ),
+        .testTarget(
+            name: "AetherUITests",
+            dependencies: ["AetherUI"],
+            path: "Tests/AetherUITests"
+        ),
     ]
 )
