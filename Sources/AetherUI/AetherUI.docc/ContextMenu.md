@@ -121,7 +121,7 @@ let menu = ContextMenuController(
 shadow утолщается. Всё привязано к одному `progress: 0…1`. Длительность
 ~0.475с, spring damping 0.68 (~8% overshoot).
 
-### `.preview(verticalSpacing:lift:)`
+### `.preview(verticalSpacing:lift:content:accessory:)`
 
 Static glass menu + lifted snapshot source:
 
@@ -129,14 +129,41 @@ Static glass menu + lifted snapshot source:
 ContextMenuController(
     source: .init(view: cardView),
     items: items,
-    presentationStyle: .preview(verticalSpacing: 12.0, lift: 1.04)
+    presentationStyle: .preview(verticalSpacing: 8.0, lift: 1.04)
 )
 ```
 
 | Параметр | По умолчанию | Назначение |
 |---|---|---|
-| `verticalSpacing` | `12.0` | Gap между preview-snapshot и menu. |
+| `verticalSpacing` | `8.0` | Gap между финальным lifted preview-snapshot и menu снизу. |
 | `lift` | `1.04` | Scale factor для snapshot (1.04 = +4%). |
+| `content` | `nil` | Custom preview-view вместо snapshot source. |
+| `accessory` | `nil` | Custom view над preview, например reaction strip. |
+
+Preview стартует из позиции source-view и сохраняет ее по X/Y, пока снизу
+хватает места. Меню всегда остается снизу от preview; если снизу не
+хватает места, preview анимированно поднимается вверх и так же
+возвращается при dismiss. Accessory всегда размещается сверху от preview.
+
+Accessory принимает любую `UIView`; размер можно задать явно через
+`preferredSize`, иначе контроллер возьмет Auto Layout fitting /
+`intrinsicContentSize` / `bounds.size`:
+
+```swift
+let reactions = ReactionStripView()
+
+ContextMenuController(
+    source: .init(view: messageBubble, cornerRadius: 16),
+    items: items,
+    presentationStyle: .preview(
+        accessory: .init(
+            view: reactions,
+            preferredSize: CGSize(width: 252, height: 48),
+            spacing: 8
+        )
+    )
+)
+```
 
 ### `.fluidMorph`
 
@@ -335,7 +362,7 @@ press'а; конфигурация не требуется.
 | Style | Назначение |
 |---|---|
 | `.morph` | Single-surface morph (default). |
-| `.preview(verticalSpacing:lift:)` | Static menu + lifted snapshot. |
+| `.preview(verticalSpacing:lift:content:accessory:)` | Static menu + lifted snapshot. |
 | `.fluidMorph` | UIViewPropertyAnimator-based fluid morph. |
 
 ### ``ContextMenuItem``

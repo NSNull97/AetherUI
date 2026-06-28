@@ -764,6 +764,67 @@ private final class PendingMenuAction {
     var run: (() -> Void)?
 }
 
+private final class MessageReactionAccessoryView: UIVisualEffectView {
+    var onSelect: ((String) -> Void)?
+
+    private let stack = UIStackView()
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: 252, height: 48)
+    }
+
+    init() {
+        super.init(effect: UIBlurEffect(style: .systemThinMaterial))
+        layer.cornerRadius = 24
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+
+        stack.axis = .horizontal
+        stack.alignment = .fill
+        stack.distribution = .fillEqually
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4)
+        ])
+
+        ["👍", "❤️", "😂", "🔥", "👏"].forEach { reaction in
+            let button = ReactionButton(reaction: reaction)
+            button.titleLabel?.font = .systemFont(ofSize: 24)
+            button.addTarget(self, action: #selector(handleReaction(_:)), for: .touchUpInside)
+            stack.addArrangedSubview(button)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func handleReaction(_ sender: ReactionButton) {
+        onSelect?(sender.reaction)
+    }
+}
+
+private final class ReactionButton: UIButton {
+    let reaction: String
+
+    init(reaction: String) {
+        self.reaction = reaction
+        super.init(frame: .zero)
+        setTitle(reaction, for: .normal)
+        adjustsImageWhenHighlighted = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 private extension ChatDetailController {
     /// Long-press on a bubble fires through the responder chain
     /// from `MessageNode` up to here. We open a `.preview()` menu
@@ -772,6 +833,7 @@ private extension ChatDetailController {
     /// the bubble before the dust burst starts.
     func presentMessageMenu(for item: MessageItem, anchor: UIView) {
         let pending = PendingMenuAction()
+        let reactionAccessory = MessageReactionAccessoryView()
 
         let copyItem = ContextMenuActionItem(
             title: "Копировать",
@@ -801,11 +863,23 @@ private extension ChatDetailController {
         let menu = ContextMenuController(
             source: ContextMenuController.Source(view: anchor, cornerRadius: 16),
             items: [.action(copyItem), .action(deleteItem)],
-            presentationStyle: .preview(),
+            presentationStyle: .preview(
+                accessory: ContextMenuController.PreviewAccessory(
+                    view: reactionAccessory,
+                    preferredSize: CGSize(width: 252, height: 48),
+                    spacing: 8
+                )
+            ),
             onDismiss: {
                 pending.run?()
             }
         )
+        reactionAccessory.onSelect = { [weak menu] reaction in
+            pending.run = {
+                AetherToastController(content: .text("Реакция \(reaction)")).present()
+            }
+            menu?.dismiss()
+        }
         menu.present()
     }
 
