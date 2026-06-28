@@ -94,6 +94,23 @@ public struct ContainerViewLayout: Equatable {
             && (self.inputHeight != other.inputHeight
                 || self.inputHeightIsInteractivellyChanging != other.inputHeightIsInteractivellyChanging)
     }
+
+    func differsOnlyInKeyboardInputOrBottomAdditionalInset(from other: ContainerViewLayout) -> Bool {
+        let baseFieldsMatch = self.size == other.size
+            && self.metrics == other.metrics
+            && self.safeInsets == other.safeInsets
+            && self.statusBarHeight == other.statusBarHeight
+            && self.inVoiceOver == other.inVoiceOver
+        let nonBottomAdditionalInsetsMatch = self.additionalInsets.top == other.additionalInsets.top
+            && self.additionalInsets.left == other.additionalInsets.left
+            && self.additionalInsets.right == other.additionalInsets.right
+        let inputChanged = self.inputHeight != other.inputHeight
+            || self.inputHeightIsInteractivellyChanging != other.inputHeightIsInteractivellyChanging
+        let bottomAdditionalInsetChanged = self.additionalInsets.bottom != other.additionalInsets.bottom
+        return baseFieldsMatch
+            && nonBottomAdditionalInsetsMatch
+            && (inputChanged || bottomAdditionalInsetChanged)
+    }
 }
 
 public struct ContainerViewLayoutInsetOptions: OptionSet {

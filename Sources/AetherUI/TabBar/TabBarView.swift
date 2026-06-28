@@ -257,11 +257,10 @@ public final class TabBarView: UIView {
     /// cross-fading two distinct shapes.
     public func setMinimized(_ minimized: Bool, transition: ContainedViewLayoutTransition) {
         guard isMinimized != minimized else { return }
-        // Search mode owns the entire chrome — refusing minimize while
-        // search is active keeps the two morphs from racing through the
-        // same views. The controller is expected to deactivate search
-        // before requesting minimize (or vice versa).
-        if minimized && isSearchActive {
+        // Search is anchored to the minimized active-tab circle. Allow
+        // collapsing into that state, but do not expand the tab bar
+        // while the search capsule is still active.
+        if !minimized && isSearchActive {
             return
         }
         isMinimized = minimized
@@ -333,9 +332,24 @@ public final class TabBarView: UIView {
         icon.tintColor = theme.tabBarSelectedIconColor
     }
 
-    @objc private func collapsedPillTapped(_ recognizer: UITapGestureRecognizer) {
-        guard isMinimized, recognizer.state == .ended else { return }
+    private func handleMinimizedActiveTabTap() {
+        if isSearchActive {
+            onSearchDismissed?()
+            return
+        }
+        guard isMinimized else { return }
         onExpandRequested?()
+    }
+
+    #if DEBUG
+    func simulateMinimizedActiveTabTapForTests() {
+        handleMinimizedActiveTabTap()
+    }
+    #endif
+
+    @objc private func collapsedPillTapped(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        handleMinimizedActiveTabTap()
     }
 
     /// Pure-function pill frame for the given bounds size and minimize
@@ -368,46 +382,32 @@ public final class TabBarView: UIView {
 
     /// Mirrors the on-screen keyboard. Set by the owning controller from
     /// `containerLayoutUpdated` (driven by `AetherWindow`'s keyboard
-    /// notifications). Search-mode chrome reacts to this — the active-tab
-    /// circle hides while the keyboard is up and the controller hides
-    /// the bottom-bar accessory in the same window.
+    /// notifications). Search-mode chrome reflows through the same
+    /// keyboard transition after the user explicitly focuses the field.
     public private(set) var isKeyboardVisible: Bool = false
 
-    /// Vertical distance the search row sits BELOW the tab pill's top
-    /// edge while search is active. The owning controller reads this to
-    /// align the bottom-bar accessory with the search row instead of
-    /// the (currently invisible) tab pill — keeping the 8pt gap between
-    /// accessory and the visible chrome consistent with the no-search
-    /// state. Returns 0 when search is inactive.
+    /// Vertical distance the search row sits below the current chrome
+    /// top while search is active. Mostly used by compatibility layout
+    /// paths; normal search activation keeps the bar minimized and
+    /// hides bottom accessories from the occupied row.
     public var searchRowTopOffset: CGFloat {
         guard isSearchActive else { return 0 }
-        return max(0, (theme.pillHeight - Self.searchModeHeight) / 2)
+        let referenceHeight = isMinimized ? Self.minimizedButtonSize : theme.pillHeight
+        return max(0, (referenceHeight - Self.searchModeHeight) / 2)
     }
 
-    /// Sync the cached keyboard state and re-evaluate visibility of the
-    /// pieces of the search chrome that depend on it (currently the
-    /// `searchTabCircle` and the capsule's leading edge). Idempotent —
-    /// called every layout pass.
+    /// Sync the cached keyboard state and reflow search chrome through
+    /// the keyboard transition. Idempotent — called every layout pass.
     public func setKeyboardVisible(_ visible: Bool, transition: ContainedViewLayoutTransition) {
         guard isKeyboardVisible != visible else { return }
         isKeyboardVisible = visible
-        updateSearchTabCircleVisibility(transition: transition)
-        // Re-flow the capsule so it claims (or releases) the circle's
-        // leading slot. Use `animateView` so the frame setters inside
+        // Use `animateView` so the frame setters inside
         // `positionSearchViewsExpanded` ride the keyboard's transition
-        // instead of snapping.
+        // instead of snapping if the field is focused later.
         if isSearchActive {
             transition.animateView { [weak self] in
                 self?.positionSearchViewsExpanded()
             }
-        }
-    }
-
-    private func updateSearchTabCircleVisibility(transition: ContainedViewLayoutTransition) {
-        guard let circle = searchTabCircle else { return }
-        let target: CGFloat = (isSearchActive && !isKeyboardVisible) ? 1.0 : 0.0
-        if abs(circle.alpha - target) > 0.01 {
-            transition.updateAlpha(view: circle, alpha: target)
         }
     }
 
@@ -424,8 +424,14 @@ public final class TabBarView: UIView {
     private var searchCapsule: GlassBackgroundView?       // expanded glass capsule for text field
     private var searchTextField: UITextField?               // text field inside capsule
     private var searchCloseButton: GlassBarButtonView?      // round glass X button
-    private var searchTabCircle: GlassBarButtonView?        // collapsed active-tab icon (back to tabs)
     private var searchDimView: EdgeEffectView?               // edge-effect bg
+
+    private static let searchOpenMorphDuration: TimeInterval = 0.62
+    private static let searchOpenMorphDamping: CGFloat = 0.72
+    private static let searchOpenMorphVelocity: CGFloat = 0.4
+    private static let searchCloseMorphDuration: TimeInterval = 0.44
+    private static let searchCloseMorphDamping: CGFloat = 0.8
+    private static let searchCloseMorphVelocity: CGFloat = 0.18
 
     /// Morph: pill → active-tab circle, search button → capsule with text field.
     public func activateSearchMode(animated: Bool) {
@@ -435,19 +441,21 @@ public final class TabBarView: UIView {
 
         if animated {
             positionSearchViewsAtOrigin()
-            // Start capsule and circle small for glass-morph feel
+            // Start capsule small for the glass morph feel.
             searchCapsule?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            searchTabCircle?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
             searchCloseButton?.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
-            // Show keyboard simultaneously with the morph animation
-            searchTextField?.becomeFirstResponder()
-            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.78, initialSpringVelocity: 0.3, options: [.beginFromCurrentState]) {
+            UIView.animate(
+                withDuration: Self.searchOpenMorphDuration,
+                delay: 0,
+                usingSpringWithDamping: Self.searchOpenMorphDamping,
+                initialSpringVelocity: Self.searchOpenMorphVelocity,
+                options: [.beginFromCurrentState, .allowUserInteraction]
+            ) {
                 self.positionSearchViewsExpanded()
                 self.searchCapsule?.transform = .identity
-                self.searchTabCircle?.transform = .identity
                 self.searchCloseButton?.transform = .identity
-                self.tabBarGlassContainer.alpha = 0.0
-                self.tabBarGlassContainer.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.tabBarGlassContainer.alpha = 1.0
+                self.tabBarGlassContainer.transform = .identity
                 // Showcase circle (the standalone "открыть поиск" button)
                 // morphs into the expanded capsule, so hide the original
                 // showcase while search is active — otherwise it stays
@@ -458,15 +466,16 @@ public final class TabBarView: UIView {
             }
         } else {
             positionSearchViewsExpanded()
-            tabBarGlassContainer.alpha = 0.0
+            tabBarGlassContainer.alpha = 1.0
+            tabBarGlassContainer.transform = .identity
             searchShowcaseView?.alpha = 0.0
             searchShowcaseView?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
             searchDimView?.alpha = 1.0
-            searchTextField?.becomeFirstResponder()
         }
     }
 
-    /// Reverse morph: capsule → search button, circle → pill.
+    /// Reverse morph: capsule → search button. The owning controller
+    /// restores the tab bar's pre-search minimized state in parallel.
     public func deactivateSearchMode(animated: Bool) {
         guard isSearchActive else { return }
         isSearchActive = false
@@ -474,15 +483,19 @@ public final class TabBarView: UIView {
 
         if animated {
             // Phase 1: quick fade of search elements + shrink toward origins
-            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            UIView.animate(
+                withDuration: Self.searchCloseMorphDuration,
+                delay: 0,
+                usingSpringWithDamping: Self.searchCloseMorphDamping,
+                initialSpringVelocity: Self.searchCloseMorphVelocity,
+                options: [.beginFromCurrentState, .allowUserInteraction]
+            ) {
                 // Fade + scale-down all search elements
                 self.searchCapsule?.alpha = 0.0
                 self.searchCapsule?.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
                 self.searchTextField?.alpha = 0.0
                 self.searchCloseButton?.alpha = 0.0
                 self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
-                self.searchTabCircle?.alpha = 0.0
-                self.searchTabCircle?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 0.0
 
                 // Restore tab bar + showcase circle (hidden during search).
@@ -550,33 +563,19 @@ public final class TabBarView: UIView {
         addSubview(close)
         searchCloseButton = close
 
-        // Circle with active tab's icon — tap to go back to tabs.
-        // Hidden while the keyboard is up: the search field already
-        // reads as "we are searching", and the row sits flush with the
-        // keyboard top so there's no extra real estate worth spending
-        // on a tap target. The owner toggles visibility via
-        // `setKeyboardVisible(_:transition:)` as the keyboard moves.
-        let activeIcon = activeTabIcon()
-        let circle = GlassBarButtonView(icon: activeIcon, state: .glass)
-        circle.contentTintColor = theme.tabBarSelectedIconColor
-        circle.action = { [weak self] _ in self?.onSearchDismissed?() }
-        if isKeyboardVisible {
-            circle.alpha = 0.0
-        }
-        addSubview(circle)
-        searchTabCircle = circle
+        // The active-tab control is not a separate search view. It is
+        // the real minimized tab bar (`tabBarGlassContainer`) kept
+        // visible while the search button expands into the field.
     }
 
     private func teardownSearchViews() {
         searchCapsule?.removeFromSuperview()
         searchTextField?.removeFromSuperview()
         searchCloseButton?.removeFromSuperview()
-        searchTabCircle?.removeFromSuperview()
         searchDimView?.removeFromSuperview()
         searchCapsule = nil
         searchTextField = nil
         searchCloseButton = nil
-        searchTabCircle = nil
         searchDimView = nil
     }
 
@@ -598,19 +597,16 @@ public final class TabBarView: UIView {
         return tabBarGlassContainer.convert(showcase.frame, to: self)
     }
 
-    private var activeTabFrame: CGRect {
-        guard selectedIndex < itemViews.count else { return .zero }
-        let itemFrame = itemViews[selectedIndex].frame
-        return tabBarGlassContainer.convert(itemFrame, to: self)
+    private var activeTabSearchAnchorFrame: CGRect {
+        return computePillFrame(in: bounds.size, minimized: true)
     }
 
     private static let searchModeHeight: CGFloat = 42.0
 
-    /// Start: capsule at showcase origin, circle at active tab origin.
+    /// Start: capsule at showcase origin.
     private func positionSearchViewsAtOrigin() {
         let h = Self.searchModeHeight
         let showcaseF = searchShowcaseFrame
-        let tabF = activeTabFrame
 
         updateSearchDimFrame()
 
@@ -628,44 +624,21 @@ public final class TabBarView: UIView {
         searchCloseButton?.frame = CGRect(x: capsuleFrame.maxX - h, y: capsuleFrame.minY, width: h, height: h)
         searchCloseButton?.alpha = 0.0
 
-        // Circle starts at active tab's position
-        let circleFrame = CGRect(x: tabF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
-        searchTabCircle?.frame = circleFrame
     }
 
-    /// Vertical lift for the active-search row — sits a few points above
-    /// the normal tab-bar center so the close button and field don't
-    /// hug the bottom safe-area edge.
-    private static let searchRowLift: CGFloat = 12.0
-
-    /// End: capsule fills most of the width, circle at the left edge.
+    /// End: capsule fills the row to the right of the minimized active
+    /// tab. The active-tab control itself is the real 48×48 tab bar
+    /// circle, not a duplicate search-mode view.
     /// Capsule width depends on whether the close button is visible — if
     /// it's hidden (field not editing yet) the capsule reclaims that
     /// trailing space so the placeholder isn't cramped.
     private func positionSearchViewsExpanded() {
         let h = Self.searchModeHeight
         let sideInset = theme.sideInset
-        // `searchRowLift` only applies while the field is NOT editing —
-        // once the keyboard is up, the field/row should sit flush with
-        // the bottom insets so the keyboard itself (plus its safe-area
-        // handling) determines vertical placement.
-        let isEditing = searchTextField?.isFirstResponder ?? false
-        let lift = isEditing ? 0 : Self.searchRowLift
-        let pillY = bounds.height - effectiveBottomInset - h + (theme.pillHeight - h) / 2 - lift
+        let activeFrame = activeTabSearchAnchorFrame
+        let pillY = activeFrame.midY - h / 2.0
 
         updateSearchDimFrame()
-
-        // Circle visibility tracks the keyboard — while it's up, the
-        // capsule reclaims the leading slot so the field has room to
-        // breathe over a wider hit area.
-        let circleHidden = isKeyboardVisible
-
-        // Circle (active-tab icon) sits at the left. We keep its frame
-        // pinned to the leading slot regardless of `circleHidden` so the
-        // alpha cross-fade has a stable target — only the capsule starts
-        // shifts to claim/release the slot.
-        let circleFrame = CGRect(x: sideInset, y: pillY, width: h, height: h)
-        searchTabCircle?.frame = circleFrame
 
         // Close button frame is always in its rightmost slot — only alpha
         // changes when editing begins / ends.
@@ -674,9 +647,8 @@ public final class TabBarView: UIView {
 
         let capsuleFrame = capsuleFrameExpanded(
             pillY: pillY,
-            circleRight: circleFrame.maxX,
-            closeMinX: closeFrame.minX,
-            circleHidden: circleHidden
+            activeTabRight: activeFrame.maxX,
+            closeMinX: closeFrame.minX
         )
         searchCapsule?.frame = capsuleFrame
         searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
@@ -690,12 +662,10 @@ public final class TabBarView: UIView {
     /// Capsule's target frame given the current close-button visibility.
     /// When close is hidden, the capsule stretches all the way to the
     /// sideInset; when visible, it stops 8pt before the close button.
-    /// `circleHidden` controls the leading edge — when true (keyboard up,
-    /// active-tab circle faded) the capsule claims the circle's slot.
-    private func capsuleFrameExpanded(pillY: CGFloat, circleRight: CGFloat, closeMinX: CGFloat, circleHidden: Bool) -> CGRect {
+    private func capsuleFrameExpanded(pillY: CGFloat, activeTabRight: CGFloat, closeMinX: CGFloat) -> CGRect {
         let h = Self.searchModeHeight
         let spacing: CGFloat = 8.0
-        let capsuleX = circleHidden ? theme.sideInset : (circleRight + spacing)
+        let capsuleX = activeTabRight + spacing
         let closeHidden = (searchCloseButton?.alpha ?? 0) < 0.01
         let trailing: CGFloat = closeHidden
             ? (bounds.width - theme.sideInset)
@@ -1418,10 +1388,10 @@ public final class TabBarView: UIView {
             return
         }
         // In minimized state the lens is the collapsed pill itself —
-        // tapping it should expand the bar back, not try to pick a tab
-        // (only one tab is visible there anyway).
-        if isMinimized {
-            onExpandRequested?()
+        // tapping it should expand the bar back, or close search if
+        // search is currently expanded from the trailing button.
+        if isMinimized || isSearchActive {
+            handleMinimizedActiveTabTap()
             return
         }
         guard let index = index(at: recognizer.location(in: self)) else {

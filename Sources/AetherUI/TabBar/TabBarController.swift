@@ -107,6 +107,9 @@ open class AetherTabBarController: AetherViewController {
     private var bottomBarAccessoryWrapper: GlassBackgroundView?
     private var bottomBarAccessoryTap: UITapGestureRecognizer?
     private static let bottomBarAccessoryBottomGap: CGFloat = 8.0
+    private static let bottomBarAccessoryCrossfadeDuration: TimeInterval = 0.32
+    private static let bottomBarAccessoryCrossfadeBlurRadius: CGFloat = 10.0
+    private var bottomBarAccessoryTransitionGeneration: Int = 0
 
     // MARK: - Expanded Accessory (Apple-Music-style morph)
 
@@ -202,6 +205,9 @@ open class AetherTabBarController: AetherViewController {
     }
 
     private func installBottomBarAccessory(old: TabBarAccessoryView?, new: TabBarAccessoryView?, animated: Bool) {
+        bottomBarAccessoryTransitionGeneration += 1
+        let transitionGeneration = bottomBarAccessoryTransitionGeneration
+
         // Remove listener from the outgoing accessory first so it can't
         // trigger a re-layout we're about to discard anyway.
         old?.requestLayout = { _ in }
@@ -255,26 +261,67 @@ open class AetherTabBarController: AetherViewController {
         }
 
         bottomBarAccessoryWrapper = newWrapper
+        if let layout = currentlyAppliedLayout, let newWrapper {
+            if let frame = resolvedBottomBarAccessoryFrame(for: layout) {
+                applyAccessoryFrame(newWrapper, frame: frame, transition: .immediate)
+                newWrapper.isHidden = false
+            } else {
+                newWrapper.isHidden = true
+            }
+        }
 
         if animated, oldWrapper != nil || newWrapper != nil {
             newWrapper?.alpha = 0
-            UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .curveEaseInOut], animations: {
+            newWrapper?.transform = .identity
+            oldWrapper?.transform = .identity
+            if let newWrapper {
+                ContainedViewLayoutTransition.immediate.setBlur(
+                    layer: newWrapper.layer,
+                    radius: Self.bottomBarAccessoryCrossfadeBlurRadius
+                )
+                ContainedViewLayoutTransition
+                    .animated(duration: Self.bottomBarAccessoryCrossfadeDuration, curve: .easeInOut)
+                    .setBlur(layer: newWrapper.layer, radius: 0.0) { [weak self, weak newWrapper] _ in
+                        guard let self, let newWrapper else { return }
+                        if self.bottomBarAccessoryWrapper === newWrapper,
+                           self.bottomBarAccessoryTransitionGeneration == transitionGeneration {
+                            newWrapper.layer.filters = nil
+                        }
+                    }
+            }
+            if let oldWrapper {
+                ContainedViewLayoutTransition
+                    .animated(duration: Self.bottomBarAccessoryCrossfadeDuration, curve: .easeInOut)
+                    .setBlur(layer: oldWrapper.layer, radius: Self.bottomBarAccessoryCrossfadeBlurRadius)
+            }
+            UIView.animate(withDuration: Self.bottomBarAccessoryCrossfadeDuration, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut], animations: {
                 oldWrapper?.alpha = 0
                 newWrapper?.alpha = 1
-            }, completion: { _ in
-                oldWrapper?.removeFromSuperview()
+            }, completion: { [weak self, weak oldWrapper] _ in
+                guard let oldWrapper else { return }
+                if self?.bottomBarAccessoryWrapper !== oldWrapper {
+                    oldWrapper.removeFromSuperview()
+                }
+                oldWrapper.alpha = 1.0
+                oldWrapper.transform = .identity
+                oldWrapper.layer.filters = nil
             })
         } else {
             oldWrapper?.removeFromSuperview()
+            oldWrapper?.layer.filters = nil
+            newWrapper?.alpha = 1.0
+            newWrapper?.transform = .identity
+            newWrapper?.layer.filters = nil
         }
 
         // Re-run layout so the new accessory gets positioned (and any
         // safe-area / edge-effect changes propagate to children).
         if let layout = currentlyAppliedLayout {
-            let transition: ContainedViewLayoutTransition = animated
-                ? .animated(duration: 0.25, curve: .easeInOut)
-                : .immediate
-            containerLayoutUpdated(layout, transition: transition)
+            // The wrapper runs its own blur crossfade above. Keep the
+            // accompanying safe-area / tab-bar relayout synchronous so
+            // unchanged chrome, especially trailing search/nav buttons, does
+            // not animate just because the accessory reservation changed.
+            containerLayoutUpdated(layout, transition: .immediate)
         }
     }
 
@@ -621,7 +668,9 @@ open class AetherTabBarController: AetherViewController {
 
     private func bottomBarLayoutReservation(visibleProgress: CGFloat, rawSafeBottom: CGFloat) -> BottomBarLayoutReservation {
         let tabBarContentInset = visibleProgress * max(0.0, TabBarView.defaultHeight - rawSafeBottom)
-        let accessoryHeight: CGFloat = !isTabBarMinimized ? (_bottomBarAccessory?.height ?? 0) : 0
+        let accessoryHeight: CGFloat = (!isTabBarMinimized && !tabBarView.isSearchActive)
+            ? (_bottomBarAccessory?.height ?? 0)
+            : 0
         let accessoryTotalReservation: CGFloat = accessoryHeight > 0
             ? visibleProgress * (accessoryHeight + Self.bottomBarAccessoryBottomGap)
             : 0
@@ -630,6 +679,61 @@ open class AetherTabBarController: AetherViewController {
             tabBarContentInset: tabBarContentInset,
             accessoryTotalReservation: accessoryTotalReservation,
             accessoryHeight: accessoryHeight
+        )
+    }
+
+    private func resolvedBottomBarAccessoryFrame(for layout: ContainerViewLayout) -> CGRect? {
+        guard expandedAccessoryViewController == nil else {
+            return nil
+        }
+        guard _bottomBarAccessory != nil else {
+            return nil
+        }
+
+        let tabBarHeight: CGFloat = TabBarView.defaultHeight
+        let chromeVisibleProgress = 1.0 - effectiveTabBarHiddenProgress
+        guard chromeVisibleProgress > 0.001 else {
+            return nil
+        }
+
+        let layoutVisibleProgress = tabBarLayoutVisibleProgress
+        let rawSafeBottom = view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
+        let reservation = bottomBarLayoutReservation(visibleProgress: layoutVisibleProgress, rawSafeBottom: rawSafeBottom)
+        let isKeyboardVisible = (layout.inputHeight ?? 0) > 0
+        let keyboardLift: CGFloat = tabBarView.isSearchActive ? (layout.inputHeight ?? 0) : 0
+        let tabBarY = layout.size.height - tabBarHeight - keyboardLift
+        let tabBarFrame = CGRect(x: 0, y: tabBarY, width: layout.size.width, height: tabBarHeight)
+        let searchTopAdjustment: CGFloat = tabBarView.isSearchActive && !isKeyboardVisible
+            ? tabBarView.searchRowTopOffset
+            : 0
+        let pillFrameInTab = tabBarView.computePillFrame(in: tabBarFrame.size, minimized: isTabBarMinimized)
+        let pillTopInController = tabBarY + pillFrameInTab.minY
+
+        if isTabBarMinimized {
+            let pillSize = TabBarView.minimizedButtonSize
+            let sideInset = tabBarTheme.sideInset
+            let interGap: CGFloat = 8.0
+            let accessoryX = sideInset + pillSize + interGap
+            let accessoryRight = layout.size.width - sideInset - pillSize - interGap
+            return CGRect(
+                x: accessoryX,
+                y: pillTopInController,
+                width: max(0, accessoryRight - accessoryX),
+                height: pillSize
+            )
+        }
+
+        let accessoryHeight = reservation.accessoryHeight
+        guard accessoryHeight > 0 else {
+            return nil
+        }
+        let accessoryAnchorY = pillTopInController + searchTopAdjustment
+        let sideInset = tabBarTheme.sideInset
+        return CGRect(
+            x: sideInset,
+            y: accessoryAnchorY - Self.bottomBarAccessoryBottomGap - accessoryHeight,
+            width: max(0, layout.size.width - sideInset * 2),
+            height: accessoryHeight
         )
     }
 
@@ -692,7 +796,7 @@ open class AetherTabBarController: AetherViewController {
             case .never:
                 detachScrollObserver()
                 if isTabBarMinimized {
-                    setTabBarMinimized(false, transition: .animated(duration: 0.35, curve: .customSpring(damping: 0.85, initialVelocity: 0)))
+                    setTabBarMinimized(false, transition: Self.tabBarMinimizeMorphTransition)
                 }
             case .onScrollDown:
                 attachScrollObserverIfPossible()
@@ -704,6 +808,12 @@ open class AetherTabBarController: AetherViewController {
     /// (when `tabBarMinimizeBehavior == .onScrollDown`) or directly by
     /// callers via `setTabBarMinimized(_:transition:)`.
     public private(set) var isTabBarMinimized: Bool = false
+    private var tabBarMinimizedBeforeSearchActivation: Bool?
+
+    private static let tabBarMinimizeMorphTransition: ContainedViewLayoutTransition = .animated(
+        duration: 0.48,
+        curve: .customSpring(damping: 0.72, initialVelocity: 0.18)
+    )
 
     /// Toggle the minimized state with an animated morph.
     ///
@@ -712,9 +822,10 @@ open class AetherTabBarController: AetherViewController {
     /// transition. Safe to call repeatedly with the same value (no-op).
     public func setTabBarMinimized(_ minimized: Bool, transition: ContainedViewLayoutTransition) {
         guard isTabBarMinimized != minimized else { return }
-        // Search mode owns the chrome — refuse to minimize while the
-        // search field is up. Mirror of the same guard inside `TabBarView`.
-        if minimized && tabBarView.isSearchActive {
+        // Search mode uses the minimized active-tab circle as its anchor.
+        // Do not expand the tab bar while search is active; the search
+        // deactivation path restores the pre-search state explicitly.
+        if !minimized && tabBarView.isSearchActive {
             return
         }
         isTabBarMinimized = minimized
@@ -756,9 +867,9 @@ open class AetherTabBarController: AetherViewController {
             if self.tabBarView.isSearchActive { return }
             switch direction {
             case .down:
-                self.setTabBarMinimized(true, transition: .animated(duration: 0.35, curve: .customSpring(damping: 0.85, initialVelocity: 0)))
+                self.setTabBarMinimized(true, transition: Self.tabBarMinimizeMorphTransition)
             case .upOrAtTop:
-                self.setTabBarMinimized(false, transition: .animated(duration: 0.35, curve: .customSpring(damping: 0.85, initialVelocity: 0)))
+                self.setTabBarMinimized(false, transition: Self.tabBarMinimizeMorphTransition)
             }
         }
     }
@@ -878,7 +989,7 @@ open class AetherTabBarController: AetherViewController {
         // the 48×48 active-tab circle.
         tabBarView.onExpandRequested = { [weak self] in
             guard let self else { return }
-            self.setTabBarMinimized(false, transition: .animated(duration: 0.35, curve: .customSpring(damping: 0.85, initialVelocity: 0)))
+            self.setTabBarMinimized(false, transition: Self.tabBarMinimizeMorphTransition)
         }
 
         view.addSubview(tabBarView)
@@ -1085,26 +1196,21 @@ open class AetherTabBarController: AetherViewController {
         transition.updateAlpha(view: tabBarView, alpha: chromeVisibleProgress)
         tabBarView.isUserInteractionEnabled = chromeVisibleProgress > 0.01
 
-        // Drive search-mode chrome that depends on keyboard state — the
-        // active-tab circle inside `TabBarView` cross-fades through this
-        // (visible when the keyboard is down so the user has somewhere
-        // to tap to exit, hidden when the keyboard owns the bottom of
-        // the screen).
+        // Drive any search-mode geometry that depends on keyboard state.
+        // Opening search does not focus the field; this only matters
+        // after the user explicitly taps into the input and the keyboard
+        // appears.
         tabBarView.setKeyboardVisible(isKeyboardVisible, transition: transition)
 
-        // While search owns the chrome and the keyboard is up, fade the
-        // accessory pill out — it would overlap the search row that
-        // hugs the keyboard's top edge. With the keyboard down (search
-        // still active) the accessory comes back, but it has to anchor
-        // to the SEARCH ROW instead of the (invisible) tab pill so the
-        // 8pt gap above it matches the no-search state — see
-        // `searchRowTopOffset` below.
-        let shouldFadeAccessoryForSearch = tabBarView.isSearchActive && isKeyboardVisible
-        // The search row sits a few points below the tab pill's top
-        // edge (capsule height < pill height). When search is active
-        // and visible (keyboard down) we slide the accessory down by
-        // that offset so it lands 8pt above the row, not 8pt above the
-        // empty space the tab pill used to fill.
+        // Search uses the minimized row between the 48pt active-tab
+        // button and the trailing search/close controls. A bottom
+        // accessory would occupy the same row, so keep it faded for the
+        // whole search session, not only while the keyboard is visible.
+        let shouldFadeAccessoryForSearch = tabBarView.isSearchActive
+        // Kept for the non-minimized fallback path: the search row may
+        // be shorter than the full pill, so accessory anchoring needs
+        // the row's top offset if a direct caller activates search
+        // without first collapsing.
         let searchTopAdjustment: CGFloat = tabBarView.isSearchActive && !isKeyboardVisible
             ? tabBarView.searchRowTopOffset
             : 0
@@ -1275,22 +1381,27 @@ open class AetherTabBarController: AetherViewController {
     /// Activate tab bar search: expands the search button into a search field.
     /// Does NOT affect the navigation bar — that's a separate action.
     public func activateSearch() {
-        // Search and minimize fight over the same chrome — expand back
-        // to the full pill before activating search so the morph runs
-        // off the canonical layout. Use `.immediate` so the search morph
-        // starts from a settled state instead of mid-spring.
-        if isTabBarMinimized {
-            setTabBarMinimized(false, transition: .immediate)
+        guard !tabBarView.isSearchActive else { return }
+
+        tabBarMinimizedBeforeSearchActivation = isTabBarMinimized
+        if !isTabBarMinimized {
+            setTabBarMinimized(true, transition: Self.tabBarMinimizeMorphTransition)
         }
-        tabBarView.activateSearchMode(animated: true)
         tabBarView.onSearchDismissed = { [weak self] in
             self?.deactivateSearch()
         }
+        tabBarView.activateSearchMode(animated: true)
     }
 
     /// Deactivate tab bar search: collapses the search field back to the tab bar.
     public func deactivateSearch() {
+        let restoreExpanded = tabBarMinimizedBeforeSearchActivation == false
+        tabBarMinimizedBeforeSearchActivation = nil
+
         tabBarView.deactivateSearchMode(animated: true)
+        if restoreExpanded {
+            setTabBarMinimized(false, transition: Self.tabBarMinimizeMorphTransition)
+        }
         // When dismissed via the active-tab circle the keyboard is
         // already down, so no `keyboardWillHide` notification fires to
         // re-run our `containerLayoutUpdated` — the accessory would be
@@ -1300,6 +1411,12 @@ open class AetherTabBarController: AetherViewController {
         // their canonical position together with the chrome morph.
         requestLayout(transition: .animated(duration: 0.3, curve: .easeInOut))
     }
+
+    #if DEBUG
+    func simulateMinimizedActiveTabTapForTests() {
+        tabBarView.simulateMinimizedActiveTabTapForTests()
+    }
+    #endif
 
     // MARK: - Private
 

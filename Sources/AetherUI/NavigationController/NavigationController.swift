@@ -279,7 +279,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
     public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         let previousLayout = validLayout
         validLayout = layout
-        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInput(from: $0) } == true
+        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInputOrBottomAdditionalInset(from: $0) } == true
             ? .immediate
             : transition
         updateVisibleContainers(layout: layout, transition: transition, navigationChromeTransition: navigationChromeTransition)
@@ -715,11 +715,11 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
                 controller.navigationBarView = nil
             }
 
-            controller.topBarAccessoryDidChange = { [weak self, weak controller] in
+            controller.topBarAccessoryTransitionDidChange = { [weak self, weak controller] transition in
                 guard let self, let controller else { return }
                 guard !self.isUpdatingSharedNavigationBar else { return }
                 guard self.sharedNavigationBarController === controller else { return }
-                self.requestLayout(transition: .animated(duration: 0.3, curve: .spring))
+                self.requestLayout(transition: transition)
             }
 
             if controller.parent !== self {
@@ -1428,7 +1428,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             guard controller.parent === self else {
                 continue
             }
-            controller.topBarAccessoryDidChange = nil
+            controller.topBarAccessoryTransitionDidChange = nil
             controller.navigationBarIsExternallyHosted = false
             controller.externalNavigationBarHeight = nil
             if controller.navigationBarView === sharedNavigationBar {

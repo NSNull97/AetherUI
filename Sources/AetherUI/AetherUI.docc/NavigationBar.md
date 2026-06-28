@@ -317,7 +317,12 @@ final class FilterChipsBar: NavigationBarContentView {
 
 // В ViewController:
 topBarAccessory = FilterChipsBar()
+setTopBarAccessory(FilterChipsBar(), animated: true)
 ```
+
+Direct assignment применяется мгновенно. `setTopBarAccessory(_:animated:)`
+использует внутренний blur-crossfade и фиксирует frame accessory до
+визуального fade, чтобы появление/исчезновение не давало скачка геометрии.
 
 ### Mode
 
@@ -438,7 +443,7 @@ defaults; factory `liquidGlass(...)` — preset для типового испо
 | `enableAutomaticBackButton` | Управление авто-генерацией back-кнопки. |
 | `contentView` | Текущий accessory `NavigationBarContentView`. |
 | `presentationData` | Read-only доступ к теме (для accessory views). |
-| `setContentView(_:animated:)` | Установка accessory с морф-анимацией (0.28с fade out + 0.32с fade in). |
+| `setContentView(_:animated:)` | Установка accessory с blur-crossfade после фиксации финального frame. |
 | `setHidden(_:animated:)` | Скрытие/показ. |
 | `setSearchMode(_:animated:)` | Переключение в search mode. |
 | `updateBackgroundAlpha(_:transition:)` | Частичное скрытие фона. |

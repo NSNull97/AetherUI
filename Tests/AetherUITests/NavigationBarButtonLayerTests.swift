@@ -387,6 +387,43 @@ final class NavigationBarButtonLayerTests: XCTestCase {
         )
     }
 
+    func testRepeatedAnimatedSameExpansionContentDoesNotAnimateRightChrome() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 138.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let target = BarButtonActionTarget()
+        let rightItem = UIBarButtonItem(
+            title: "Done",
+            style: .plain,
+            target: target,
+            action: #selector(BarButtonActionTarget.invoke(_:))
+        )
+
+        let item = NavigationBarItem()
+        item.rightBarButtonItems = [rightItem]
+        bar.item = item
+        layout(bar)
+
+        let rightItemID = BarButtonID("right.item.\(ObjectIdentifier(rightItem))")
+        let rightGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self)
+        guard let rightButton = rightGroup?.itemButton(id: AnyHashable(rightItemID)) else {
+            XCTFail("Expected right glass button to be hosted in the separated button layer")
+            return
+        }
+
+        let chromeChain = rightButton.ancestorChain(until: bar.debugButtonLayer)
+        chromeChain.forEach { $0.layer.removeAllAnimations() }
+
+        let contentView = FixedExpansionContentView(height: 34.0)
+        bar.setContentView(contentView, animated: true)
+        bar.setContentView(contentView, animated: true)
+        layout(bar, height: 138.0, transition: .animated(duration: 0.32, curve: .easeInOut))
+
+        let animatedChromeViews = chromeChain.filter { !($0.layer.animationKeys() ?? []).isEmpty }
+        XCTAssertTrue(animatedChromeViews.isEmpty, "Right button chrome should stay static during accessory-only crossfade")
+    }
+
     func testButtonLayerHitTestingReturnsButtonsAndPassesThroughEmptySpace() {
         let layer = AetherNavigationBarButtonLayer(frame: CGRect(x: 0.0, y: 0.0, width: 240.0, height: 60.0))
         let button = UIButton(type: .system)
@@ -531,5 +568,18 @@ private extension UIView {
             }
         }
         return nil
+    }
+
+    func ancestorChain(until stopView: UIView) -> [UIView] {
+        var result: [UIView] = []
+        var current: UIView? = self
+        while let view = current {
+            result.append(view)
+            if view === stopView {
+                break
+            }
+            current = view.superview
+        }
+        return result
     }
 }

@@ -148,6 +148,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     private var _contentView: NavigationBarContentView?
     public var contentView: NavigationBarContentView? { _contentView }
+    private weak var pendingAppearingContentView: NavigationBarContentView?
+    private var contentViewTransitionGeneration: Int = 0
+    private var contentViewTransitionLocksButtonChrome = false
 
     private var glassBackgroundView: GlassBackgroundView?
     /// Scroll-edge fade effect. Hosts can move it outside the bar so the
@@ -183,6 +186,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     public var backPressed: () -> Void = {}
     public var userInfo: Any?
+
+    private static let contentBlurCrossfadeDuration: TimeInterval = 0.32
+    private static let contentBlurCrossfadeRadius: CGFloat = 10.0
 
     public var item: NavigationBarItem? {
         didSet {
@@ -928,55 +934,161 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         return titleAreaHeight
     }
 
-    public func setContentView(_ contentView: NavigationBarContentView?, animated: Bool) {
-        // iOS 26-style "glass replacement": the outgoing content softly
-        // fades with a tiny shrink, the incoming content emerges with a
-        // tiny grow. Both run concurrently so the swap feels like a fluid
-        // morph rather than a fade-out-then-in.
-        let fadeOutScale: CGFloat = 0.94
-        let fadeInScaleStart: CGFloat = 0.94
+    private func geometryTransition(for contentView: NavigationBarContentView, transition: ContainedViewLayoutTransition) -> ContainedViewLayoutTransition {
+        return pendingAppearingContentView === contentView ? .immediate : transition
+    }
 
-        if let old = _contentView, old !== contentView {
+    private func buttonChromeTransition(_ transition: ContainedViewLayoutTransition) -> ContainedViewLayoutTransition {
+        return contentViewTransitionLocksButtonChrome ? .immediate : transition
+    }
+
+    private func contentViewKeepsButtonChromeStable(_ contentView: NavigationBarContentView?) -> Bool {
+        guard let contentView else {
+            return true
+        }
+        return contentView.mode == .expansion
+    }
+
+    private func rectsAreEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        return abs(lhs.minX - rhs.minX) < 0.5
+            && abs(lhs.minY - rhs.minY) < 0.5
+            && abs(lhs.width - rhs.width) < 0.5
+            && abs(lhs.height - rhs.height) < 0.5
+    }
+
+    private func shouldUpdateButtonChrome(targetFrame: CGRect) -> Bool {
+        if contentViewTransitionLocksButtonChrome, rectsAreEqual(currentButtonsRowFrame, targetFrame) {
+            return false
+        }
+        return true
+    }
+
+    private func unlockButtonChromeIfCurrentContentTransition(generation: Int) {
+        if contentViewTransitionGeneration == generation {
+            contentViewTransitionLocksButtonChrome = false
+        }
+    }
+
+    private func animateDisappearingContentView(_ contentView: NavigationBarContentView, generation: Int) {
+        if pendingAppearingContentView === contentView {
+            pendingAppearingContentView = nil
+        }
+        contentView.transform = .identity
+        let transition: ContainedViewLayoutTransition = .animated(
+            duration: Self.contentBlurCrossfadeDuration,
+            curve: .easeInOut
+        )
+        transition.setBlur(layer: contentView.layer, radius: Self.contentBlurCrossfadeRadius)
+        UIView.animate(
+            withDuration: Self.contentBlurCrossfadeDuration,
+            delay: 0.0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut],
+            animations: {
+                contentView.alpha = 0.0
+            },
+            completion: { [weak self, weak contentView] _ in
+                guard let contentView else { return }
+                // Race guard: a later setContentView call may have
+                // re-attached `contentView` as the active view. Only
+                // remove it if the bar is no longer using it.
+                if self?._contentView === contentView {
+                    contentView.alpha = 1.0
+                    contentView.transform = .identity
+                    if self?.contentViewTransitionGeneration == generation {
+                        contentView.layer.filters = nil
+                    }
+                } else if contentView.superview === self?.clippingView {
+                    contentView.removeFromSuperview()
+                    contentView.alpha = 1.0
+                    contentView.transform = .identity
+                    contentView.layer.filters = nil
+                } else {
+                    contentView.alpha = 1.0
+                    contentView.transform = .identity
+                    contentView.layer.filters = nil
+                }
+                self?.unlockButtonChromeIfCurrentContentTransition(generation: generation)
+            }
+        )
+    }
+
+    private func animatePendingAppearingContentViewIfNeeded(_ contentView: NavigationBarContentView) {
+        guard pendingAppearingContentView === contentView else {
+            return
+        }
+        pendingAppearingContentView = nil
+        let generation = contentViewTransitionGeneration
+        let transition: ContainedViewLayoutTransition = .animated(
+            duration: Self.contentBlurCrossfadeDuration,
+            curve: .easeInOut
+        )
+        transition.setBlur(layer: contentView.layer, radius: 0.0) { [weak self, weak contentView] _ in
+            guard let self, let contentView else { return }
+            if self._contentView === contentView, self.contentViewTransitionGeneration == generation {
+                contentView.layer.filters = nil
+            }
+        }
+        UIView.animate(
+            withDuration: Self.contentBlurCrossfadeDuration,
+            delay: 0.0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut],
+            animations: {
+                contentView.alpha = 1.0
+            },
+            completion: { [weak self, weak contentView] _ in
+                guard let self, let contentView else { return }
+                if self._contentView === contentView, self.contentViewTransitionGeneration == generation {
+                    contentView.alpha = 1.0
+                    contentView.transform = .identity
+                }
+                self.unlockButtonChromeIfCurrentContentTransition(generation: generation)
+            }
+        )
+    }
+
+    public func setContentView(_ contentView: NavigationBarContentView?, animated: Bool) {
+        let oldContentView = _contentView
+        let contentIsChanging = oldContentView !== contentView
+        if !contentIsChanging {
+            if let contentView {
+                contentView.requestContainerLayout = { [weak self] transition in
+                    self?.requestContainerLayout?(transition)
+                }
+                if contentView.superview !== clippingView {
+                    clippingView.addSubview(contentView)
+                }
+                if !animated {
+                    contentView.alpha = 1.0
+                    contentView.transform = .identity
+                    contentView.layer.filters = nil
+                    if pendingAppearingContentView === contentView {
+                        pendingAppearingContentView = nil
+                    }
+                }
+            }
+            requestContainerLayout?(animated ? .animated(duration: Self.contentBlurCrossfadeDuration, curve: .easeInOut) : .immediate)
+            return
+        }
+
+        contentViewTransitionGeneration += 1
+        let generation = contentViewTransitionGeneration
+        contentViewTransitionLocksButtonChrome = animated
+            && contentIsChanging
+            && !isSearchModeActive
+            && contentViewKeepsButtonChromeStable(oldContentView)
+            && contentViewKeepsButtonChromeStable(contentView)
+        if let old = oldContentView, old !== contentView {
             let ownsOldContent = old.superview === clippingView
             if animated {
                 if ownsOldContent {
-                    UIView.animate(
-                        withDuration: 0.28,
-                        delay: 0,
-                        options: [.curveEaseIn, .beginFromCurrentState],
-                        animations: {
-                            old.alpha = 0.0
-                            old.transform = CGAffineTransform(scaleX: fadeOutScale, y: fadeOutScale)
-                        },
-                        completion: { [weak self, weak old] _ in
-                            // Race guard: a later setContentView call may have
-                            // re-attached `old` as the new _contentView. Only
-                            // remove it if the bar is no longer using it —
-                            // otherwise a stale completion would yank the view
-                            // out from under a fresh re-add (this was causing
-                            // the filter bar to disappear after tab switches
-                            // that were preceded by a push/pop animation).
-                            guard let old else { return }
-                            if self?._contentView === old {
-                                // Re-used — restore visual state so it's visible.
-                                old.alpha = 1.0
-                                old.transform = .identity
-                            } else if old.superview === self?.clippingView {
-                                old.removeFromSuperview()
-                                old.alpha = 1.0
-                                old.transform = .identity
-                            } else {
-                                old.alpha = 1.0
-                                old.transform = .identity
-                            }
-                        }
-                    )
+                    animateDisappearingContentView(old, generation: generation)
                 }
             } else {
                 if ownsOldContent {
                     old.removeFromSuperview()
                     old.alpha = 1.0
                     old.transform = .identity
+                    old.layer.filters = nil
                 }
             }
         }
@@ -993,17 +1105,12 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
             if animated {
                 contentView.alpha = 0.0
-                contentView.transform = CGAffineTransform(scaleX: fadeInScaleStart, y: fadeInScaleStart)
-                UIView.animate(
-                    withDuration: 0.32,
-                    delay: 0,
-                    options: [.curveEaseOut, .beginFromCurrentState],
-                    animations: {
-                        contentView.alpha = 1.0
-                        contentView.transform = .identity
-                    },
-                    completion: nil
+                contentView.transform = .identity
+                ContainedViewLayoutTransition.immediate.setBlur(
+                    layer: contentView.layer,
+                    radius: Self.contentBlurCrossfadeRadius
                 )
+                pendingAppearingContentView = contentView
             } else {
                 // Always land at visible + identity when the swap is
                 // non-animated — `contentView` may have been left at
@@ -1011,6 +1118,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 // interrupted.
                 contentView.alpha = 1.0
                 contentView.transform = .identity
+                contentView.layer.filters = nil
+                if pendingAppearingContentView === contentView {
+                    pendingAppearingContentView = nil
+                }
             }
         }
 
@@ -1019,7 +1130,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // tab switches (which pass animated: false expecting an instant
         // state swap). That made the bar re-lay-out with a 0.3s spring,
         // which the user sees as an "extra" animation.
-        requestContainerLayout?(animated ? .animated(duration: 0.3, curve: .spring) : .immediate)
+        requestContainerLayout?(animated ? .animated(duration: Self.contentBlurCrossfadeDuration, curve: .easeInOut) : .immediate)
     }
 
     public func executeBack() -> Bool {
@@ -1816,6 +1927,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // Content area
         let statusBarHeight = size.height - contentHeight
         let buttonsAreaY = statusBarHeight + additionalTopHeight
+        let buttonTransition = buttonChromeTransition(transition)
 
         // Content view
         if let contentView = ownedContentView {
@@ -1823,24 +1935,32 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             case .replacement:
                 // Buttons hidden, content replaces title row
                 let buttonsHeight = contentHeight - additionalTopHeight
-                updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
-                layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
+                let buttonsFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight)
+                if shouldUpdateButtonChrome(targetFrame: buttonsFrame) {
+                    updateButtonsRowFrame(buttonsFrame, transition: buttonTransition)
+                    layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: buttonTransition)
+                }
 
                 let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
-                transition.updateFrame(view: contentView, frame: contentFrame)
-                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                let contentTransition = geometryTransition(for: contentView, transition: transition)
+                contentTransition.updateFrame(view: contentView, frame: contentFrame)
+                let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: contentTransition)
                 setButtonsRowAlpha(0.0)
             case .expansion:
                 let buttonsHeight = max(defaultHeight, measuredTitleHeight)
-                updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
-                layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
+                let buttonsFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight)
+                if shouldUpdateButtonChrome(targetFrame: buttonsFrame) {
+                    updateButtonsRowFrame(buttonsFrame, transition: buttonTransition)
+                    layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: buttonTransition)
+                }
 
                 if isSearchModeActive {
                     // Search mode: content (search pill) at title position, no offset
                     let searchPillHeight = (contentView as? AetherStackedBarContent)?.views.first?.nominalHeight ?? contentView.height
                     let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: searchPillHeight)
-                    transition.updateFrame(view: contentView, frame: contentFrame)
-                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    let contentTransition = geometryTransition(for: contentView, transition: transition)
+                    contentTransition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: contentTransition)
                     // Hide non-search children (filters) in stacked content
                     if let stacked = contentView as? AetherStackedBarContent {
                         for (i, v) in stacked.views.enumerated() {
@@ -1850,8 +1970,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 } else {
                     // Normal: content below title row
                     let contentFrame = CGRect(x: 0, y: buttonsAreaY + buttonsHeight, width: size.width, height: contentView.height)
-                    transition.updateFrame(view: contentView, frame: contentFrame)
-                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    let contentTransition = geometryTransition(for: contentView, transition: transition)
+                    contentTransition.updateFrame(view: contentView, frame: contentFrame)
+                    let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: contentTransition)
                     // Restore all children alpha
                     if let stacked = contentView as? AetherStackedBarContent {
                         for v in stacked.views { v.alpha = 1.0 }
@@ -1859,6 +1980,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     setButtonsRowAlpha(1.0)
                 }
             }
+            animatePendingAppearingContentViewIfNeeded(contentView)
             // Buttons always above content view (glass capsules over filter bar).
             clippingView.bringSubviewToFront(buttonsContainerView)
         } else {
@@ -1869,8 +1991,11 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             } else {
                 buttonsHeight = contentHeight - additionalTopHeight
             }
-            updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
-            layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
+            let buttonsFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight)
+            if shouldUpdateButtonChrome(targetFrame: buttonsFrame) {
+                updateButtonsRowFrame(buttonsFrame, transition: buttonTransition)
+                layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: buttonTransition)
+            }
             if !isSearchModeActive {
                 setButtonsRowAlpha(1.0)
             }

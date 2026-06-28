@@ -270,18 +270,22 @@ tabs.searchShowcase = TabBarView.SearchShowcase(
 1. Tab bar pill сжимается до иконки активной вкладки.
 2. Search-кружок расширяется в горизонтальную glass-капсулу с
    встроенным `UITextField`.
-3. Spring-анимация с glassmorphism scale-эффектами.
+3. Поле не становится first responder автоматически; это только
+   pre-focus morph. Клавиатура появляется после явного тапа в поле.
+4. Spring-анимация с glassmorphism scale-эффектами.
 
 Деактивация (``AetherTabBarController/deactivateSearch()``):
 
 1. Reverse-морф: капсула fade + scale-down обратно в кружок.
-2. Tab bar pill восстанавливает полный layout.
+2. Tab bar pill восстанавливает pre-search состояние: полный layout,
+   если до поиска он был полным, или остается minimized, если поиск
+   открыт из minimized chrome.
 
 ViewController может реагировать на активацию через override:
 
 ```swift
 override func tabBarActivateSearch() {
-    // Поиск активирован из tab bar — переключиться на search UI.
+    // Поиск открыт из tab bar — подготовить search UI без auto-focus.
 }
 
 override func tabBarDeactivateSearch() {

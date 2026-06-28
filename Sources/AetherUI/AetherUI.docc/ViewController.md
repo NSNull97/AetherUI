@@ -161,9 +161,12 @@ final class FilterBar: NavigationBarContentView {
 
 // В ViewController:
 topBarAccessory = FilterBar()
+setTopBarAccessory(FilterBar(), animated: true)
 ```
 
-Присваивание `nil` удаляет accessory.
+Присваивание `nil` удаляет accessory мгновенно. Для появления/исчезновения
+через framework-private blur-crossfade используйте
+`setTopBarAccessory(nil, animated: true)`.
 
 > Note: При одновременной установке accessory и
 > ``AetherViewController/searchController`` AetherUI автоматически
@@ -313,6 +316,7 @@ lockedOrientation = .portrait
 | ``AetherViewController/navigationBarView`` | `NavigationBarView?` | Сам бар; прямое обращение, как правило, не требуется. |
 | ``AetherViewController/displayNavigationBar`` | `Bool` | Управление видимостью бара без удаления. При `false` бар смещается за верхнюю границу. |
 | ``AetherViewController/topBarAccessory`` | `NavigationBarContentView?` | Контент под title row (фильтры, segmented control). |
+| ``AetherViewController/setTopBarAccessory(_:animated:)`` | method | Анимированная установка/удаление top accessory через внутренний blur-crossfade. |
 | ``AetherViewController/searchController`` | `AetherSearchController?` | Поисковый pill в nav bar. |
 | ``AetherViewController/floatingToolbar`` | `AetherFloatingToolbarView?` | Плавающий toolbar в нижней части экрана. |
 

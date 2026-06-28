@@ -139,7 +139,7 @@ import AetherUIBridging
         if navigationBarView != nil, displayNavigationBar {
             navigationBarView?.setContentView(effectiveTopBarAccessory, animated: false)
         }
-        topBarAccessoryDidChange?()
+        notifyTopBarAccessoryDidChange(transition: .immediate)
     }
 
     internal var effectiveTopBarAccessory: NavigationBarContentView? {
@@ -316,6 +316,22 @@ import AetherUIBridging
         }
     }
 
+    /// Installs or removes the top-bar accessory with the same public
+    /// semantics as assigning ``topBarAccessory``. When `animated` is true,
+    /// AetherUI performs the framework-private blur crossfade inside the
+    /// navigation bar; callers only provide the content view.
+    public func setTopBarAccessory(_ accessory: NavigationBarContentView?, animated: Bool) {
+        guard _rawTopBarAccessory !== accessory else { return }
+        if navigationBarItem.topBarAccessory !== accessory {
+            navigationBarItem.setTopBarAccessory(accessory, animated: animated)
+            return
+        }
+        let transition: ContainedViewLayoutTransition = animated
+            ? .animated(duration: 0.32, curve: .easeInOut)
+            : .immediate
+        applyNavigationBarItemTopBarAccessory(accessory, transition: transition)
+    }
+
     private func applyNavigationBarItemTopBarAccessory(_ accessory: NavigationBarContentView?, transition: ContainedViewLayoutTransition) {
         guard _rawTopBarAccessory !== accessory else { return }
         let animated = transition.isAnimated
@@ -330,13 +346,19 @@ import AetherUIBridging
             } else {
                 navigationBarView?.setContentView(nil, animated: false)
             }
-            topBarAccessoryDidChange?()
+            notifyTopBarAccessoryDidChange(transition: transition)
         }
     }
 
     /// Internal hook so `AetherTabBarController` can re-sync when a child's
     /// `topBarAccessory` changes.
     public var topBarAccessoryDidChange: (() -> Void)?
+    internal var topBarAccessoryTransitionDidChange: ((ContainedViewLayoutTransition) -> Void)?
+
+    private func notifyTopBarAccessoryDidChange(transition: ContainedViewLayoutTransition) {
+        topBarAccessoryTransitionDidChange?(transition)
+        topBarAccessoryDidChange?()
+    }
 
     public var navigationBarRequiresEntireLayoutUpdate: Bool {
         return true
@@ -491,7 +513,7 @@ import AetherUIBridging
     open func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         let previousLayout = currentlyAppliedLayout
         self.updateCurrentContainerLayout(layout)
-        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInput(from: $0) } == true
+        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInputOrBottomAdditionalInset(from: $0) } == true
             ? .immediate
             : transition
 
@@ -714,7 +736,7 @@ import AetherUIBridging
             bar.item = navigationBarItem
             bar.requestContainerLayout?(.immediate)
         }
-        topBarAccessoryDidChange?()
+        notifyTopBarAccessoryDidChange(transition: .immediate)
     }
 
     override open func viewDidAppear(_ animated: Bool) {

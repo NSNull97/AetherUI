@@ -242,8 +242,9 @@ func makeRootTabBarController() -> AetherTabBarController {
 
 ### Search-кружок (Apple Music style)
 
-Опциональный круглый control рядом с pill'ом, активирующий полноэкранный
-поиск:
+Опциональный круглый control рядом с pill'ом: при тапе tab bar
+сворачивается в active-tab 48×48, а search control разворачивается в
+поле без автоматического focus:
 
 ```swift
 tabs.searchShowcase = TabBarView.SearchShowcase(

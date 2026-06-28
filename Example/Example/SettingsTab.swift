@@ -122,9 +122,9 @@ final class SettingsController: AetherViewController {
     private func applyTopAccessory(_ on: Bool) {
         showsTopAccessory = on
         if on {
-            topBarAccessory = SettingsTopAccessoryView()
+            setTopBarAccessory(SettingsTopAccessoryView(), animated: true)
         } else {
-            topBarAccessory = nil
+            setTopBarAccessory(nil, animated: true)
         }
         rebuildRows()
         tableView.reloadData()
