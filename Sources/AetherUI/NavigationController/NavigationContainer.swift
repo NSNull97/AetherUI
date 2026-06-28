@@ -61,6 +61,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
     var bottomBarTransitionProgress: ((CGFloat, ContainedViewLayoutTransition) -> Void)?
     var bottomBarTransitionResolutionBegan: ((Bool, ContainedViewLayoutTransition) -> Void)?
     var bottomBarTransitionEnded: ((Bool) -> Void)?
+    var layoutForController: ((AetherViewController, ContainerViewLayout) -> ContainerViewLayout)?
 
     /// The host device's display corner radius, used to round the **left
     /// edge** of the moving controller's view during push/pop — matches the
@@ -93,11 +94,13 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             target: self,
             action: #selector(panGesture(_:)),
             allowedDirections: { [weak self] point in
-                guard let self = self, self.controllers.count > 1 else { return [] }
-                return [.leftEdge]
+                return self?.interactivePopGestureDirections(at: point) ?? []
             },
             edgeWidth: .constant(20.0)
         )
+        panRecognizer.edgeWidthOverride = { [weak self] in
+            self?.controllers.last?.interactiveNavivationGestureEdgeWidth
+        }
         panRecognizer.delegate = self
         addGestureRecognizer(panRecognizer)
         self.interactiveGestureRecognizer = panRecognizer
@@ -174,6 +177,10 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         return true
     }
 
+    private func resolvedLayout(for controller: AetherViewController, baseLayout: ContainerViewLayout) -> ContainerViewLayout {
+        return layoutForController?(controller, baseLayout) ?? baseLayout
+    }
+
     private func applyPendingControllersUpdateIfPossible(deferred: Bool = false, completion: (() -> Void)? = nil) {
         guard !isTransitionActive, let pending = pendingControllersUpdate else {
             completion?()
@@ -242,7 +249,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             // was when the animation started — the exact "scroll
             // contentInset wrong after pop" bug.
             for controller in controllers where controller.isViewLoaded {
-                controller.containerLayoutUpdated(layout, transition: transition)
+                controller.containerLayoutUpdated(resolvedLayout(for: controller, baseLayout: layout), transition: transition)
             }
         }
     }
@@ -264,7 +271,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
 
         let frame = CGRect(origin: .zero, size: layout.size)
         transition.updateFrame(view: topController.view, frame: frame)
-        topController.containerLayoutUpdated(layout, transition: transition)
+        topController.containerLayoutUpdated(resolvedLayout(for: topController, baseLayout: layout), transition: transition)
     }
 
     // MARK: - Transitions
@@ -282,13 +289,14 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         // `requestLayout` reentry into this container before the
         // coordinator reference is assigned.
         isInstallingTransition = true
-        to.containerLayoutUpdated(layout, transition: .immediate)
+        to.containerLayoutUpdated(resolvedLayout(for: to, baseLayout: layout), transition: .immediate)
 
         if push {
             to.view.frame = frame.offsetBy(dx: frame.width, dy: 0)
             navigationBarTransitionBegan?(.push, from, to, layout, false)
             bottomBarTransitionBegan?(.push, from, to, layout, false)
             addSubview(to.view)
+            to.containerLayoutUpdated(resolvedLayout(for: to, baseLayout: layout), transition: .immediate)
 
             let coordinator = NavigationTransitionCoordinator(
                 container: self,
@@ -319,6 +327,7 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             navigationBarTransitionBegan?(.pop, from, to, layout, false)
             bottomBarTransitionBegan?(.pop, from, to, layout, false)
             insertSubview(to.view, belowSubview: from.view)
+            to.containerLayoutUpdated(resolvedLayout(for: to, baseLayout: layout), transition: .immediate)
 
             let coordinator = NavigationTransitionCoordinator(
                 container: self,
@@ -419,10 +428,11 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                 }
 
                 previousController.view.frame = CGRect(origin: .zero, size: layout.size)
-                previousController.containerLayoutUpdated(layout, transition: .immediate)
+                previousController.containerLayoutUpdated(resolvedLayout(for: previousController, baseLayout: layout), transition: .immediate)
                 navigationBarTransitionBegan?(.pop, currentController, previousController, layout, true)
                 bottomBarTransitionBegan?(.pop, currentController, previousController, layout, true)
                 insertSubview(previousController.view, belowSubview: currentController.view)
+                previousController.containerLayoutUpdated(resolvedLayout(for: previousController, baseLayout: layout), transition: .immediate)
 
                 let coordinator = NavigationTransitionCoordinator(
                     container: self,
@@ -503,10 +513,23 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
         guard let topController = controllers.last else {
             return false
         }
-        if case let .constant(width)? = topController.interactiveNavivationGestureEdgeWidth, width <= 0.0 {
+        if let edgeWidth = topController.interactiveNavivationGestureEdgeWidth?.effectiveWidth(for: bounds.width), edgeWidth <= 0.0 {
             return false
         }
         return true
+    }
+
+    func interactivePopGestureDirections(at point: CGPoint) -> InteractiveTransitionGestureRecognizerDirections {
+        guard controllers.count > 1 else {
+            return []
+        }
+        guard let topController = controllers.last else {
+            return []
+        }
+        if let edgeWidth = topController.interactiveNavivationGestureEdgeWidth?.effectiveWidth(for: bounds.width), edgeWidth <= 0.0 {
+            return []
+        }
+        return [.leftEdge, .right]
     }
 
     public func combinedSupportedOrientations(currentOrientationToLock: UIInterfaceOrientationMask) -> AetherViewController.SupportedOrientations {

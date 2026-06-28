@@ -1,108 +1,263 @@
 import UIKit
 
-/// Swift-only access to the native keyboard window + the in-process
-/// container view that hosts the visible keyboard region.
+/// Compatibility shim retained for source compatibility with early AetherUI
+/// builds. AetherUI no longer exposes UIKit keyboard internals.
 ///
-/// iOS 14/15: keys render in-process inside `UIInputSetContainerView →
-/// UIInputSetHostView`. Translating `UIInputSetHostView.layer.bounds`
-/// moves the keys in lockstep with a finger — this is the Telegram-iOS
-/// trick used for interactive keyboard dismissal.
-///
-/// iOS 16+: keys render in a separate process
-/// (`com.apple.keyboard.KeyboardManager`), composited via
-/// `_UIRemoteKeyboardPlaceholderView` inside `UIKeyboardItemContainerView`.
-/// The CARemoteLayer surface is pinned to screen coordinates, so
-/// translating any in-process view (window, container, placeholder)
-/// does not move the visible keys. We still return the container
-/// so callers can cheaply no-op on iOS 16+ without branching. Real
-/// drag-tracking on modern iOS requires
-/// `UIScrollView.keyboardDismissMode = .interactive`, which talks to
-/// the keyboard process over XPC.
-///
-/// We sniff class names rather than linking private frameworks so the
-/// code fails gracefully when UIKit reshuffles internals.
+/// Use `AetherKeyboardManager` for supported keyboard state tracking.
+@available(*, deprecated, message: "Use AetherKeyboardManager. Direct keyboard internals are unavailable through AetherUI.")
 public enum AetherKeyboardAccess {
     public static func keyboardWindow() -> UIWindow? {
-        let app = UIApplication.shared
-
-        // 1. Private `internalGetKeyboard` selector — the path
-        // Telegram-iOS uses on iOS 16+. Some build configurations
-        // wire it up, others don't; cheap to try first.
-        let internalSelector = NSSelectorFromString("internalGetKeyboard")
-        if app.responds(to: internalSelector) {
-            if let window = app.perform(internalSelector)?.takeUnretainedValue() as? UIWindow {
-                return window
-            }
-        }
-
-        // 2. iOS 16+: keyboard lives in its own `UIKeyboardScene`.
-        // Walk every connected scene whose class name contains
-        // "Keyboard", grab its windows, and prefer any
-        // `UIRemoteKeyboardWindow` we find there.
-        var keyboardSceneWindows: [UIWindow] = []
-        for scene in app.connectedScenes {
-            let sceneClass = NSStringFromClass(type(of: scene))
-            guard sceneClass.contains("Keyboard") else { continue }
-            if let ws = scene as? UIWindowScene {
-                keyboardSceneWindows.append(contentsOf: ws.windows)
-            }
-        }
-        for window in keyboardSceneWindows
-            where NSStringFromClass(type(of: window)).hasSuffix("RemoteKeyboardWindow") {
-            return window
-        }
-        if let firstSceneWindow = keyboardSceneWindows.first {
-            return firstSceneWindow
-        }
-
-        // 3. Walk regular UI scenes for the legacy keyboard window
-        // classes (iOS ≤15 fallback path).
-        var seen: [UIWindow] = []
-        seen.append(contentsOf: allApplicationWindows())
-        for window in app.windows where !seen.contains(window) {
-            seen.append(window)
-        }
-        for window in seen where NSStringFromClass(type(of: window)).hasSuffix("RemoteKeyboardWindow") {
-            return window
-        }
-        for window in seen where NSStringFromClass(type(of: window)).hasSuffix("TextEffectsWindow") {
-            return window
-        }
-        return nil
+        nil
     }
 
     public static func keyboardView(in window: UIWindow? = nil) -> UIView? {
-        let kwindow = window ?? keyboardWindow()
-        guard let kwindow else { return nil }
-        return findKeyboardHost(in: kwindow)
+        _ = window
+        return nil
+    }
+}
+
+internal enum AetherLegacyKeyboardRuntime {
+    private static weak var lastInteractiveKeyboardView: UIView?
+    private static weak var lastWindowVerticalFallback: UIWindow?
+
+    static func updateInteractiveKeyboardOffset(
+        _ offset: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        completion: (() -> Void)? = nil
+    ) {
+        let keyboardWindow = keyboardWindow()
+        let keyboardView = keyboardView(in: keyboardWindow)
+
+        // Vertical strategies are alternatives. Stacking them makes the
+        // keyboard outrun the interactive gesture.
+        guard let keyboardView else {
+            if let keyboardWindow {
+                applyWindowVerticalFallback(keyboardWindow, offset: offset)
+                lastWindowVerticalFallback = offset.isZero ? nil : keyboardWindow
+            } else if offset.isZero, let lastWindowVerticalFallback {
+                applyWindowVerticalFallback(lastWindowVerticalFallback, offset: 0.0)
+                self.lastWindowVerticalFallback = nil
+            }
+            if offset.isZero, let lastInteractiveKeyboardView {
+                resetBounds(of: lastInteractiveKeyboardView)
+                lastInteractiveKeyboardView.transform = .identity
+                self.lastInteractiveKeyboardView = nil
+            }
+            completion?()
+            return
+        }
+
+        if let lastWindowVerticalFallback {
+            applyWindowVerticalFallback(lastWindowVerticalFallback, offset: 0.0)
+            self.lastWindowVerticalFallback = nil
+        }
+
+        if let previousView = lastInteractiveKeyboardView, previousView !== keyboardView {
+            resetBounds(of: previousView)
+            previousView.transform = .identity
+        }
+        lastInteractiveKeyboardView = keyboardView
+        keyboardView.transform = .identity
+
+        let previousBounds = keyboardView.bounds
+        let updatedBounds = CGRect(
+            origin: CGPoint(x: 0.0, y: -offset),
+            size: previousBounds.size
+        )
+        keyboardView.layer.bounds = updatedBounds
+
+        let finish: () -> Void = {
+            if offset.isZero {
+                self.lastInteractiveKeyboardView = nil
+            }
+            keyboardView.transform = .identity
+            completion?()
+        }
+
+        let surfaceTransition = keyboardSurfaceTransition(
+            targetOffset: offset,
+            previousBoundsMinY: previousBounds.minY,
+            transition: transition
+        )
+
+        if surfaceTransition.isAnimated {
+            surfaceTransition.animateOffsetAdditive(
+                layer: keyboardView.layer,
+                offset: previousBounds.minY - updatedBounds.minY,
+                completion: { _ in finish() }
+            )
+        } else {
+            finish()
+        }
     }
 
-    private static func findKeyboardHost(in view: UIView) -> UIView? {
-        if isKeyboardHost(view) { return view }
+    static func keyboardSurfaceTransition(
+        targetOffset: CGFloat,
+        previousBoundsMinY: CGFloat,
+        transition: ContainedViewLayoutTransition
+    ) -> ContainedViewLayoutTransition {
+        guard targetOffset.isZero, previousBoundsMinY < 0.0 else {
+            return transition
+        }
+        guard case let .animated(duration, curve) = transition else {
+            return transition
+        }
+        switch curve {
+        case .spring, .customSpring:
+            return .animated(duration: duration, curve: .easeInOut)
+        default:
+            return transition
+        }
+    }
+
+    static func keyboardWindow() -> UIWindow? {
+        if let keyboardWindow = bridgedKeyboardWindow() {
+            return keyboardWindow
+        }
+
+        let sceneWindows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+        let legacyWindows = UIApplication.shared.windows.filter { window in
+            !sceneWindows.contains { $0 === window }
+        }
+        let allWindows = sceneWindows + legacyWindows
+
+        if let keyboardWindow = allWindows.first(where: isKeyboardWindow) {
+            return keyboardWindow
+        }
+
+        return allWindows.first { window in
+            NSStringFromClass(type(of: window)).contains("Keyboard")
+        }
+    }
+
+    static func keyboardView(in window: UIWindow? = nil) -> UIView? {
+        let resolvedWindow = window ?? keyboardWindow()
+        guard let keyboardWindow = resolvedWindow else {
+            return nil
+        }
+
+        for view in keyboardWindow.subviews where isKeyboardViewContainer(view) {
+            for subview in view.subviews where isKeyboardView(subview) {
+                return subview
+            }
+        }
+
+        return findKeyboardView(in: keyboardWindow)
+    }
+
+    static func updateKeyboardLeftEdge(
+        _ leftEdge: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        guard let keyboardWindow = keyboardWindow() else {
+            completion?(false)
+            return
+        }
+
+        let currentTransform = keyboardWindow.layer.sublayerTransform
+        let targetTransform = CATransform3DMakeTranslation(leftEdge, currentTransform.m42, 0.0)
+
+        switch transition {
+        case .immediate:
+            keyboardWindow.layer.removeAnimation(forKey: "sublayerTransform")
+            keyboardWindow.layer.sublayerTransform = targetTransform
+            completion?(true)
+        case let .animated(duration, curve):
+            let fromTransform = keyboardWindow.layer.presentation()?.sublayerTransform ?? currentTransform
+            keyboardWindow.layer.sublayerTransform = targetTransform
+
+            let animation = CABasicAnimation(keyPath: "sublayerTransform")
+            animation.fromValue = NSValue(caTransform3D: fromTransform)
+            animation.toValue = NSValue(caTransform3D: targetTransform)
+            animation.duration = duration
+            animation.timingFunction = curve.mediaTimingFunction()
+            keyboardWindow.layer.add(animation, forKey: "sublayerTransform")
+            completion?(true)
+        }
+    }
+
+    static func removeKeyboardAnimations() {
+        guard let keyboardWindow = keyboardWindow() else {
+            return
+        }
+        removeAnimationsRecursively(from: keyboardWindow)
+    }
+
+    static func isKeyboardVisible() -> Bool {
+        guard let keyboardView = keyboardView() else {
+            return false
+        }
+        return keyboardView.window != nil
+            && !keyboardView.isHidden
+            && keyboardView.alpha > 0.0
+            && keyboardView.bounds.height > 0.0
+    }
+
+    private static func bridgedKeyboardWindow() -> UIWindow? {
+        let selector = NSSelectorFromString("aether_internalGetKeyboardWindow")
+        guard UIApplication.shared.responds(to: selector) else {
+            return nil
+        }
+        return UIApplication.shared.perform(selector)?.takeUnretainedValue() as? UIWindow
+    }
+
+    private static func isKeyboardWindow(_ window: UIWindow) -> Bool {
+        let typeName = NSStringFromClass(type(of: window))
+        if #available(iOS 9.0, *) {
+            return typeName.hasPrefix("UI") && typeName.hasSuffix("RemoteKeyboardWindow")
+        } else {
+            return typeName.hasPrefix("UI") && typeName.hasSuffix("TextEffectsWindow")
+        }
+    }
+
+    private static func isKeyboardView(_ view: UIView) -> Bool {
+        let typeName = NSStringFromClass(type(of: view))
+        guard typeName.hasPrefix("UI") || typeName.hasPrefix("_UI") else {
+            return false
+        }
+        return typeName.hasSuffix("InputSetHostView")
+            || typeName.hasSuffix("KeyboardItemContainerView")
+    }
+
+    private static func isKeyboardViewContainer(_ view: UIView) -> Bool {
+        let typeName = NSStringFromClass(type(of: view))
+        return typeName.hasPrefix("UI") && typeName.hasSuffix("InputSetContainerView")
+    }
+
+    private static func findKeyboardView(in view: UIView) -> UIView? {
+        if isKeyboardView(view) {
+            return view
+        }
         for subview in view.subviews {
-            if let result = findKeyboardHost(in: subview) {
+            if let result = findKeyboardView(in: subview) {
                 return result
             }
         }
         return nil
     }
 
-    private static func isKeyboardHost(_ view: UIView) -> Bool {
-        let name = NSStringFromClass(type(of: view))
-        guard name.hasPrefix("UI") || name.hasPrefix("_UI") else { return false }
-        // iOS 16+: visible keyboard region.
-        if name.hasSuffix("KeyboardItemContainerView") { return true }
-        // iOS 14/15: the real thing.
-        if name.hasSuffix("InputSetHostView") { return true }
-        return false
+    private static func resetBounds(of view: UIView) {
+        view.layer.bounds = CGRect(origin: .zero, size: view.bounds.size)
     }
 
-    private static func allApplicationWindows() -> [UIWindow] {
-        var result: [UIWindow] = []
-        for scene in UIApplication.shared.connectedScenes {
-            guard let ws = scene as? UIWindowScene else { continue }
-            result.append(contentsOf: ws.windows)
+    private static func applyWindowVerticalFallback(_ window: UIWindow, offset: CGFloat) {
+        window.transform = .identity
+        let bounds = window.bounds
+        window.frame = CGRect(
+            x: bounds.minX,
+            y: bounds.minY + offset,
+            width: bounds.width,
+            height: bounds.height
+        )
+    }
+
+    private static func removeAnimationsRecursively(from view: UIView) {
+        view.layer.removeAllAnimations()
+        for subview in view.subviews {
+            removeAnimationsRecursively(from: subview)
         }
-        return result
     }
 }

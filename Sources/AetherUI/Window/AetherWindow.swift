@@ -108,93 +108,7 @@ private func layoutMetrics(for size: CGSize) -> LayoutMetrics {
     }
 }
 
-// MARK: - Window Root Controller
-
-private final class AetherWindowRootController: UIViewController {
-
-    private var statusBarStyle: UIStatusBarStyle = .default
-    private var isStatusBarHidden: Bool = false
-
-    var orientations: UIInterfaceOrientationMask = {
-        UIDevice.current.userInterfaceIdiom == .pad ? .all : .allButUpsideDown
-    }() {
-        didSet {
-            guard oldValue != orientations else { return }
-            if #available(iOS 16.0, *) {
-                let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-                windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: orientations))
-                setNeedsUpdateOfSupportedInterfaceOrientations()
-            } else if orientations == .portrait, UIDevice.current.orientation != .portrait {
-                UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
-            } else {
-                UIViewController.attemptRotationToDeviceOrientation()
-            }
-        }
-    }
-
-    var gestureEdges: UIRectEdge = [] {
-        didSet {
-            guard oldValue != gestureEdges else { return }
-            setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
-        }
-    }
-
-    var prefersOnScreenNavHidden: Bool = false {
-        didSet {
-            guard oldValue != prefersOnScreenNavHidden else { return }
-            setNeedsUpdateOfHomeIndicatorAutoHidden()
-        }
-    }
-
-    var transitionToSize: ((CGSize, Double) -> Void)?
-
-    func updateStatusBar(style: UIStatusBarStyle, hidden: Bool, transition: ContainedViewLayoutTransition) {
-        guard statusBarStyle != style || isStatusBarHidden != hidden else { return }
-        statusBarStyle = style
-        isStatusBarHidden = hidden
-        switch transition {
-        case .immediate:
-            setNeedsStatusBarAppearanceUpdate()
-        case .animated:
-            transition.animateView {
-                self.setNeedsStatusBarAppearanceUpdate()
-            }
-        }
-    }
-
-    // MARK: UIViewController overrides
-
-    override var preferredStatusBarStyle: UIStatusBarStyle { statusBarStyle }
-    override var prefersStatusBarHidden: Bool { isStatusBarHidden }
-    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { orientations }
-    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { gestureEdges }
-    override var prefersHomeIndicatorAutoHidden: Bool { prefersOnScreenNavHidden }
-
-    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
-        super.viewWillTransition(to: size, with: coordinator)
-        UIView.performWithoutAnimation {
-            self.transitionToSize?(size, coordinator.transitionDuration)
-        }
-    }
-
-    init() {
-        super.init(nibName: nil, bundle: nil)
-        extendedLayoutIncludesOpaqueBars = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func loadView() {
-        let v = UIView()
-        v.isOpaque = false
-        v.backgroundColor = nil
-        self.view = v
-    }
-}
-
-// MARK: - AetherWindow
+// MARK: - AetherNativeWindow
 
 /// Custom `UIWindow` subclass that provides keyboard tracking, interactive
 /// keyboard dismissal, status bar management, orientation handling, and
@@ -206,11 +120,11 @@ private final class AetherWindowRootController: UIViewController {
 /// window.contentController = myTabBarController   // or nav controller
 /// window.makeKeyAndVisible()
 /// ```
-public final class AetherWindow: UIWindow {
+public final class AetherNativeWindow: UIWindow, AetherWindowHost {
 
     // MARK: - Private State
 
-    private let _rootController = AetherWindowRootController()
+    private let _rootController = AetherWindowRootViewController()
 
     private var windowLayout: WindowLayout
     private var updatingLayout: UpdatingLayout?
@@ -219,9 +133,12 @@ public final class AetherWindow: UIWindow {
 
     // Keyboard
     private var keyboardFrameChangeObserver: NSObjectProtocol?
+    private var keyboardDidHideObserver: NSObjectProtocol?
     private var keyboardTypeChangeObserver: NSObjectProtocol?
     private var keyboardTypeChangeTimer: Timer?
+    private var interactiveKeyboardDismissCleanupWorkItem: DispatchWorkItem?
     private var shouldNotAnimateLikelyKeyboardAutocorrectionSwitch = false
+    private var isCompletingInteractiveKeyboardDismissal = false
 
     // Pan gesture for interactive keyboard dismissal
     private var windowPanRecognizer: AetherWindowPanRecognizer?
@@ -238,6 +155,16 @@ public final class AetherWindow: UIWindow {
     private var forceInCallStatusBarView: UILabel?
 
     // Global overlay / portal
+    private lazy var presentationContext: AetherPresentationContext = {
+        let context = AetherPresentationContext(parentController: _rootController, containerView: _rootController.view)
+        context.topLevelSubview = { [weak self] _ in
+            self?.topLevelOverlayControllers.first?.view
+                ?? self?.globalPortalHostViews.first
+                ?? self?.forceInCallStatusBarView
+                ?? self?.coveringView
+        }
+        return context
+    }()
     private var _topLevelOverlayControllers: [UIViewController] = []
     private var globalPortalHostViews: [UIView] = []
     private var forceBadgeHidden = true
@@ -263,12 +190,15 @@ public final class AetherWindow: UIWindow {
                 _rootController.addChild(controller)
                 _rootController.view.insertSubview(controller.view, at: 0)
                 controller.didMove(toParent: _rootController)
+                presentationContext.underlyingAccessibilityViews = [controller.view]
 
                 if !windowLayout.size.width.isZero && !windowLayout.size.height.isZero {
                     controller.view.frame = CGRect(origin: .zero, size: windowLayout.size)
                     let layout = containedLayout(from: windowLayout)
                     updateContentController(layout: layout, transition: .immediate)
                 }
+            } else {
+                presentationContext.underlyingAccessibilityViews = []
             }
         }
     }
@@ -280,7 +210,7 @@ public final class AetherWindow: UIWindow {
     }
 
     /// Controllers displayed above the main root controller, matching
-    /// Telegram-iOS' top-level overlay surface. They receive the same
+    /// AetherUI's top-level overlay surface. They receive the same
     /// keyboard-aware `ContainerViewLayout` as the content controller.
     public var topLevelOverlayControllers: [UIViewController] {
         get {
@@ -408,6 +338,28 @@ public final class AetherWindow: UIWindow {
         }
     }
 
+    public func present(
+        _ controller: AetherContainableController,
+        on level: AetherPresentationSurfaceLevel,
+        blockInteraction: Bool,
+        completion: @escaping () -> Void
+    ) {
+        let viewController = controller.aetherViewController
+        if level >= .globalOverlay {
+            presentInGlobalOverlay(viewController, animated: true, completion: completion)
+        } else {
+            presentationContext.present(controller, on: level, blockInteraction: blockInteraction, completion: completion)
+        }
+    }
+
+    public func presentInGlobalOverlay(_ controller: AetherContainableController) {
+        presentInGlobalOverlay(controller.aetherViewController, animated: true)
+    }
+
+    public func presentNative(_ controller: UIViewController) {
+        _rootController.present(controller, animated: true)
+    }
+
     public func addGlobalPortalHostView(_ view: UIView) {
         guard !globalPortalHostViews.contains(where: { $0 === view }) else {
             return
@@ -416,6 +368,13 @@ public final class AetherWindow: UIWindow {
         _rootController.view.addSubview(view)
         view.frame = CGRect(origin: .zero, size: windowLayout.size)
         reorderTopLevelSurfaces()
+    }
+
+    public func addGlobalPortalHostView(sourceView: AetherPortalSourceView) {
+        let portal = AetherPortalView(sourceView: sourceView)
+        portal.isUserInteractionEnabled = false
+        sourceView.setGlobalPortal(portal)
+        addGlobalPortalHostView(portal)
     }
 
     public func removeGlobalPortalHostView(_ view: UIView) {
@@ -472,6 +431,15 @@ public final class AetherWindow: UIWindow {
             }
         }
         keyboardGestureBeginLocation = nil
+    }
+
+    public func forEachController(_ body: (AetherContainableController) -> Void) {
+        if let contentController {
+            body(contentController)
+        }
+        for controller in topLevelOverlayControllers {
+            body(controller)
+        }
     }
 
     public func simulateKeyboardDismiss(transition: ContainedViewLayoutTransition = .animated(duration: 0.25, curve: .spring)) {
@@ -580,12 +548,16 @@ public final class AetherWindow: UIWindow {
         if let observer = keyboardFrameChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = keyboardDidHideObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let observer = keyboardTypeChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = voiceOverObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        interactiveKeyboardDismissCleanupWorkItem?.cancel()
         keyboardTypeChangeTimer?.invalidate()
     }
 
@@ -622,13 +594,23 @@ public final class AetherWindow: UIWindow {
         if let covering = coveringView, !covering.isHidden, covering.frame.contains(point) {
             return covering.hitTest(point, with: event)
         }
+        for controller in topLevelOverlayControllers.reversed() where controller.isViewLoaded {
+            let converted = convert(point, to: controller.view)
+            if let result = controller.view.hitTest(converted, with: event) {
+                return result
+            }
+        }
+        let rootPoint = convert(point, to: _rootController.view)
+        if let result = presentationContext.hitTest(point: rootPoint, in: _rootController.view, with: event) {
+            return result
+        }
         return super.hitTest(point, with: event)
     }
 
     // MARK: - Setup
 
     private func setupRootControllerCallbacks() {
-        _rootController.transitionToSize = { [weak self] size, duration in
+        _rootController.transitionToSize = { [weak self] size, duration, _ in
             guard let self else { return }
             let transition: ContainedViewLayoutTransition = duration > .ulpOfOne
                 ? .animated(duration: duration, curve: .easeInOut)
@@ -652,6 +634,14 @@ public final class AetherWindow: UIWindow {
             queue: nil
         ) { [weak self] notification in
             self?.handleKeyboardFrameChange(notification)
+        }
+
+        keyboardDidHideObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardDidHideNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleKeyboardDidHide()
         }
 
         keyboardTypeChangeObserver = NotificationCenter.default.addObserver(
@@ -836,10 +826,20 @@ public final class AetherWindow: UIWindow {
                 transition = .immediate
             }
         }
+        if isCompletingInteractiveKeyboardDismissal && keyboardHeight.isLessThanOrEqualTo(0.0) {
+            transition = .immediate
+        }
 
         updateLayout {
             $0.updateInputHeight(keyboardHeight.isLessThanOrEqualTo(0.0) ? nil : keyboardHeight, transition: transition, overrideTransition: false)
         }
+    }
+
+    private func handleKeyboardDidHide() {
+        guard isCompletingInteractiveKeyboardDismissal || windowLayout.upperKeyboardInputPositionBound != nil else {
+            return
+        }
+        finishInteractiveKeyboardDismissalCleanup()
     }
 
     private func handleKeyboardTypeChange() {
@@ -882,10 +882,8 @@ public final class AetherWindow: UIWindow {
     /// Toggle the window-level pan recognizer that drives the
     /// `upperKeyboardInputPositionBound` flow. Disable it from a
     /// chat controller that prefers the system
-    /// `UIScrollView.keyboardDismissMode = .interactive` path —
-    /// that's the only mechanism on iOS 26+ that physically moves
-    /// the out-of-process keyboard via XPC; running both at once
-    /// fights itself.
+    /// `UIScrollView.keyboardDismissMode = .interactive` path; running
+    /// both recognizers at once fights itself.
     public func setInteractiveKeyboardPanEnabled(_ enabled: Bool) {
         windowPanRecognizer?.isEnabled = enabled
     }
@@ -961,8 +959,50 @@ public final class AetherWindow: UIWindow {
             }
         } else {
             updateLayout {
-                $0.updateUpperKeyboardInputPositionBound(nil, transition: .animated(duration: 0.25, curve: .spring), overrideTransition: false)
+                $0.updateUpperKeyboardInputPositionBound(nil, transition: .animated(duration: 0.25, curve: .easeInOut), overrideTransition: false)
             }
+        }
+    }
+
+    private func beginInteractiveKeyboardDismissalCleanup() {
+        guard !isCompletingInteractiveKeyboardDismissal else {
+            return
+        }
+        isCompletingInteractiveKeyboardDismissal = true
+        interactiveKeyboardDismissCleanupWorkItem?.cancel()
+
+        if let firstResponder = _rootController.view.findFirstResponder() {
+            firstResponder.resignFirstResponder()
+        } else {
+            finishInteractiveKeyboardDismissalCleanup()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.isCompletingInteractiveKeyboardDismissal else {
+                return
+            }
+            if !AetherLegacyKeyboardRuntime.isKeyboardVisible() {
+                self.finishInteractiveKeyboardDismissalCleanup()
+            }
+        }
+        interactiveKeyboardDismissCleanupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+    }
+
+    private func finishInteractiveKeyboardDismissalCleanup() {
+        interactiveKeyboardDismissCleanupWorkItem?.cancel()
+        interactiveKeyboardDismissCleanupWorkItem = nil
+        isCompletingInteractiveKeyboardDismissal = false
+
+        AetherLegacyKeyboardRuntime.updateInteractiveKeyboardOffset(0.0, transition: .immediate)
+
+        guard windowLayout.upperKeyboardInputPositionBound != nil || windowLayout.inputHeight != nil else {
+            return
+        }
+        updateLayout {
+            $0.updateInputHeight(nil, transition: .immediate, overrideTransition: false)
+            $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
         }
     }
 
@@ -970,87 +1010,19 @@ public final class AetherWindow: UIWindow {
         // Gesture state is handled via the began/moved/ended callbacks
     }
 
-    /// Shift the keyboard vertically by `offset` points (positive =
-    /// keyboard slides further down). Two strategies layered:
-    ///
-    /// 1. `keyboardWindow.frame` translation — port of Telegram's
-    ///    legacy `[TGHacks setApplicationKeyboardOffset:]`. Works on
-    ///    every iOS version because the keyboard window (be it the
-    ///    iOS ≤15 `UITextEffectsWindow` or the iOS 16+ `UIRemoteKeyboardWindow`)
-    ///    lives in our process; mutating its frame moves the
-    ///    composed surface visibly.
-    /// 2. `keyboardView.layer.bounds` translation — port of the
-    ///    modern Telegram `KeyboardManager.updateInteractiveInputOffset`.
-    ///    Useful on iOS ≤15 where the keys render in-process inside
-    ///    `UIInputSetHostView`. On iOS 16+ it's a no-op for the
-    ///    out-of-process keys but still keeps any in-process accessory
-    ///    overlay in sync, so we keep it as a belt-and-braces.
-    ///
-    /// We never rely on `UIScrollView.keyboardDismissMode = .interactive`
-    /// — the entire interactive flow lives inside our window pan
-    /// recognizer.
+    /// Applies the Telegram-style interactive keyboard offset through the
+    /// framework-internal legacy bridge. The lookup details stay inside
+    /// AetherUI; external apps only opt into the window mechanics.
     private func updateInteractiveKeyboardOffset(
         _ offset: CGFloat,
         transition: ContainedViewLayoutTransition,
         completion: (() -> Void)? = nil
     ) {
-        let kwindow = AetherKeyboardAccess.keyboardWindow()
-        let kview = AetherKeyboardAccess.keyboardView(in: kwindow)
-
-        // Try every translation strategy we know about, top-down:
-        //
-        //   1. `kwindow.transform` — the cleanest knob; UIWindow
-        //      mostly accepts identity-or-translate. Either works
-        //      or is silently ignored.
-        //   2. `kwindow.frame` — legacy `TGHacks` path. Some iOS
-        //      versions reset window frames during their keyboard
-        //      pipeline ticks, so this might race with the system.
-        //   3. `kview.transform` on the inner container — the
-        //      `UIKeyboardItemContainerView` / `UIInputSetHostView`
-        //      we sniff. On iOS ≤15 this physically translates
-        //      keys; on iOS 16+ may visually translate the
-        //      composited remote layer if the system honours the
-        //      transform tree.
-        //   4. `kview.layer.bounds` — Telegram-iOS modern
-        //      `KeyboardManager` path.
-        //
-        // We apply 1, 2, 3 unconditionally and verify the resulting
-        // window frame so the diagnostic log can tell us which (if
-        // any) actually stuck.
-        let translation = CGAffineTransform(translationX: 0, y: offset)
-
-        if let kwindow = kwindow {
-            kwindow.transform = translation
-
-            // Frame as well — older OSes prefer this knob.
-            let bounds = kwindow.bounds
-            kwindow.frame = CGRect(
-                x: 0,
-                y: offset,
-                width: bounds.width,
-                height: bounds.height
-            )
-
-        }
-
-        if let keyboardView = kview {
-            keyboardView.transform = translation
-
-            let previousBounds = keyboardView.bounds
-            let updatedBounds = CGRect(origin: CGPoint(x: 0.0, y: -offset), size: previousBounds.size)
-            keyboardView.layer.bounds = updatedBounds
-
-            if transition.isAnimated {
-                transition.animateOffsetAdditive(
-                    layer: keyboardView.layer,
-                    offset: previousBounds.minY - updatedBounds.minY,
-                    completion: { _ in completion?() }
-                )
-                return
-            }
-        }
-
-        completion?()
+        AetherLegacyKeyboardRuntime.updateInteractiveKeyboardOffset(
+            offset,
+            transition: transition,
+            completion: completion
+        )
     }
 
     // MARK: - Layout Update Batching
@@ -1107,6 +1079,24 @@ public final class AetherWindow: UIWindow {
         let childLayoutUpdated = updatedContainerLayout != childLayout
         updatedContainerLayout = childLayout
 
+        let runtimeLayout = AetherWindowLayout(
+            size: windowLayout.size,
+            safeAreaInsets: windowLayout.safeInsets,
+            statusBarHeight: windowLayout.statusBarHeight,
+            keyboardHeight: childLayout.inputHeight ?? 0.0,
+            orientation: _rootController.currentInterfaceOrientation(),
+            horizontalSizeClass: childLayout.metrics.widthClass == .regular ? .regular : .compact,
+            verticalSizeClass: windowLayout.size.width > windowLayout.size.height ? .compact : .regular,
+            isVoiceOverRunning: windowLayout.inVoiceOver,
+            transition: AetherWindowLayout.Transition(
+                reason: .manual,
+                duration: pending.transition.duration,
+                curve: .easeInOut,
+                isInteractive: childLayout.inputHeightIsInteractivellyChanging
+            )
+        )
+        presentationContext.updateLayout(runtimeLayout, transition: pending.transition)
+
         if childLayoutUpdated {
             if let controller = contentController {
                 pending.transition.updateFrame(view: controller.view, frame: CGRect(origin: .zero, size: windowLayout.size))
@@ -1117,22 +1107,13 @@ public final class AetherWindow: UIWindow {
             }
         }
 
-        // Commit the interactive keyboard offset to the native
-        // keyboard container.
-        //
-        // Telegram-iOS calls `keyboardManager.updateInteractiveInputOffset`
-        // unconditionally — they don't gate on iOS version. We do the
-        // same: on iOS ≤15 the keys live inside `UIInputSetHostView`
-        // and the layer shift is fully visible; on iOS 16+ the
-        // visible region (`UIKeyboardItemContainerView`) is what we
-        // also translate, and that view does respond to local layer
-        // mutations (Telegram's chat keyboard demonstrably moves with
-        // the finger on iOS 17/18, ruling out the earlier theory that
-        // it can't be moved out-of-process). When the gesture ends
-        // and the bound parks at the bottom we resign first responder
-        // so UIKit hides the keyboard with its own animation.
+        // Commit the interactive keyboard offset to both Aether layout and the
+        // native keyboard surface when UIKit exposes the legacy host view.
         let updatedInputOffset = inputHeightOffset(for: windowLayout)
-        if !previousInputOffset.isEqual(to: updatedInputOffset) {
+        let shouldDeferKeyboardOffsetReset = isCompletingInteractiveKeyboardDismissal
+            && updatedInputOffset.isZero
+            && pending.layout.inputHeight == nil
+        if !previousInputOffset.isEqual(to: updatedInputOffset), !shouldDeferKeyboardOffsetReset {
             let isHiding = pending.transition.isAnimated
                 && pending.layout.upperKeyboardInputPositionBound == pending.layout.size.height
             updateInteractiveKeyboardOffset(
@@ -1140,10 +1121,7 @@ public final class AetherWindow: UIWindow {
                 transition: pending.transition
             ) { [weak self] in
                 guard let self, isHiding else { return }
-                self.updateLayout {
-                    $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
-                }
-                self._rootController.view.findFirstResponder()?.resignFirstResponder()
+                self.beginInteractiveKeyboardDismissalCleanup()
             }
         }
 
@@ -1208,3 +1186,5 @@ public extension UIView {
         return nil
     }
 }
+
+public typealias AetherWindow = AetherNativeWindow

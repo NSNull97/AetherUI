@@ -43,8 +43,8 @@ Telegram-iOS, но без зависимости от `ASDisplayNode` и legacy-
 Иерархия контроллеров и view-объектов на типовом экране:
 
 ```
-AetherWindow
- └── AetherWindowRootController          // private, status bar / orientation
+AetherNativeWindow / AetherWindow
+ └── AetherWindowRootViewController      // status bar / orientation / system UI
       └── AetherTabBarController
            ├── TabBarView                  // floating glass pill + search
            ├── (опц.) TabBarAccessoryView  // полоса над pill'ом (Now Playing и т.п.)

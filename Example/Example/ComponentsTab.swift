@@ -5,6 +5,7 @@ import AetherUI
 func makeComponentsRoot() -> AetherViewController {
     return DemoListController(title: "Components", rows: [
         .init("Navigation + Window", "shared bar / modal nav / global overlay", { NavigationSurfaceDemoController() }),
+        .init("Window Runtime", "overlays / keyboard / portal / child host", { AetherWindowRuntimeDemoController() }),
         .init("Buttons", "UIKit + Glass", { ButtonsDemoController() }),
         .init("Alerts", "single / pair / stacked + поля", { AlertsDemoController() }),
         .init("ActionSheet", "buttons / checkbox / switch", { ActionSheetDemoController() }),
@@ -212,6 +213,187 @@ private final class GlobalOverlayDemoController: AetherViewController {
         card.update(size: card.bounds.size, cornerRadius: 26, transition: .immediate)
         label.frame = CGRect(x: 16, y: 28, width: card.bounds.width - 32, height: 30)
         close.frame = CGRect(x: 16, y: 86, width: card.bounds.width - 32, height: 44)
+    }
+}
+
+final class AetherWindowRuntimeDemoController: DemoController {
+    override var demoTitle: String { "Window Runtime" }
+
+    private let portalSource = AetherPortalSourceView()
+    private let childHost = AetherChildWindowHostView()
+    private let composer = UITextField()
+    private var lightStatusBar = false
+    private var deferEdges = false
+    private var hideHomeIndicator = false
+
+    override var prefersHomeIndicatorAutoHidden: Bool {
+        hideHomeIndicator
+    }
+
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        deferEdges ? [.bottom] : []
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        installComposer()
+    }
+
+    override func buildDemo() {
+        addLabel("AetherNativeWindow runtime: presentation levels, global overlays, system UI invalidation, keyboard-aware layout, portal fallback, and embedded child host.")
+        addButton("Present level overlay") { [weak self] in self?.presentLevelOverlay() }
+        addButton("Present global overlay") { [weak self] in self?.presentRuntimeGlobalOverlay() }
+        addButton("Toggle status bar style") { [weak self] in self?.toggleStatusBar() }
+        addButton("Toggle home indicator") { [weak self] in self?.toggleHomeIndicator() }
+        addButton("Toggle bottom edge deferral") { [weak self] in self?.toggleScreenEdgeDeferral() }
+        addButton("Focus keyboard composer") { [weak self] in self?.composer.becomeFirstResponder() }
+        addButton("Toggle source global portal") { [weak self] in self?.togglePortal() }
+
+        portalSource.backgroundColor = .systemTeal
+        portalSource.layer.cornerRadius = 12
+        portalSource.accessibilityLabel = "Portal source"
+        addCenteredView(portalSource, height: 56)
+        portalSource.widthAnchor.constraint(equalToConstant: 160).isActive = true
+
+        childHost.layer.borderColor = UIColor.separator.cgColor
+        childHost.layer.borderWidth = 1
+        childHost.layer.cornerRadius = 12
+        addCenteredView(childHost, height: 120)
+        childHost.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        installChildHostContent()
+    }
+
+    private func installComposer() {
+        composer.placeholder = "Keyboard runtime composer"
+        composer.borderStyle = .roundedRect
+        composer.returnKeyType = .done
+        composer.delegate = self
+        inputBarAccessoryView = composer
+        setInputBarAccessoryReservedHeight(52)
+    }
+
+    private func installChildHostContent() {
+        let label = UILabel()
+        label.text = "Child host"
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 16, weight: .semibold)
+        label.frame = CGRect(x: 0, y: 16, width: 260, height: 24)
+        childHost.addSubview(label)
+
+        let button = UIButton(type: .system)
+        button.setTitle("Present local", for: .normal)
+        button.frame = CGRect(x: 40, y: 58, width: 180, height: 42)
+        button.addAction(UIAction { [weak self] _ in
+            self?.presentChildOverlay()
+        }, for: .touchUpInside)
+        childHost.addSubview(button)
+    }
+
+    private func presentLevelOverlay() {
+        let controller = RuntimeOverlayController(title: "Level overlay", backgroundAlpha: 0.22)
+        if let window = view.window as? AetherWindowHost {
+            window.present(controller, on: .overlay, blockInteraction: true) {}
+        } else {
+            present(controller, animated: true)
+        }
+    }
+
+    private func presentRuntimeGlobalOverlay() {
+        let controller = RuntimeOverlayController(title: "Global overlay", backgroundAlpha: 0.18)
+        if let window = view.window as? AetherWindow {
+            window.presentInGlobalOverlay(controller, animated: true)
+        }
+    }
+
+    private func presentChildOverlay() {
+        let controller = RuntimeOverlayController(title: "Local child overlay", backgroundAlpha: 0.12)
+        controller.onDismiss = { [weak childHost, weak controller] in
+            guard let controller else { return }
+            childHost?.presentationContext.dismiss(controller)
+        }
+        childHost.present(controller, on: .overlay, blockInteraction: true) {}
+    }
+
+    private func toggleStatusBar() {
+        lightStatusBar.toggle()
+        statusBarStyle = lightStatusBar ? .lightContent : .default
+        (view.window as? AetherWindow)?.updateStatusBar(style: statusBarStyle, hidden: false, transition: .animated(duration: 0.2, curve: .easeInOut))
+    }
+
+    private func toggleHomeIndicator() {
+        hideHomeIndicator.toggle()
+        view.window?.setNeedsLayout()
+        (view.window as? AetherWindow)?.invalidatePrefersOnScreenNavigationHidden()
+    }
+
+    private func toggleScreenEdgeDeferral() {
+        deferEdges.toggle()
+        (view.window as? AetherWindow)?.invalidateDeferScreenEdgeGestures()
+    }
+
+    private func togglePortal() {
+        portalSource.needsGlobalPortal.toggle()
+    }
+}
+
+extension AetherWindowRuntimeDemoController: UITextFieldDelegate {
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
+    }
+}
+
+private final class RuntimeOverlayController: AetherViewController {
+    private let titleText: String
+    private let backgroundAlpha: CGFloat
+    private let card = GlassBackgroundView(style: .regular)
+    private let label = UILabel()
+    private let close = UIButton(type: .system)
+    var onDismiss: (() -> Void)?
+
+    init(title: String, backgroundAlpha: CGFloat) {
+        self.titleText = title
+        self.backgroundAlpha = backgroundAlpha
+        super.init(navigationBarPresentationData: nil)
+        displayNavigationBar = false
+    }
+
+    required init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor.black.withAlphaComponent(backgroundAlpha)
+        view.addSubview(card)
+        label.text = titleText
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 17, weight: .semibold)
+        card.contentView.addSubview(label)
+        close.setTitle("Dismiss", for: .normal)
+        close.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            if let onDismiss = self.onDismiss {
+                onDismiss()
+                return
+            }
+            if let window = self.view.window as? AetherWindow {
+                window.dismissGlobalOverlay(self, animated: true)
+            } else {
+                self.view.removeFromSuperview()
+                self.removeFromParent()
+            }
+        }, for: .touchUpInside)
+        card.contentView.addSubview(close)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = min(300, view.bounds.width - 48)
+        card.frame = CGRect(x: (view.bounds.width - width) * 0.5, y: (view.bounds.height - 140) * 0.5, width: width, height: 140)
+        card.update(size: card.bounds.size, cornerRadius: 24, transition: .immediate)
+        label.frame = CGRect(x: 16, y: 28, width: card.bounds.width - 32, height: 28)
+        close.frame = CGRect(x: 16, y: 82, width: card.bounds.width - 32, height: 42)
     }
 }
 

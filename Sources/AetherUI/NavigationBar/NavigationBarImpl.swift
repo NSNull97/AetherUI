@@ -126,6 +126,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     public let stripeView: UIView
     private let clippingView: SparseView
     private let buttonsContainerView: UIView
+    private let buttonLayer: AetherNavigationBarButtonLayer
 
     private let backButtonView: NavigationBackButtonView
     private let backArrowView: UIImageView
@@ -220,7 +221,64 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     private var buttonMorphTransitionOverride: ContainedViewLayoutTransition?
     private var leftSeparatedButtonGlueAnimator: NavigationSeparatedButtonGlueAnimator?
     private var rightSeparatedButtonGlueAnimator: NavigationSeparatedButtonGlueAnimator?
-    private let barButtonSourceCoordinator = SourceProxyCoordinator()
+    private var legacyLeftButtonViewsByID: [BarButtonID: UIView] = [:]
+    private var legacyRightButtonViewsByID: [BarButtonID: UIView] = [:]
+    private var appearingTitleContentViewIDs = Set<ObjectIdentifier>()
+    private var appearingVisualViewIDs = Set<ObjectIdentifier>()
+    private var disappearingVisualViewIDs = Set<ObjectIdentifier>()
+    private var disappearingVisualInteractionByID: [ObjectIdentifier: Bool] = [:]
+    private var buttonsRowAlpha: CGFloat = 1.0
+    private var currentButtonsRowFrame: CGRect = .zero
+    internal var hostsNavigationItemTitleView: Bool = true {
+        didSet {
+            guard oldValue != hostsNavigationItemTitleView else {
+                return
+            }
+            updateItemContent()
+        }
+    }
+
+    internal static var defaultButtonHostingMode: AetherNavigationBarButtonHostingMode = .separatedLayer
+    internal var buttonHostingMode: AetherNavigationBarButtonHostingMode {
+        didSet {
+            guard oldValue != buttonHostingMode else {
+                return
+            }
+            installButtonChromeViewsForCurrentHostingMode(preservePresentationLayer: true)
+            installTitleContentViewForCurrentHostingMode(preservePresentationLayer: true)
+        }
+    }
+
+    internal weak var buttonLayerHostView: UIView? {
+        didSet {
+            guard buttonLayerHostView !== oldValue else {
+                return
+            }
+            installButtonLayerForCurrentHost(preservePresentationLayer: true)
+            updateButtonLayerFrame(currentButtonsRowFrame, transition: .immediate)
+            updateButtonLayerEffectiveVisibility()
+        }
+    }
+
+    internal var debugButtonLayer: AetherNavigationBarButtonLayer {
+        buttonLayer
+    }
+
+    internal var debugButtonsContainerView: UIView {
+        buttonsContainerView
+    }
+
+    override public var alpha: CGFloat {
+        didSet {
+            updateButtonLayerEffectiveVisibility()
+        }
+    }
+
+    override public var isHidden: Bool {
+        didSet {
+            updateButtonLayerEffectiveVisibility()
+        }
+    }
 
     public struct ButtonChromeLayout {
         public var leftFrame: CGRect?
@@ -254,6 +312,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         self.stripeView = UIView()
         self.clippingView = SparseView()
         self.buttonsContainerView = UIView()
+        self.buttonLayer = AetherNavigationBarButtonLayer()
 
         self.backButtonView = NavigationBackButtonView()
         self.backArrowView = UIImageView()
@@ -264,6 +323,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         self.leftButtonGlassContainer = GlassBackgroundContainerView(spacing: 7.0)
         self.rightButtonGlassContainer = GlassBackgroundContainerView(spacing: 7.0)
         self.badgeView = NavigationBarBadgeView()
+        self.buttonHostingMode = Self.defaultButtonHostingMode
 
         super.init(frame: .zero)
 
@@ -287,7 +347,6 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // Back arrow
         backArrowView.image = NavigationBarTheme.generateBackArrowImage(color: theme.buttonColor)
         backArrowView.contentMode = .center
-        buttonsContainerView.addSubview(backArrowView)
 
         // Back button
         backButtonView.color = theme.buttonColor
@@ -299,7 +358,6 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         backButtonView.usesGlassStyle = theme.style == .glass
         backButtonView.icon = NavigationBarTheme.generateBackArrowImage(color: theme.buttonColor)
         backButtonView.action = { [weak self] in self?.backButtonPressed() }
-        buttonsContainerView.addSubview(backButtonView)
 
         // Title
         titleLabel.font = UIFont.systemFont(ofSize: 17.0, weight: .semibold)
@@ -322,11 +380,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         rightButtonContainer.clipsToBounds = false
         leftButtonContainer.addSubview(leftButtonGlassContainer)
         rightButtonContainer.addSubview(rightButtonGlassContainer)
-        buttonsContainerView.addSubview(leftButtonContainer)
-        buttonsContainerView.addSubview(rightButtonContainer)
 
-        // Badge
-        buttonsContainerView.addSubview(badgeView)
+        installButtonChromeViewsForCurrentHostingMode(preservePresentationLayer: false)
 
         // Glass style
         if theme.style == .glass {
@@ -381,12 +436,459 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         if passthroughTouches {
             // Only respond to touches on interactive elements
             let result = super.hitTest(point, with: event)
-            if result === self || result === clippingView || result === buttonsContainerView {
+            if result === self || result === clippingView || result === buttonsContainerView || result === buttonLayer {
                 return nil
             }
             return result
         }
         return super.hitTest(point, with: event)
+    }
+
+    private var usesSeparatedButtonHosting: Bool {
+        buttonHostingMode == .separatedLayer
+    }
+
+    private var isButtonLayerExternallyHosted: Bool {
+        usesSeparatedButtonHosting && buttonLayerHostView != nil && buttonLayer.superview !== self
+    }
+
+    private var buttonChromeViews: [UIView] {
+        [backArrowView, backButtonView, leftButtonContainer, rightButtonContainer, badgeView]
+    }
+
+    private func resolvedButtonLayerHostView() -> UIView {
+        buttonLayerHostView ?? self
+    }
+
+    private func buttonLayerFrame(for rowFrame: CGRect) -> CGRect {
+        guard let buttonLayerHostView else {
+            return rowFrame
+        }
+        if superview != nil {
+            return convert(rowFrame, to: buttonLayerHostView)
+        }
+        return CGRect(
+            x: frame.minX + rowFrame.minX,
+            y: frame.minY + rowFrame.minY,
+            width: rowFrame.width,
+            height: rowFrame.height
+        )
+    }
+
+    private func installButtonLayerForCurrentHost(preservePresentationLayer: Bool) {
+        guard usesSeparatedButtonHosting else {
+            buttonLayer.isHidden = true
+            return
+        }
+
+        let hostView = resolvedButtonLayerHostView()
+        if buttonLayer.superview !== hostView {
+            AetherNavigationBarButtonLayer.reparentPreservingPresentation(
+                view: buttonLayer,
+                from: buttonLayer.superview,
+                to: hostView,
+                targetFrame: buttonLayerFrame(for: currentButtonsRowFrame),
+                preservePresentationLayer: preservePresentationLayer
+            )
+        }
+        updateButtonLayerEffectiveVisibility()
+    }
+
+    private func installButtonChromeViewsForCurrentHostingMode(preservePresentationLayer: Bool) {
+        installButtonLayerForCurrentHost(preservePresentationLayer: preservePresentationLayer)
+
+        let hostView: UIView = usesSeparatedButtonHosting ? buttonLayer : buttonsContainerView
+
+        for view in buttonChromeViews where view.superview !== hostView {
+            AetherNavigationBarButtonLayer.reparentPreservingPresentation(
+                view: view,
+                from: view.superview,
+                to: hostView,
+                targetFrame: view.frame,
+                preservePresentationLayer: preservePresentationLayer
+            )
+        }
+
+        if !usesSeparatedButtonHosting {
+            buttonLayer.removeAllButtonPlacements(detachViews: false)
+        }
+    }
+
+    private func installTitleContentViewForCurrentHostingMode(preservePresentationLayer: Bool) {
+        guard let titleContentView else {
+            buttonLayer.removeButtonPlacement(id: ButtonChromePlacementID.titleContentView, detachView: false)
+            return
+        }
+
+        installButtonLayerForCurrentHost(preservePresentationLayer: preservePresentationLayer)
+        let hostView: UIView = usesSeparatedButtonHosting ? buttonLayer : buttonsContainerView
+        if titleContentView.superview !== hostView {
+            AetherNavigationBarButtonLayer.reparentPreservingPresentation(
+                view: titleContentView,
+                from: titleContentView.superview,
+                to: hostView,
+                targetFrame: titleContentView.frame,
+                preservePresentationLayer: preservePresentationLayer
+            )
+        }
+        if !usesSeparatedButtonHosting {
+            buttonLayer.removeButtonPlacement(id: ButtonChromePlacementID.titleContentView, detachView: false)
+        }
+    }
+
+    private func updateButtonsRowFrame(_ frame: CGRect, transition: ContainedViewLayoutTransition) {
+        currentButtonsRowFrame = frame
+        let geometryTransition: ContainedViewLayoutTransition = buttonMorphTransitionOverride == nil ? transition : .immediate
+        performMorphGeometryWithoutAnimation {
+            geometryTransition.updateFrame(view: buttonsContainerView, frame: frame)
+            if usesSeparatedButtonHosting {
+                updateButtonLayerFrame(frame, transition: geometryTransition)
+            }
+        }
+    }
+
+    private func updateButtonLayerFrame(_ rowFrame: CGRect, transition: ContainedViewLayoutTransition) {
+        guard usesSeparatedButtonHosting else {
+            return
+        }
+        installButtonLayerForCurrentHost(preservePresentationLayer: transition.isAnimated)
+        transition.updateFrame(view: buttonLayer, frame: buttonLayerFrame(for: rowFrame))
+    }
+
+    private func setButtonsRowAlpha(_ alpha: CGFloat) {
+        buttonsRowAlpha = alpha
+        buttonsContainerView.alpha = alpha
+        updateButtonLayerEffectiveVisibility()
+    }
+
+    private func updateButtonLayerEffectiveVisibility() {
+        guard usesSeparatedButtonHosting else {
+            buttonLayer.isHidden = true
+            buttonLayer.alpha = 1.0
+            return
+        }
+
+        buttonLayer.isHidden = isButtonLayerExternallyHosted ? isHidden : false
+        buttonLayer.alpha = buttonsRowAlpha * (isButtonLayerExternallyHosted ? alpha : 1.0)
+    }
+
+    internal func bringButtonLayerToFrontIfNeeded() {
+        guard usesSeparatedButtonHosting, let superview = buttonLayer.superview, superview.subviews.last !== buttonLayer else {
+            return
+        }
+        superview.bringSubviewToFront(buttonLayer)
+    }
+
+    internal func detachButtonLayerFromHost() {
+        buttonLayer.removeFromSuperview()
+    }
+
+    private enum ButtonChromePlacementID: Hashable {
+        case leftContainer
+        case rightContainer
+        case backButton
+        case backArrow
+        case badge
+        case titleContentView
+        case outgoingTitleContentView(ObjectIdentifier)
+    }
+
+    private func buttonChromePlacementID(for view: UIView) -> ButtonChromePlacementID? {
+        if let titleContentView, view === titleContentView {
+            return .titleContentView
+        }
+        if view === leftButtonContainer {
+            return .leftContainer
+        }
+        if view === rightButtonContainer {
+            return .rightContainer
+        }
+        if view === backButtonView {
+            return .backButton
+        }
+        if view === backArrowView {
+            return .backArrow
+        }
+        if view === badgeView {
+            return .badge
+        }
+        return nil
+    }
+
+    private func buttonChromeAccessibilityOrder(for id: ButtonChromePlacementID) -> Int {
+        switch id {
+        case .backArrow:
+            return 0
+        case .backButton:
+            return 1
+        case .leftContainer:
+            return 2
+        case .titleContentView:
+            return 3
+        case .outgoingTitleContentView:
+            return 3
+        case .rightContainer:
+            return 4
+        case .badge:
+            return 5
+        }
+    }
+
+    private func buttonChromeZIndex(for id: ButtonChromePlacementID) -> CGFloat {
+        switch id {
+        case .backArrow:
+            return 0
+        case .backButton:
+            return 1
+        case .leftContainer:
+            return 2
+        case .rightContainer:
+            return 2
+        case .titleContentView:
+            return 2.5
+        case .outgoingTitleContentView:
+            return 2.5
+        case .badge:
+            return 3
+        }
+    }
+
+    private func activeButtonMorphTransition() -> ContainedViewLayoutTransition? {
+        guard let transition = buttonMorphTransitionOverride, transition.isAnimated else {
+            return nil
+        }
+        return transition
+    }
+
+    private func performMorphGeometryWithoutAnimation(_ body: () -> Void) {
+        guard buttonMorphTransitionOverride != nil else {
+            body()
+            return
+        }
+        UIView.performWithoutAnimation {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            body()
+            CATransaction.commit()
+        }
+    }
+
+    private func buttonEffectTransition(appearing: Bool, from transition: ContainedViewLayoutTransition) -> ContainedViewLayoutTransition {
+        guard transition.isAnimated else {
+            return .immediate
+        }
+        let curve: ContainedViewLayoutTransitionCurve = appearing
+            ? .custom(0.16, 1.0, 0.30, 1.0)
+            : .custom(0.70, 0.0, 0.84, 0.0)
+        return .animated(duration: transition.duration, curve: curve)
+    }
+
+    private func prepareAppearingVisualView(_ view: UIView, targetTransform: CGAffineTransform = .identity) {
+        performMorphGeometryWithoutAnimation {
+            view.alpha = 0.0
+            view.transform = targetTransform.scaledBy(x: 0.94, y: 0.94)
+            ContainedViewLayoutTransition.immediate.setBlur(layer: view.layer, radius: 10.0)
+        }
+    }
+
+    private func animateAppearingVisualView(
+        _ view: UIView,
+        transition: ContainedViewLayoutTransition,
+        targetTransform: CGAffineTransform = .identity
+    ) {
+        let id = ObjectIdentifier(view)
+        appearingVisualViewIDs.insert(id)
+        let effectTransition = buttonEffectTransition(appearing: true, from: transition)
+        effectTransition.updateAlpha(view: view, alpha: 1.0) { [weak self] _ in
+            self?.appearingVisualViewIDs.remove(id)
+        }
+        effectTransition.updateTransform(view: view, transform: targetTransform)
+        effectTransition.setBlur(layer: view.layer, radius: 0.0)
+        applyButtonOverspringPulseIfNeeded(to: view, amplitude: buttonPulseAmplitude(appearing: true), transition: effectTransition)
+    }
+
+    private func animateDisappearingVisualView(
+        _ view: UIView,
+        transition: ContainedViewLayoutTransition?,
+        completion: (() -> Void)? = nil
+    ) {
+        let id = ObjectIdentifier(view)
+        guard !disappearingVisualViewIDs.contains(id) else {
+            return
+        }
+        let originalTransform = view.transform
+
+        guard let transition, transition.isAnimated else {
+            view.removeFromSuperview()
+            view.alpha = 1.0
+            view.transform = originalTransform
+            ContainedViewLayoutTransition.immediate.setBlur(layer: view.layer, radius: 0.0)
+            completion?()
+            return
+        }
+
+        disappearingVisualViewIDs.insert(id)
+        let wasUserInteractionEnabled = view.isUserInteractionEnabled
+        disappearingVisualInteractionByID[id] = wasUserInteractionEnabled
+        view.isUserInteractionEnabled = false
+        let effectTransition = buttonEffectTransition(appearing: false, from: transition)
+        effectTransition.updateAlpha(view: view, alpha: 0.0) { [weak self, weak view] _ in
+            guard let self else { return }
+            guard self.disappearingVisualViewIDs.remove(id) != nil else {
+                return
+            }
+            let restoredUserInteraction = self.disappearingVisualInteractionByID.removeValue(forKey: id) ?? wasUserInteractionEnabled
+            guard let view else {
+                completion?()
+                return
+            }
+            view.removeFromSuperview()
+            view.alpha = 1.0
+            view.transform = originalTransform
+            view.isUserInteractionEnabled = restoredUserInteraction
+            ContainedViewLayoutTransition.immediate.setBlur(layer: view.layer, radius: 0.0)
+            completion?()
+        }
+        effectTransition.updateTransform(view: view, transform: originalTransform.scaledBy(x: 0.94, y: 0.94))
+        effectTransition.setBlur(layer: view.layer, radius: 10.0)
+        applyButtonOverspringPulseIfNeeded(to: view, amplitude: buttonPulseAmplitude(appearing: false), transition: effectTransition)
+    }
+
+    private func buttonPulseAmplitude(appearing: Bool) -> CGFloat {
+        appearing ? 0.115 : -0.115
+    }
+
+    private func legacyButtonViews(for alignment: ButtonAlignment) -> [BarButtonID: UIView] {
+        switch alignment {
+        case .left:
+            return legacyLeftButtonViewsByID
+        case .right:
+            return legacyRightButtonViewsByID
+        }
+    }
+
+    private func legacyButtonView(for id: BarButtonID, alignment: ButtonAlignment) -> UIView? {
+        switch alignment {
+        case .left:
+            return legacyLeftButtonViewsByID[id]
+        case .right:
+            return legacyRightButtonViewsByID[id]
+        }
+    }
+
+    private func setLegacyButtonView(_ view: UIView?, for id: BarButtonID, alignment: ButtonAlignment) {
+        switch alignment {
+        case .left:
+            legacyLeftButtonViewsByID[id] = view
+        case .right:
+            legacyRightButtonViewsByID[id] = view
+        }
+    }
+
+    private func clearLegacyButtonViews(alignment: ButtonAlignment) {
+        switch alignment {
+        case .left:
+            legacyLeftButtonViewsByID.removeAll()
+        case .right:
+            legacyRightButtonViewsByID.removeAll()
+        }
+    }
+
+    private func applyButtonLayerPlacement(
+        id: ButtonChromePlacementID,
+        view: UIView,
+        frame: CGRect,
+        alpha: CGFloat,
+        transform: CGAffineTransform,
+        isHidden: Bool,
+        isUserInteractionEnabled: Bool,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let preservePresentationLayer = transition.isAnimated && buttonMorphTransitionOverride == nil
+        installButtonLayerForCurrentHost(preservePresentationLayer: preservePresentationLayer)
+        buttonLayer.applyButtonPlacements(
+            [
+                AetherNavigationBarButtonPlacement(
+                    id: id,
+                    view: view,
+                    frame: frame,
+                    alpha: alpha,
+                    transform: transform,
+                    isHidden: isHidden,
+                    zIndex: buttonChromeZIndex(for: id),
+                    accessibilityOrder: buttonChromeAccessibilityOrder(for: id),
+                    isUserInteractionEnabled: isUserInteractionEnabled,
+                    preservePresentationLayer: preservePresentationLayer
+                )
+            ],
+            transition: .existing(transition),
+            removesMissing: false
+        )
+    }
+
+    private func updateButtonLayerHostedView(
+        view: UIView,
+        frame: CGRect? = nil,
+        alpha: CGFloat? = nil,
+        transform: CGAffineTransform? = nil,
+        transition: ContainedViewLayoutTransition
+    ) {
+        guard usesSeparatedButtonHosting, let id = buttonChromePlacementID(for: view) else {
+            if let frame {
+                transition.updateFrame(view: view, frame: frame)
+            }
+            if let alpha {
+                transition.updateAlpha(view: view, alpha: alpha)
+            }
+            if let transform {
+                transition.updateTransform(view: view, transform: transform)
+            }
+            return
+        }
+
+        let preservePresentationLayer = transition.isAnimated && buttonMorphTransitionOverride == nil
+        if id == .titleContentView {
+            installTitleContentViewForCurrentHostingMode(preservePresentationLayer: preservePresentationLayer)
+        } else {
+            installButtonChromeViewsForCurrentHostingMode(preservePresentationLayer: preservePresentationLayer)
+        }
+        applyButtonLayerPlacement(
+            id: id,
+            view: view,
+            frame: frame ?? view.frame,
+            alpha: alpha ?? view.alpha,
+            transform: transform ?? view.transform,
+            isHidden: view.isHidden,
+            isUserInteractionEnabled: view.isUserInteractionEnabled,
+            transition: transition
+        )
+    }
+
+    private func updateButtonChromeFrame(
+        view: UIView,
+        frame: CGRect,
+        transition: ContainedViewLayoutTransition
+    ) {
+        updateButtonLayerHostedView(view: view, frame: frame, transition: transition)
+    }
+
+    private func animateOutgoingTitleContentView(_ view: UIView, transition: ContainedViewLayoutTransition?) {
+        let id = ButtonChromePlacementID.outgoingTitleContentView(ObjectIdentifier(view))
+        if usesSeparatedButtonHosting {
+            applyButtonLayerPlacement(
+                id: id,
+                view: view,
+                frame: view.frame,
+                alpha: view.alpha,
+                transform: view.transform,
+                isHidden: view.isHidden,
+                isUserInteractionEnabled: view.isUserInteractionEnabled,
+                transition: .immediate
+            )
+        }
+        animateDisappearingVisualView(view, transition: transition) { [weak self] in
+            self?.buttonLayer.removeButtonPlacement(id: id, detachView: false)
+        }
     }
 
     // MARK: - NavigationBarView Protocol
@@ -563,11 +1065,11 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     public func setButtonChromeScale(_ scale: CGFloat, transition: ContainedViewLayoutTransition) {
         let transform = CGAffineTransform(scaleX: scale, y: scale)
-        transition.updateTransform(view: leftButtonContainer, transform: transform)
-        transition.updateTransform(view: rightButtonContainer, transform: transform)
-        transition.updateTransform(view: backButtonView, transform: transform)
-        transition.updateTransform(view: backArrowView, transform: transform)
-        transition.updateTransform(view: badgeView, transform: transform)
+        updateButtonLayerHostedView(view: leftButtonContainer, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: rightButtonContainer, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: backButtonView, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: backArrowView, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: badgeView, transform: transform, transition: transition)
     }
 
     public func buttonChromeLayout() -> ButtonChromeLayout {
@@ -622,15 +1124,12 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             transition: transition
         )
         let transform = CGAffineTransform(scaleX: scale * horizontalScale, y: scale)
-        transition.updateAlpha(view: backButtonView, alpha: alpha)
-        transition.updateAlpha(view: backArrowView, alpha: alpha)
-        transition.updateAlpha(view: badgeView, alpha: alpha)
+        updateButtonLayerHostedView(view: backButtonView, alpha: alpha, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: backArrowView, alpha: alpha, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: badgeView, alpha: alpha, transform: transform, transition: transition)
         transition.setBlur(layer: backButtonView.layer, radius: blurRadius)
         transition.setBlur(layer: backArrowView.layer, radius: blurRadius)
         transition.setBlur(layer: badgeView.layer, radius: blurRadius)
-        transition.updateTransform(view: backButtonView, transform: transform)
-        transition.updateTransform(view: backArrowView, transform: transform)
-        transition.updateTransform(view: badgeView, transform: transform)
         applyButtonOverspringPulseIfNeeded(to: backButtonView, amplitude: pulseAmplitude, transition: transition)
         applyButtonOverspringPulseIfNeeded(to: backArrowView, amplitude: pulseAmplitude, transition: transition)
         applyButtonOverspringPulseIfNeeded(to: badgeView, amplitude: pulseAmplitude, transition: transition)
@@ -640,9 +1139,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         applyButtonContentTransform(container: leftButtonContainer, groups: glassButtonGroups(for: .left), scale: scale, horizontalScale: horizontalScale, transition: transition)
         applyButtonContentTransform(container: rightButtonContainer, groups: glassButtonGroups(for: .right), scale: scale, horizontalScale: horizontalScale, transition: transition)
         let transform = CGAffineTransform(scaleX: scale * horizontalScale, y: scale)
-        transition.updateTransform(view: backButtonView, transform: transform)
-        transition.updateTransform(view: backArrowView, transform: transform)
-        transition.updateTransform(view: badgeView, transform: transform)
+        updateButtonLayerHostedView(view: backButtonView, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: backArrowView, transform: transform, transition: transition)
+        updateButtonLayerHostedView(view: badgeView, transform: transform, transition: transition)
     }
 
     private func buttonChromeFrame(container: UIView, groups: [GlassControlGroup]) -> CGRect? {
@@ -674,7 +1173,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         if groups.count > 1 {
             let visibleGroups = groups.filter { isGlassButtonGroup($0, hostedIn: container) }
             guard !visibleGroups.isEmpty else {
-                transition.updateFrame(view: container, frame: frame)
+                updateButtonChromeFrame(view: container, frame: frame, transition: transition)
                 updateButtonGlassContainer(in: container, size: frame.size, transition: transition)
                 return
             }
@@ -705,7 +1204,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 )
             } else {
                 setSeparatedButtonGlueAnimator(nil, for: container)
-                transition.updateFrame(view: container, frame: targetFrame)
+                updateButtonChromeFrame(view: container, frame: targetFrame, transition: transition)
                 updateButtonGlassContainer(in: container, size: targetFrame.size, transition: transition)
                 let measuredProgress = separatedButtonLayoutProgress(
                     finalFrames: finalGroupFrames.map(\.frame),
@@ -726,7 +1225,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 }
             }
         } else {
-            transition.updateFrame(view: container, frame: frame)
+            updateButtonChromeFrame(view: container, frame: frame, transition: transition)
             updateButtonGlassContainer(in: container, size: frame.size, transition: transition)
         }
 
@@ -1032,7 +1531,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         guard resolvedAmplitude > 0.0, transition.isAnimated, !UIAccessibility.isReduceMotionEnabled else {
             return
         }
-        let duration = max(0.34, min(0.50, transition.duration))
+        let duration = transition.duration
+        guard duration > 0.0 else {
+            return
+        }
         view.layer.removeAnimation(forKey: "aether.navigationButtonOverspringPulse")
 
         let baseTransform = view.layer.transform
@@ -1054,6 +1556,31 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         animation.isRemovedOnCompletion = true
         animation.aetherPreferHighFrameRate()
         view.layer.add(animation, forKey: "aether.navigationButtonOverspringPulse")
+    }
+
+    @discardableResult
+    internal func updateMeasuredTitleHeight(
+        titleView: UIView?,
+        size: CGSize,
+        defaultHeight: CGFloat,
+        leftInset: CGFloat,
+        rightInset: CGFloat,
+        requestLayoutIfNeeded: Bool
+    ) -> Bool {
+        let newTitleHeight = Self.measureTitleNaturalHeight(titleView: titleView, for: size, leftInset: leftInset, rightInset: rightInset)
+        guard abs(measuredTitleHeight - newTitleHeight) > 0.5 else {
+            return false
+        }
+
+        let oldEffective = max(defaultHeight, measuredTitleHeight)
+        let newEffective = max(defaultHeight, newTitleHeight)
+        measuredTitleHeight = newTitleHeight
+        if requestLayoutIfNeeded && abs(oldEffective - newEffective) > 0.5 {
+            DispatchQueue.main.async { [weak self] in
+                self?.requestContainerLayout?(.animated(duration: 0.3, curve: .spring))
+            }
+        }
+        return true
     }
 
     public func withButtonMorphTransition(_ transition: ContainedViewLayoutTransition, _ body: () -> Void) {
@@ -1129,17 +1656,14 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // value still updates, but contentHeight wouldn't change, and
         // firing `.immediate` here would interrupt any in-flight push /
         // height-change animation for nothing.
-        let newTitleHeight = measureTitleNaturalHeight(for: size, leftInset: leftInset, rightInset: rightInset)
-        if abs(measuredTitleHeight - newTitleHeight) > 0.5 {
-            let oldEffective = max(defaultHeight, measuredTitleHeight)
-            let newEffective = max(defaultHeight, newTitleHeight)
-            measuredTitleHeight = newTitleHeight
-            if abs(oldEffective - newEffective) > 0.5 {
-                DispatchQueue.main.async { [weak self] in
-                    self?.requestContainerLayout?(.animated(duration: 0.3, curve: .spring))
-                }
-            }
-        }
+        updateMeasuredTitleHeight(
+            titleView: titleContentView ?? item?.titleView,
+            size: size,
+            defaultHeight: defaultHeight,
+            leftInset: leftInset,
+            rightInset: rightInset,
+            requestLayoutIfNeeded: true
+        )
 
         let stripeHeight: CGFloat = UIScreenPixel
         let contentHeight = self.contentHeight(defaultHeight: defaultHeight)
@@ -1299,16 +1823,16 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             case .replacement:
                 // Buttons hidden, content replaces title row
                 let buttonsHeight = contentHeight - additionalTopHeight
-                transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+                updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
                 layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
                 let contentFrame = CGRect(x: 0, y: buttonsAreaY, width: size.width, height: contentView.height)
                 transition.updateFrame(view: contentView, frame: contentFrame)
                 let _ = contentView.updateLayout(size: contentFrame.size, leftInset: leftInset, rightInset: rightInset, transition: transition)
-                buttonsContainerView.alpha = 0.0
+                setButtonsRowAlpha(0.0)
             case .expansion:
                 let buttonsHeight = max(defaultHeight, measuredTitleHeight)
-                transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+                updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
                 layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
 
                 if isSearchModeActive {
@@ -1332,21 +1856,27 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     if let stacked = contentView as? AetherStackedBarContent {
                         for v in stacked.views { v.alpha = 1.0 }
                     }
-                    buttonsContainerView.alpha = 1.0
+                    setButtonsRowAlpha(1.0)
                 }
             }
             // Buttons always above content view (glass capsules over filter bar).
             clippingView.bringSubviewToFront(buttonsContainerView)
         } else {
             // No content view — buttons fill the entire content area
-            let buttonsHeight = contentHeight - additionalTopHeight
-            transition.updateFrame(view: buttonsContainerView, frame: CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight))
+            let buttonsHeight: CGFloat
+            if contentHeightOverride != nil {
+                buttonsHeight = min(contentHeight - additionalTopHeight, max(defaultHeight, measuredTitleHeight))
+            } else {
+                buttonsHeight = contentHeight - additionalTopHeight
+            }
+            updateButtonsRowFrame(CGRect(x: 0, y: buttonsAreaY, width: size.width, height: buttonsHeight), transition: transition)
             layoutButtons(width: size.width, height: buttonsHeight, leftInset: leftInset, rightInset: rightInset, defaultHeight: defaultHeight, transition: transition)
             if !isSearchModeActive {
-                buttonsContainerView.alpha = 1.0
+                setButtonsRowAlpha(1.0)
             }
         }
 
+        bringButtonLayerToFrontIfNeeded()
         applyTransitionVisibilityState()
     }
 
@@ -1366,7 +1896,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
         if animated {
             UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
-                self.buttonsContainerView.alpha = active ? 0.0 : 1.0
+                self.setButtonsRowAlpha(active ? 0.0 : 1.0)
                 for group in self.glassButtonGroups(for: .left) {
                     group.alpha = active ? 0.0 : 1.0
                 }
@@ -1375,7 +1905,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 }
             }
         } else {
-            buttonsContainerView.alpha = active ? 0.0 : 1.0
+            setButtonsRowAlpha(active ? 0.0 : 1.0)
             for group in glassButtonGroups(for: .left) {
                 group.alpha = active ? 0.0 : 1.0
             }
@@ -1397,10 +1927,17 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         let buttonContainerTransition = buttonMorphTransitionOverride ?? geometryTransition
         let glassTransition = buttonMorphTransitionOverride ?? transition
 
-        let backFrame: CGRect
         let titleLeftInset: CGFloat
         let titleRightInset: CGFloat
-        if usesGlassStyle {
+        if titleTransitionMode && !buttonsOnlyTransitionMode {
+            backArrowView.isHidden = true
+            backButtonView.isHidden = true
+            leftButtonContainer.isHidden = true
+            rightButtonContainer.isHidden = true
+            badgeView.isHidden = true
+            titleLeftInset = leftInset
+            titleRightInset = rightInset
+        } else if usesGlassStyle {
             // In glass mode the back button lives INSIDE the left
             // GlassControlGroup — no separate capsule. The group handles
             // morphing (fade old items out, new items in) automatically.
@@ -1415,56 +1952,55 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             let glassSideInset: CGFloat = 16.0
             let glassY = floor((buttonHeight - glassButtonHeight) / 2.0) + 2.0
 
-            backFrame = .zero // unused in glass mode
-
             let leftStart = leftInset + glassSideInset
             let leftAvailableWidth = max(1.0, width * 0.5 - leftStart)
             let rightAvailableWidth = max(1.0, width * 0.5 - rightInset - glassSideInset)
 
             if buttonMorphTransitionOverride == nil || leftButtonContainer.bounds.height.isZero {
-                geometryTransition.updateFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftAvailableWidth, height: glassButtonHeight))
+                updateButtonChromeFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftAvailableWidth, height: glassButtonHeight), transition: geometryTransition)
             }
             if buttonMorphTransitionOverride == nil || rightButtonContainer.bounds.height.isZero {
-                geometryTransition.updateFrame(view: rightButtonContainer, frame: CGRect(x: width * 0.5, y: glassY, width: rightAvailableWidth, height: glassButtonHeight))
+                updateButtonChromeFrame(view: rightButtonContainer, frame: CGRect(x: width * 0.5, y: glassY, width: rightAvailableWidth, height: glassButtonHeight), transition: geometryTransition)
             }
 
             let leftButtonsWidth = layoutBarButtonItems(in: leftButtonContainer, items: item?.leftBarButtonItems, alignment: .left, height: glassButtonHeight, transition: glassTransition)
             let rightButtonsWidth = layoutBarButtonItems(in: rightButtonContainer, items: item?.rightBarButtonItems, alignment: .right, height: glassButtonHeight, transition: glassTransition)
 
             if leftButtonsWidth > 0.0 {
-                buttonContainerTransition.updateFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftButtonsWidth, height: glassButtonHeight))
+                updateButtonChromeFrame(view: leftButtonContainer, frame: CGRect(x: leftStart, y: glassY, width: leftButtonsWidth, height: glassButtonHeight), transition: buttonContainerTransition)
             }
             if rightButtonsWidth > 0.0 {
                 let rightFrame = CGRect(x: width - rightInset - glassSideInset - rightButtonsWidth, y: glassY, width: rightButtonsWidth, height: glassButtonHeight)
                 let rightFrameTransition: ContainedViewLayoutTransition = glassTransition.isAnimated ? .immediate : buttonContainerTransition
-                rightFrameTransition.updateFrame(view: rightButtonContainer, frame: rightFrame)
+                updateButtonChromeFrame(view: rightButtonContainer, frame: rightFrame, transition: rightFrameTransition)
             }
 
             titleLeftInset = leftButtonsWidth > 0.0 ? leftInset + glassSideInset + leftButtonsWidth + 10.0 : leftInset
             titleRightInset = rightButtonsWidth > 0.0 ? rightInset + glassSideInset + rightButtonsWidth + 10.0 : rightInset
         } else {
+            let chromeGeometryTransition = geometryTransition
             // Back arrow
             let arrowSize = CGSize(width: 13.0, height: 22.0)
             let arrowFrame = CGRect(x: sideInset + leftInset, y: (buttonHeight - arrowSize.height) / 2.0, width: arrowSize.width, height: arrowSize.height)
-            transition.updateFrame(view: backArrowView, frame: arrowFrame)
+            updateButtonChromeFrame(view: backArrowView, frame: arrowFrame, transition: chromeGeometryTransition)
 
             // Back button
             let backTextX = arrowFrame.maxX + 6.0
             let backSize = backButtonView.sizeThatFits(CGSize(width: width / 2.0, height: buttonHeight))
-            backFrame = CGRect(x: backTextX, y: (buttonHeight - backSize.height) / 2.0, width: backSize.width, height: backSize.height)
-            transition.updateFrame(view: backButtonView, frame: backFrame)
+            let backFrame = CGRect(x: backTextX, y: (buttonHeight - backSize.height) / 2.0, width: backSize.width, height: backSize.height)
+            updateButtonChromeFrame(view: backButtonView, frame: backFrame, transition: chromeGeometryTransition)
 
             titleLeftInset = max(backFrame.maxX + sideInset, sideInset + leftInset + 44.0)
             titleRightInset = sideInset + rightInset + 88.0
 
             // Left buttons
             let leftFrame = CGRect(x: sideInset + leftInset, y: 0, width: width / 3.0, height: buttonHeight)
-            transition.updateFrame(view: leftButtonContainer, frame: leftFrame)
+            updateButtonChromeFrame(view: leftButtonContainer, frame: leftFrame, transition: chromeGeometryTransition)
 
             // Right buttons
             let rightWidth = width / 3.0
             let rightFrame = CGRect(x: width - rightWidth - sideInset - rightInset, y: 0, width: rightWidth, height: buttonHeight)
-            transition.updateFrame(view: rightButtonContainer, frame: rightFrame)
+            updateButtonChromeFrame(view: rightButtonContainer, frame: rightFrame, transition: chromeGeometryTransition)
 
             layoutBarButtonItems(in: rightButtonContainer, items: item?.rightBarButtonItems, alignment: .right, height: buttonHeight)
             layoutBarButtonItems(in: leftButtonContainer, items: item?.leftBarButtonItems, alignment: .left, height: buttonHeight)
@@ -1527,7 +2063,22 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 height: titleSize.height
             )
             titleFrame.origin.x = min(max(titleFrame.origin.x, titleLeftInset), max(titleLeftInset, width - titleRightInset - titleFrame.width))
-            geometryTransition.updateFrame(view: titleContentView, frame: titleFrame)
+            let titleViewID = ObjectIdentifier(titleContentView)
+            if appearingTitleContentViewIDs.contains(titleViewID), let morphTransition = activeButtonMorphTransition() {
+                appearingTitleContentViewIDs.remove(titleViewID)
+                let targetTransform = titleContentView.transform
+                updateButtonLayerHostedView(
+                    view: titleContentView,
+                    frame: titleFrame,
+                    alpha: 0.0,
+                    transform: targetTransform,
+                    transition: .immediate
+                )
+                prepareAppearingVisualView(titleContentView, targetTransform: targetTransform)
+                animateAppearingVisualView(titleContentView, transition: morphTransition, targetTransform: targetTransform)
+            } else {
+                updateButtonLayerHostedView(view: titleContentView, frame: titleFrame, transition: geometryTransition)
+            }
         } else {
             let hasSubtitle = !(item?.subtitle?.isEmpty ?? true)
             if hasSubtitle {
@@ -1583,6 +2134,38 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     private struct BuiltGlassButtonGroup {
         var items: [GlassControlGroup.Item] = []
         var sourceItems: [UIBarButtonItem] = []
+    }
+
+    private func measuredBarButtonCustomViewSize(
+        _ view: UIView,
+        availableWidth: CGFloat,
+        height: CGFloat,
+        minimumWidth: CGFloat = 0.0
+    ) -> CGSize {
+        let bounds = view.bounds.size
+        var measured = CGSize.zero
+
+        if bounds.width > 0.0 && bounds.height > 0.0 {
+            measured = bounds
+        } else {
+            let fitting = view.sizeThatFits(CGSize(width: availableWidth, height: height))
+            if fitting.width > 0.0 { measured.width = fitting.width }
+            if fitting.height > 0.0 { measured.height = fitting.height }
+            if measured.width <= 0.0 && bounds.width > 0.0 { measured.width = bounds.width }
+            if measured.height <= 0.0 && bounds.height > 0.0 { measured.height = bounds.height }
+        }
+
+        if measured.width <= 0.0 || measured.height <= 0.0 {
+            let intrinsic = view.intrinsicContentSize
+            if measured.width <= 0.0 && intrinsic.width > 0.0 { measured.width = intrinsic.width }
+            if measured.height <= 0.0 && intrinsic.height > 0.0 { measured.height = intrinsic.height }
+        }
+
+        if measured.width <= 0.0 { measured.width = height }
+        if measured.height <= 0.0 { measured.height = height }
+        measured.width = max(minimumWidth, measured.width)
+        measured.height = min(height, measured.height)
+        return measured
     }
 
     private func glassButtonGroups(for alignment: ButtonAlignment) -> [GlassControlGroup] {
@@ -1673,31 +2256,13 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         return BarButtonID("\(side).nav.back")
     }
 
-    private func visualStyle(for item: UIBarButtonItem, sourceView: UIView? = nil) -> BarButtonVisualStyle {
-        if item.customView != nil {
-            return .custom
-        }
-        if presentationData.theme.style == .glass {
-            if item.title != nil && item.image == nil {
-                return .prominentGlass
-            }
-            return .glass
-        }
-        if item.title != nil {
-            return .text
-        }
-        if sourceView is GlassBarButtonView {
-            return .glass
-        }
-        return .plain
-    }
-
     @discardableResult
     private func layoutBarButtonItems(in container: UIView, items: [UIBarButtonItem]?, alignment: ButtonAlignment, height: CGFloat, transition glassTransition: ContainedViewLayoutTransition = .immediate) -> CGFloat {
         let theme = presentationData.theme
         let itemGeometryTransition: ContainedViewLayoutTransition = buttonMorphTransitionOverride == nil ? glassTransition : .immediate
 
         if theme.style == .glass {
+            clearLegacyButtonViews(alignment: alignment)
             // When every bar-button item has its own customView and no
             // auto back-button is needed, skip the shared GlassControlGroup
             // capsule entirely. Reason: wrapping caller-provided views
@@ -1710,7 +2275,9 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             // directly in the container lets them render exactly as-is.
             let rawItems = items ?? []
             let needsBackButton = alignment == .left && previousItem != nil && enableAutomaticBackButton
-            let allCustomView = !rawItems.isEmpty && rawItems.allSatisfy { $0.customView != nil }
+            let allCustomView = !rawItems.isEmpty && rawItems.allSatisfy {
+                $0.customView != nil && !$0.aetherHostsCustomViewInGlassControlGroup
+            }
 
             if allCustomView && !needsBackButton {
                 removeGlassButtonGroups(alignment: alignment)
@@ -1737,20 +2304,11 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                         }
                         container.addSubview(view)
                     }
-                    var measured = view.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: height))
-                    if measured.width <= 0.0 || measured.height <= 0.0 {
-                        let bounds = view.bounds.size
-                        if bounds.width > 0.0 { measured.width = bounds.width }
-                        if bounds.height > 0.0 { measured.height = bounds.height }
-                    }
-                    if measured.width <= 0.0 || measured.height <= 0.0 {
-                        let intrinsic = view.intrinsicContentSize
-                        if intrinsic.width > 0.0 { measured.width = intrinsic.width }
-                        if intrinsic.height > 0.0 { measured.height = intrinsic.height }
-                    }
-                    if measured.width <= 0.0 { measured.width = height }
-                    if measured.height <= 0.0 { measured.height = height }
-                    measured.height = min(measured.height, height)
+                    let measured = measuredBarButtonCustomViewSize(
+                        view,
+                        availableWidth: .greatestFiniteMagnitude,
+                        height: height
+                    )
 
                     let y = floor((height - measured.height) / 2.0)
                     let frame = CGRect(x: offsetX, y: y, width: measured.width, height: measured.height)
@@ -1763,7 +2321,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     if #available(iOS 14.0, *),
                        item.contextMenuItemsProvider != nil,
                        let control = view as? UIControl {
-                        wireBarButtonMenuTrigger(button: control, item: item, alignment: alignment, visualStyle: visualStyle(for: item, sourceView: view))
+                        wireBarButtonMenuTrigger(button: control, item: item, alignment: alignment)
                     }
                     offsetX += measured.width
                     if idx < expected.count - 1 { offsetX += spacing }
@@ -1818,6 +2376,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                         primaryAction = { [weak target] in
                             UIApplication.shared.sendAction(selector, to: target, from: item, for: nil)
                         }
+                    } else if item.aetherHostsCustomViewInGlassControlGroup, item.customView?.isUserInteractionEnabled == true {
+                        primaryAction = {}
                     } else {
                         primaryAction = nil
                     }
@@ -1986,8 +2546,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             // provider. We use `.touchDown` on iOS 14+ so the menu fires
             // the moment the finger lands — same response curve as
             // `UIButton.menu` with `showsMenuAsPrimaryAction = true` —
-            // and the source snapshot is taken from a clean (non-press)
-            // state. iOS 13 falls back to the old action-callback path
+            // and the menu source is still in a clean (non-press) state.
+            // iOS 13 falls back to the old action-callback path
             // already wired through GlassControlGroup.
             if #available(iOS 14.0, *) {
                 for (groupIndex, builtGroup) in builtGroups.enumerated() {
@@ -1996,7 +2556,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                         guard item.contextMenuItemsProvider != nil,
                               let buttonView = group.itemButton(id: barButtonID(for: item, alignment: alignment)) as? UIControl
                         else { continue }
-                        wireBarButtonMenuTrigger(button: buttonView, item: item, alignment: alignment, visualStyle: visualStyle(for: item, sourceView: buttonView))
+                        wireBarButtonMenuTrigger(button: buttonView, item: item, alignment: alignment)
                     }
                 }
             }
@@ -2011,23 +2571,45 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             removeGlassButtonGroups(alignment: .right)
         }
 
-        for subview in container.subviews where !isButtonGlassContainer(subview, for: container) {
-            subview.removeFromSuperview()
+        let rawItems = items ?? []
+        let expectedIDs = Set(rawItems.map { barButtonID(for: $0, alignment: alignment) })
+        let morphTransition = activeButtonMorphTransition()
+        for (id, view) in legacyButtonViews(for: alignment) where !expectedIDs.contains(id) {
+            setLegacyButtonView(nil, for: id, alignment: alignment)
+            animateDisappearingVisualView(view, transition: morphTransition)
         }
-        guard let items, !items.isEmpty else { return 0.0 }
+
+        guard !rawItems.isEmpty else {
+            clearLegacyButtonViews(alignment: alignment)
+            for subview in container.subviews where !isButtonGlassContainer(subview, for: container) {
+                animateDisappearingVisualView(subview, transition: morphTransition)
+            }
+            return 0.0
+        }
 
         var offsetX: CGFloat = 0
+        var expectedViews: [UIView] = []
 
-        for item in items {
+        for item in rawItems {
+            let id = barButtonID(for: item, alignment: alignment)
             let view: UIView
             let size: CGSize
+            let isNewView: Bool
+            let targetTransform: CGAffineTransform
 
             if let customView = item.customView {
+                if let generatedView = legacyButtonView(for: id, alignment: alignment), generatedView !== customView {
+                    setLegacyButtonView(nil, for: id, alignment: alignment)
+                    animateDisappearingVisualView(generatedView, transition: morphTransition)
+                }
                 view = customView
-                let fittingSize = customView.sizeThatFits(CGSize(width: container.bounds.width, height: height))
-                size = CGSize(
-                    width: max(30.0, fittingSize.width > 0.0 ? fittingSize.width : customView.bounds.width),
-                    height: min(height, max(0.0, fittingSize.height > 0.0 ? fittingSize.height : customView.bounds.height))
+                isNewView = customView.superview !== container
+                targetTransform = customView.transform
+                size = measuredBarButtonCustomViewSize(
+                    customView,
+                    availableWidth: container.bounds.width,
+                    height: height,
+                    minimumWidth: 30.0
                 )
             } else if theme.style == .glass {
                 let button = GlassBarButtonView(icon: item.image, title: item.title, state: .glass)
@@ -2038,24 +2620,35 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     }
                 }
                 view = button
+                isNewView = true
+                targetTransform = .identity
                 size = button.intrinsicContentSize
             } else {
-                let button = UIButton(type: .system)
+                let button: UIButton
+                if let existingButton = legacyButtonView(for: id, alignment: alignment) as? UIButton {
+                    button = existingButton
+                    isNewView = button.superview !== container
+                } else {
+                    button = UIButton(type: .system)
+                    setLegacyButtonView(button, for: id, alignment: alignment)
+                    isNewView = true
+                }
                 button.tintColor = theme.buttonColor
 
-                if let image = item.image {
-                    button.setImage(image, for: .normal)
-                } else if let title = item.title {
-                    button.setTitle(title, for: .normal)
+                button.setImage(item.image, for: .normal)
+                button.setTitle(item.title, for: .normal)
+                if item.title != nil {
                     button.titleLabel?.font = UIFont.systemFont(ofSize: 17.0)
                 }
 
+                button.removeTarget(nil, action: nil, for: .touchUpInside)
                 if item.contextMenuItemsProvider == nil, let action = item.action, let target = item.target {
                     button.addTarget(target, action: action, for: .touchUpInside)
                 }
 
                 button.sizeToFit()
                 view = button
+                targetTransform = .identity
                 size = CGSize(width: max(button.bounds.width, 30.0), height: button.bounds.height)
             }
 
@@ -2067,14 +2660,46 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 x = container.bounds.width - offsetX - size.width
             }
 
-            view.frame = CGRect(x: x, y: floor((height - size.height) / 2.0), width: size.width, height: size.height)
-            container.addSubview(view)
+            let frame = CGRect(x: x, y: floor((height - size.height) / 2.0), width: size.width, height: size.height)
+            performMorphGeometryWithoutAnimation {
+                view.frame = frame
+            }
+            if view.superview !== container {
+                if isNewView, morphTransition != nil {
+                    prepareAppearingVisualView(view, targetTransform: targetTransform)
+                }
+                container.addSubview(view)
+                if isNewView, let morphTransition {
+                    animateAppearingVisualView(view, transition: morphTransition, targetTransform: targetTransform)
+                }
+            } else if disappearingVisualViewIDs.contains(ObjectIdentifier(view)) {
+                let viewID = ObjectIdentifier(view)
+                disappearingVisualViewIDs.remove(viewID)
+                appearingVisualViewIDs.remove(viewID)
+                let restoredUserInteraction = disappearingVisualInteractionByID.removeValue(forKey: viewID) ?? view.isUserInteractionEnabled
+                view.layer.removeAllAnimations()
+                view.alpha = 1.0
+                view.transform = targetTransform
+                view.isUserInteractionEnabled = restoredUserInteraction
+                ContainedViewLayoutTransition.immediate.setBlur(layer: view.layer, radius: 0.0)
+            } else if appearingVisualViewIDs.contains(ObjectIdentifier(view)) {
+                // Keep the in-flight blur/alpha/scale animation intact.
+            } else {
+                view.alpha = 1.0
+                view.transform = targetTransform
+                ContainedViewLayoutTransition.immediate.setBlur(layer: view.layer, radius: 0.0)
+            }
+            expectedViews.append(view)
             if #available(iOS 14.0, *),
                item.contextMenuItemsProvider != nil,
                let control = view as? UIControl {
-                wireBarButtonMenuTrigger(button: control, item: item, alignment: alignment, visualStyle: visualStyle(for: item, sourceView: view))
+                wireBarButtonMenuTrigger(button: control, item: item, alignment: alignment)
             }
             offsetX += size.width + 8.0
+        }
+        let expectedViewIDs = Set(expectedViews.map { ObjectIdentifier($0) })
+        for subview in container.subviews where !isButtonGlassContainer(subview, for: container) && !expectedViewIDs.contains(ObjectIdentifier(subview)) {
+            animateDisappearingVisualView(subview, transition: morphTransition)
         }
         return max(0.0, offsetX - 8.0)
     }
@@ -2082,17 +2707,31 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     private func updateItemContent() {
         titleLabel.text = item?.title
         subtitleLabel.text = item?.subtitle
-        if let existingTitleContentView = titleContentView, existingTitleContentView !== item?.titleView {
-            existingTitleContentView.removeFromSuperview()
+        let itemTitleView = hostsNavigationItemTitleView ? item?.titleView : nil
+        if let existingTitleContentView = titleContentView, existingTitleContentView !== itemTitleView {
+            let morphTransition = activeButtonMorphTransition()
+            buttonLayer.removeButtonPlacement(id: ButtonChromePlacementID.titleContentView, detachView: false)
+            let isHostedByThisBar = existingTitleContentView.isDescendant(of: buttonLayer)
+                || existingTitleContentView.isDescendant(of: buttonsContainerView)
+                || existingTitleContentView.isDescendant(of: self)
+            if morphTransition?.isAnimated == true && isHostedByThisBar {
+                animateOutgoingTitleContentView(existingTitleContentView, transition: morphTransition)
+            } else if isHostedByThisBar {
+                existingTitleContentView.removeFromSuperview()
+            }
             titleContentView = nil
             // Drop any cached height from the previous titleView so the next
             // layout pass re-measures (or collapses back to defaultHeight).
             measuredTitleHeight = 0
         }
-        if let titleView = item?.titleView, titleView !== titleContentView {
+        if let titleView = itemTitleView, titleView !== titleContentView {
+            buttonLayer.removeButtonPlacement(id: ButtonChromePlacementID.titleContentView, detachView: false)
             titleContentView?.removeFromSuperview()
             titleContentView = titleView
-            buttonsContainerView.addSubview(titleView)
+            if activeButtonMorphTransition()?.isAnimated == true {
+                appearingTitleContentViewIDs.insert(ObjectIdentifier(titleView))
+            }
+            installTitleContentViewForCurrentHostingMode(preservePresentationLayer: false)
             measuredTitleHeight = 0
         }
         titleLabel.isHidden = titleContentView != nil
@@ -2119,8 +2758,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     /// that have no `intrinsicContentSize` of their own — `sizeThatFits`
     /// on those returns bounds.size = (0, 0) before first layout, and the
     /// intrinsic chain breaks when any child reports `noIntrinsicMetric`.
-    private func measureTitleNaturalHeight(for size: CGSize, leftInset: CGFloat, rightInset: CGFloat) -> CGFloat {
-        guard let titleContentView else { return 0 }
+    internal static func measureTitleNaturalHeight(titleView: UIView?, for size: CGSize, leftInset: CGFloat, rightInset: CGFloat) -> CGFloat {
+        guard let titleContentView = titleView else { return 0 }
         let sideButtonsBudget: CGFloat = 100
         let titleMaxWidth = max(0, size.width - leftInset - rightInset - sideButtonsBudget * 2)
         let alFitting = titleContentView.systemLayoutSizeFitting(
@@ -2202,6 +2841,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     deinit {
         edgeEffectView?.removeFromSuperview()
+        buttonLayer.removeFromSuperview()
     }
 
     private func applyTransitionVisibilityState() {
@@ -2241,9 +2881,12 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         }
 
         let titleAlpha: CGFloat = titleContentHiddenForTransition || buttonsOnlyTransitionMode ? 0.0 : 1.0
+        let customTitleAlpha: CGFloat = titleTransitionMode || buttonContentHiddenForTransition ? 0.0 : 1.0
         let contentAlpha: CGFloat = titleContentHiddenForTransition || buttonsOnlyTransitionMode ? 0.0 : 1.0
         titleLabel.alpha = titleAlpha
-        titleContentView?.alpha = titleAlpha
+        if let titleContentView {
+            updateButtonLayerHostedView(view: titleContentView, alpha: customTitleAlpha, transition: .immediate)
+        }
         ownedContentView?.alpha = contentAlpha
     }
 
@@ -2256,12 +2899,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     private func dismissPresentedBarButtonContextMenu() {
         guard let menu = presentedBarButtonMenu else {
-            barButtonSourceCoordinator.cancelAll()
             return
         }
         presentedBarButtonMenu = nil
         menu.dismiss(animated: false)
-        barButtonSourceCoordinator.cancelAll()
     }
 
     /// Wires the menu trigger directly onto the `GlassControlGroup`
@@ -2269,14 +2910,13 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     /// bypasses the group's own `onTap` action — the menu fires the
     /// moment the user's finger lands instead of after touch-up,
     /// matching `UIButton.menu`-with-`showsMenuAsPrimaryAction`'s
-    /// timing and avoiding the brief icon shift the action-callback
-    /// path produced when the morph snapshot caught the cell mid-press.
+    /// timing and avoiding the brief icon shift the action-callback path
+    /// produced when the cell was already mid-press.
     @available(iOS 14.0, *)
     private func wireBarButtonMenuTrigger(
         button: UIControl,
         item: UIBarButtonItem,
-        alignment: ButtonAlignment,
-        visualStyle: BarButtonVisualStyle
+        alignment: ButtonAlignment
     ) {
         let identifier = UIAction.Identifier("AetherUI.NavigationBar.BarButtonContextMenu")
         button.removeAction(identifiedBy: identifier, for: .touchDown)
@@ -2294,11 +2934,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 return group.itemVisualSourceView(id: sourceID)
             }.first ?? sourceView
             self.presentBarButtonContextMenu(
-                for: item,
-                alignment: alignment,
                 sourceView: sourceView,
                 visualSourceView: visualSourceView,
-                visualStyle: visualStyle,
                 provider: provider
             )
         }
@@ -2329,21 +2966,15 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             return
         }
         presentBarButtonContextMenu(
-            for: item,
-            alignment: alignment,
             sourceView: sourceViews.hit,
             visualSourceView: sourceViews.visual,
-            visualStyle: visualStyle(for: item, sourceView: sourceViews.hit),
             provider: provider
         )
     }
 
     private func presentBarButtonContextMenu(
-        for item: UIBarButtonItem,
-        alignment: ButtonAlignment,
         sourceView: UIView,
         visualSourceView: UIView,
-        visualStyle: BarButtonVisualStyle,
         provider: () -> [ContextMenuItem]
     ) {
         // Don't open a duplicate menu if one is already up.
@@ -2353,27 +2984,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         guard !items.isEmpty else { return }
         guard sourceView.window != nil else { return }
 
-        let sourceID = barButtonID(for: item, alignment: alignment)
-        guard let lease = barButtonSourceCoordinator.acquire(
-            sourceID: sourceID,
-            originalView: visualSourceView,
-            overlayView: self,
-            visualStyle: visualStyle,
-            behavior: .menuSourceProxy
-        ) else {
-            return
-        }
-        lease.updateForPressOrDrag(.pressed)
-
         let menu = ContextMenuController(
             source: .init(
-                view: lease.proxyView,
-                cornerRadius: lease.proxyView.bounds.height / 2.0,
-                // The real bar button is not the presentation source
-                // anymore; the lease installed this proxy in the exact
-                // source position and disabled the original. Hiding here
-                // only affects the proxy, which is visually covered by
-                // the menu morph surface.
+                view: visualSourceView,
+                cornerRadius: visualSourceView.bounds.height / 2.0,
                 hidesDuringPresentation: true
             ),
             items: items,
@@ -2381,7 +2995,6 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             onDismiss: { [weak self] in
                 guard let self else { return }
                 self.presentedBarButtonMenu = nil
-                self.barButtonSourceCoordinator.release(sourceID: sourceID, outcome: .completed)
             }
         )
         presentedBarButtonMenu = menu

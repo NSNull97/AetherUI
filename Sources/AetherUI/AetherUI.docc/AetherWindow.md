@@ -1,12 +1,13 @@
 # ``AetherWindow``
 
-`UIWindow`-подкласс, обеспечивающий keyboard tracking, интерактивный
-drag-to-dismiss клавиатуры, status bar dispatcher и единую layout-цепочку
-через ``ContainerViewLayout``.
+`AetherWindow` is a source-compatible alias for ``AetherNativeWindow``.
+It provides keyboard tracking, layout-interactive keyboard dismissal,
+status bar dispatch, system gesture coordination, and a single
+``ContainerViewLayout`` propagation path.
 
 ## Overview
 
-`AetherWindow` — корневое окно для всех приложений на AetherUI. Без него
+`AetherNativeWindow` — корневое окно для всех приложений на AetherUI. Без него
 теряется значительная часть функциональности фреймворка: keyboard frame не
 отслеживается, status bar не управляется централизованно, безопасные insets
 не передаются по цепочке `containerLayoutUpdated`.
@@ -17,15 +18,17 @@ drag-to-dismiss клавиатуры, status bar dispatcher и единую layo
    высоты клавиатуры с учётом split-screen, Slide Over и внешней
    клавиатуры; результат записывается в ``ContainerViewLayout/inputHeight``.
 2. Активация `AetherWindowPanRecognizer` для свайпа вниз по контенту,
-   перемещающего keyboard window вслед за касанием (Telegram-style
-   interactive dismiss).
-3. Содержит приватный root-controller, проксирующий `preferredStatusBarStyle`,
+   публикующего interactive input bound в layout. AetherUI внутри
+   фреймворка применяет legacy offset к системной keyboard surface, когда
+   UIKit предоставляет keyboard host view.
+3. Содержит root-controller, проксирующий `preferredStatusBarStyle`,
    `supportedInterfaceOrientations`, `prefersHomeIndicatorAutoHidden` и
    `preferredScreenEdgesDeferringSystemGestures` от contentController к UIKit.
 4. Распространение ``ContainerViewLayout`` на дочерний контроллер с выбором
    соответствующего метода (TabBar, Navigation, ViewController).
 
-> Important: Корневым окном должен быть **именно** `AetherWindow`, а не
+> Important: Корневым окном должен быть **именно** `AetherNativeWindow`
+> или совместимый `AetherWindow`, а не
 > `UIWindow`. Контент присваивается через ``AetherWindow/contentController``,
 > **не** через `rootViewController`.
 
@@ -45,7 +48,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let window = AetherWindow(windowScene: windowScene)
+        let window = AetherNativeWindow(windowScene: windowScene)
         window.contentController = makeRootController()
         window.makeKeyAndVisible()
 
@@ -55,7 +58,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 ```
 
 Тип переменной может быть объявлен как `UIWindow?` (для совместимости с
-шаблонами Apple), однако создаваться должен **только** `AetherWindow`.
+шаблонами Apple), однако создаваться должен **только** `AetherNativeWindow`
+или совместимый `AetherWindow`.
 
 ## contentController
 
@@ -118,15 +122,21 @@ override func containerLayoutUpdated(_ layout: ContainerViewLayout,
 
 ### Interactive dismiss
 
-Свайп вниз по контенту инициирует перемещение клавиатуры синхронно с
-касанием; при отпускании ниже порога клавиатура скрывается. Поведение
-аналогично реализации в Telegram:
+Свайп вниз по контенту инициирует interactive layout update: app-owned
+input bars получают промежуточный `ContainerViewLayout` и могут следовать
+за пальцем. Одновременно окно использует внутренний legacy bridge, чтобы
+двигать native keyboard surface через тот же offset. При отпускании ниже
+порога окно resign-ит first responder, и UIKit завершает скрытие
+клавиатуры.
 
-- На iOS ≤15 окно изменяет `UIInputSetHostView.layer.bounds` (внутренний
-  контейнер клавиатуры в текущем процессе).
-- На iOS 16+ клавиатура размещается в отдельном процессе, однако окно
-  выполняет смещение `keyboardWindow.frame` и `keyboardView.transform`,
-  что работает на современных версиях UIKit.
+Внешние приложения не получают доступ к `keyboardWindow`/`keyboardView` и
+ничего не настраивают отдельно: поведение единое для всех через
+`AetherNativeWindow` / `AetherWindow`.
+
+Для контейнеров, которые во время transition должны смещать keyboard surface
+по горизонтали, используйте `AetherKeyboardManager.setSurfaces(_:)` и
+``UIView/aetherKeyboardAutomaticHandlingOptions``. Это replacement для
+Telegram `disableAutomaticKeyboardHandling` / `KeyboardViewManager.update`.
 
 По умолчанию активно **только** на iPhone. На iPad жест отключён, поскольку
 размер клавиатуры меньше, а поведение конфликтует со Stage Manager.
@@ -245,8 +255,8 @@ window.debugAction = { [weak self] in
 ## Edge cases
 
 - **Не выполняйте присваивание `window.rootViewController = ...`.**
-  Корневой контроллер используется приватным root-объектом
-  ``AetherWindow``. Любое присваивание нарушит работу status bar и
+  Корневой контроллер используется ``AetherWindowRootViewController``.
+  Любое присваивание нарушит работу status bar и
   orientation. Используйте ``AetherWindow/contentController``.
 - **Конфликт двух keyboard-pan recognizer'ов.** При использовании на
   экране `UIScrollView.keyboardDismissMode = .interactive` отключите

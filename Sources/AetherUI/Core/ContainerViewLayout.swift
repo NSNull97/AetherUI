@@ -83,6 +83,17 @@ public struct ContainerViewLayout: Equatable {
     public func withUpdatedInputHeight(_ inputHeight: CGFloat?) -> ContainerViewLayout {
         return ContainerViewLayout(size: self.size, metrics: self.metrics, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
     }
+
+    func differsOnlyInKeyboardInput(from other: ContainerViewLayout) -> Bool {
+        return self.size == other.size
+            && self.metrics == other.metrics
+            && self.safeInsets == other.safeInsets
+            && self.additionalInsets == other.additionalInsets
+            && self.statusBarHeight == other.statusBarHeight
+            && self.inVoiceOver == other.inVoiceOver
+            && (self.inputHeight != other.inputHeight
+                || self.inputHeightIsInteractivellyChanging != other.inputHeightIsInteractivellyChanging)
+    }
 }
 
 public struct ContainerViewLayoutInsetOptions: OptionSet {

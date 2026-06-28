@@ -7,6 +7,37 @@ private extension UIBarButtonItem {
 
     @AssociatedObject(.retain(.nonatomic))
     var aetherSeparatesSharedBackground: Bool = false
+
+    @AssociatedObject(.retain(.nonatomic))
+    var aetherHostsCustomViewInGlassControlGroupStorage: Bool = false
+}
+
+extension UIBarButtonItem {
+    var aetherHostsCustomViewInGlassControlGroup: Bool {
+        get {
+            aetherHostsCustomViewInGlassControlGroupStorage
+        }
+        set {
+            aetherHostsCustomViewInGlassControlGroupStorage = newValue
+        }
+    }
+}
+
+private final class AetherURLImageBarButton: UIButton {
+    static let size = CGSize(width: 38.0, height: 38.0)
+
+    override var intrinsicContentSize: CGSize {
+        Self.size
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        Self.size
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView?.frame = bounds
+    }
 }
 
 // MARK: - UIBarButtonItem + ContextMenu
@@ -41,19 +72,26 @@ public extension UIBarButtonItem {
     }
 
     convenience init(imageURL: URL?, placeholderImage: UIImage?, target: Any?, action: Selector?) {
-        let button = UIButton(type: .custom)
-        button.frame = CGRect(x: 0.0, y: 0.0, width: 34.0, height: 34.0)
-        button.layer.cornerRadius = 17.0
+        let button = AetherURLImageBarButton(type: .custom)
+        button.frame = CGRect(origin: .zero, size: AetherURLImageBarButton.size)
+        button.layer.cornerRadius = AetherURLImageBarButton.size.height / 2.0
         button.clipsToBounds = true
         button.backgroundColor = UIColor.secondarySystemFill
         button.tintColor = .label
+        button.contentHorizontalAlignment = .fill
+        button.contentVerticalAlignment = .fill
+        button.adjustsImageWhenHighlighted = false
+        button.adjustsImageWhenDisabled = false
+        button.showsTouchWhenHighlighted = false
         button.imageView?.contentMode = .scaleAspectFill
+        button.imageView?.clipsToBounds = true
         button.setImage(placeholderImage, for: .normal)
         if let target, let action {
             button.addTarget(target, action: action, for: .touchUpInside)
         }
 
         self.init(customView: button)
+        aetherHostsCustomViewInGlassControlGroup = true
 
         guard let imageURL else {
             return
@@ -65,6 +103,7 @@ public extension UIBarButtonItem {
             }
             DispatchQueue.main.async {
                 button?.setImage(image.withRenderingMode(.alwaysOriginal), for: .normal)
+                button?.setNeedsLayout()
             }
         }.resume()
     }

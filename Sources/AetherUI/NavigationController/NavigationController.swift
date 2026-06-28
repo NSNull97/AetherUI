@@ -88,6 +88,12 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
     var bottomBarVisibilityTransitionProgress: ((CGFloat, ContainedViewLayoutTransition) -> Void)?
     var bottomBarVisibilityTransitionResolutionBegan: ((Bool, ContainedViewLayoutTransition) -> Void)?
     var bottomBarVisibilityTransitionEnded: ((Bool) -> Void)?
+    var suppressesSelfComputedLayoutDuringBottomBarTransition: Bool = false
+    var layoutForController: ((AetherViewController, ContainerViewLayout) -> ContainerViewLayout)? {
+        didSet {
+            updateRootContainerLayoutProviders()
+        }
+    }
 
     private final class NavigationBarInteractiveTransition {
         let direction: NavigationTransitionDirection
@@ -98,12 +104,6 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         let sourceBar: NavigationBarImpl
         let targetBar: NavigationBarImpl
         let isInteractive: Bool
-        var sourceButtonBar: NavigationBarImpl?
-        var targetButtonBar: NavigationBarImpl?
-        var sourceButtonChromeLayout: NavigationBarImpl.ButtonChromeLayout?
-        var targetButtonChromeLayout: NavigationBarImpl.ButtonChromeLayout?
-        var didPrepareHeldButtonChrome: Bool = false
-        var lastHeldButtonHorizontalScale: CGFloat?
         var sourceBaseFrame: CGRect = .zero
         var targetBaseFrame: CGRect = .zero
         var progress: CGFloat = 0.0
@@ -260,19 +260,29 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
 
     override open func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        guard !suppressesSelfComputedLayoutDuringBottomBarTransition else {
+            return
+        }
         updateContainerLayout(transition: .immediate)
     }
 
     override open func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        guard !suppressesSelfComputedLayoutDuringBottomBarTransition else {
+            return
+        }
         updateContainerLayout(transition: .immediate)
     }
 
     // MARK: - Layout
 
     public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        let previousLayout = validLayout
         validLayout = layout
-        updateVisibleContainers(layout: layout, transition: transition)
+        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInput(from: $0) } == true
+            ? .immediate
+            : transition
+        updateVisibleContainers(layout: layout, transition: transition, navigationChromeTransition: navigationChromeTransition)
     }
 
     private func updateContainerLayout(transition: ContainedViewLayoutTransition) {
@@ -607,10 +617,15 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         }
     }
 
-    private func updateVisibleContainers(layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+    private func updateVisibleContainers(
+        layout: ContainerViewLayout,
+        transition: ContainedViewLayoutTransition,
+        navigationChromeTransition: ContainedViewLayoutTransition? = nil
+    ) {
+        let navigationChromeTransition = navigationChromeTransition ?? transition
         let navigationLayout = makeNavigationLayout(mode: mode, layout: layout, controllers: _viewControllers)
         let rootTopController = activeRootStack(for: navigationLayout.root).last
-        let rootTransitionShouldDriveNavigationBar = transition.isAnimated
+        let rootTransitionShouldDriveNavigationBar = navigationChromeTransition.isAnimated
             && rootTopController != nil
             && sharedNavigationBarController != nil
             && sharedNavigationBarController !== rootTopController
@@ -619,10 +634,10 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             let previousNavigationBarTransition = interactiveNavigationBarTransition
             updateRootContainer(for: navigationLayout.root, layout: layout, transition: transition)
             if interactiveNavigationBarTransition == nil || interactiveNavigationBarTransition === previousNavigationBarTransition {
-                updateSharedNavigationBar(for: navigationLayout.root, layout: layout, transition: transition)
+                updateSharedNavigationBar(for: navigationLayout.root, layout: layout, transition: navigationChromeTransition)
             }
         } else {
-            updateSharedNavigationBar(for: navigationLayout.root, layout: layout, transition: transition)
+            updateSharedNavigationBar(for: navigationLayout.root, layout: layout, transition: navigationChromeTransition)
             updateRootContainer(for: navigationLayout.root, layout: layout, transition: transition)
         }
         updateMinimizedContainer(layout: layout, transition: transition)
@@ -733,6 +748,9 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         if isViewLoaded, bar.superview !== view {
             view.addSubview(bar)
         }
+        if isViewLoaded {
+            bar.buttonLayerHostView = view
+        }
 
         return bar
     }
@@ -764,8 +782,20 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         return AetherViewController.NavigationLayout(navigationFrame: frame, defaultContentHeight: defaultNavigationBarHeight)
     }
 
-    private func estimatedSharedNavigationContentHeight(for controller: AetherViewController, defaultHeight: CGFloat) -> CGFloat {
-        let titleAreaHeight = defaultHeight
+    private func estimatedTitleAreaHeight(for controller: AetherViewController, layout: ContainerViewLayout, defaultHeight: CGFloat) -> CGFloat {
+        let titleHeight = NavigationBarImpl.measureTitleNaturalHeight(
+            titleView: controller.navigationBarItem.titleView,
+            for: layout.size,
+            leftInset: layout.safeInsets.left,
+            rightInset: layout.safeInsets.right
+        )
+        return max(defaultHeight, titleHeight)
+    }
+
+    private func estimatedSharedNavigationContentHeight(for controller: AetherViewController, layout: ContainerViewLayout, defaultHeight: CGFloat) -> CGFloat {
+        let titleAreaHeight = controller.displayNavigationBar
+            ? estimatedTitleAreaHeight(for: controller, layout: layout, defaultHeight: defaultHeight)
+            : defaultHeight
         guard controller.displayNavigationBar, let contentView = controller.effectiveTopBarAccessory else {
             return titleAreaHeight
         }
@@ -789,7 +819,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         let topOffset = max(layout.statusBarHeight ?? 0.0, layout.safeInsets.top)
         let defaultNavigationBarHeight: CGFloat = 60.0
         return topOffset
-            + estimatedSharedNavigationContentHeight(for: controller, defaultHeight: defaultNavigationBarHeight)
+            + estimatedSharedNavigationContentHeight(for: controller, layout: layout, defaultHeight: defaultNavigationBarHeight)
             + controller.additionalNavigationBarHeight
     }
 
@@ -848,8 +878,15 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             bar.updatePresentationData(presentationData, transition: transition)
         }
 
-        bar.item = controller.navigationBarItem
-        bar.previousItem = previousAction(for: controller, in: stack)
+        let updateNavigationItem = {
+            bar.item = controller.navigationBarItem
+            bar.previousItem = self.previousAction(for: controller, in: stack)
+        }
+        if let buttonMorphTransition {
+            bar.withButtonMorphTransition(buttonMorphTransition, updateNavigationItem)
+        } else {
+            updateNavigationItem()
+        }
         bar.backPressed = { [weak self] in
             self?.popViewController(animated: true)
         }
@@ -862,10 +899,11 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         } else {
             bar.setContentView(nil, animated: false)
             bar.setContentHeightOverride(
-                estimatedSharedNavigationContentHeight(for: controller, defaultHeight: 60.0)
+                estimatedSharedNavigationContentHeight(for: controller, layout: layout, defaultHeight: 60.0)
             )
         }
         if bar === sharedNavigationBar {
+            bar.buttonLayerHostView = isViewLoaded ? view : nil
             bar.edgeEffectHostView = controller.isViewLoaded ? controller.view : nil
         } else {
             bar.edgeEffectHostView = nil
@@ -877,6 +915,15 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         } else {
             bar.requestContainerLayout = nil
         }
+
+        bar.updateMeasuredTitleHeight(
+            titleView: controller.navigationBarItem.titleView,
+            size: layout.size,
+            defaultHeight: 60.0,
+            leftInset: layout.safeInsets.left,
+            rightInset: layout.safeInsets.right,
+            requestLayoutIfNeeded: false
+        )
 
         let navLayout = sharedNavigationLayout(for: controller, bar: bar, layout: layout)
         bar.frame = navLayout.navigationFrame
@@ -916,7 +963,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             bar.alpha = interactiveNavigationBarTransition.sourceController.displayNavigationBar ? 1.0 : 0.0
             bar.transform = .identity
             bar.setTitleContentHiddenForTransition(true)
-            bar.setButtonContentHiddenForTransition(true)
+            bar.setButtonContentHiddenForTransition(false)
             refreshInteractiveNavigationBarTransition(interactiveNavigationBarTransition, layout: layout, transition: transition)
             updateInteractiveNavigationBarTransition(progress: interactiveNavigationBarTransition.progress, transition: transition)
             return
@@ -990,6 +1037,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         if view.subviews.last !== bar {
             view.bringSubviewToFront(bar)
         }
+        bar.bringButtonLayerToFrontIfNeeded()
     }
 
     private func navigationStack(containing first: AetherViewController, pairedWith second: AetherViewController) -> [AetherViewController] {
@@ -1045,30 +1093,9 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         let bar = NavigationBarImpl(presentationData: navigationBarPresentationData(for: controller))
         bar.autoresizingMask = [.flexibleWidth]
         bar.requestContainerLayout = nil
-        configureNavigationBar(
-            bar,
-            for: controller,
-            in: stack,
-            layout: layout,
-            transition: .immediate,
-            animateContent: false,
-            allowsContainerLayoutRequests: false
-        )
+        bar.hostsNavigationItemTitleView = false
         bar.setTitleTransitionMode(true)
         bar.setTitleContentHiddenForTransition(false)
-        bar.setButtonChromeScale(1.0, transition: .immediate)
-        return bar
-    }
-
-    private func makeTransitionButtonNavigationBar(
-        for controller: AetherViewController,
-        in stack: [AetherViewController],
-        layout: ContainerViewLayout
-    ) -> NavigationBarImpl {
-        controller.loadViewIfNeeded()
-        let bar = NavigationBarImpl(presentationData: navigationBarPresentationData(for: controller))
-        bar.autoresizingMask = [.flexibleWidth]
-        bar.requestContainerLayout = nil
         configureNavigationBar(
             bar,
             for: controller,
@@ -1076,12 +1103,8 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             layout: layout,
             transition: .immediate,
             animateContent: false,
-            includeAccessoryContent: false,
             allowsContainerLayoutRequests: false
         )
-        bar.setButtonsOnlyTransitionMode(true)
-        bar.setTitleContentHiddenForTransition(true)
-        bar.setButtonChromeScale(1.0, transition: .immediate)
         return bar
     }
 
@@ -1096,23 +1119,6 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         }
         state.targetController.view.bringSubviewToFront(state.targetBar)
         state.sourceController.view.bringSubviewToFront(state.sourceBar)
-    }
-
-    private func installTransitionButtonNavigationBars(_ state: NavigationBarInteractiveTransition) {
-        guard let sourceButtonBar = state.sourceButtonBar, let targetButtonBar = state.targetButtonBar else {
-            return
-        }
-
-        if sourceButtonBar.superview !== view {
-            sourceButtonBar.removeFromSuperview()
-            view.addSubview(sourceButtonBar)
-        }
-        if targetButtonBar.superview !== view {
-            targetButtonBar.removeFromSuperview()
-            view.addSubview(targetButtonBar)
-        }
-        view.bringSubviewToFront(targetButtonBar)
-        view.bringSubviewToFront(sourceButtonBar)
     }
 
     private func beginInteractiveNavigationBarTransition(
@@ -1144,27 +1150,66 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             targetBar: targetBar,
             isInteractive: isInteractive
         )
-        state.sourceButtonBar = makeTransitionButtonNavigationBar(for: sourceController, in: stack, layout: layout)
-        state.targetButtonBar = makeTransitionButtonNavigationBar(for: targetController, in: stack, layout: layout)
         interactiveNavigationBarTransition = state
 
         if let sharedNavigationBar {
             sharedNavigationBar.alpha = sourceController.displayNavigationBar ? 1.0 : 0.0
             sharedNavigationBar.transform = .identity
             sharedNavigationBar.setTitleContentHiddenForTransition(true)
-            sharedNavigationBar.setButtonContentHiddenForTransition(true)
+            sharedNavigationBar.setButtonContentHiddenForTransition(false)
             sharedNavigationBar.setButtonChromeScale(1.0, transition: .immediate)
         }
 
         installTransitionNavigationBars(state)
-        installTransitionButtonNavigationBars(state)
         refreshInteractiveNavigationBarTransition(state, layout: layout, transition: .immediate)
         updateExternalNavigationBarHeightsForTransition(state, layout: layout)
+        if !isInteractive {
+            startNonInteractiveNavigationBarButtonTransition(state, layout: layout)
+        }
         sourceController.containerLayoutUpdated(layout, transition: .immediate)
         targetController.containerLayoutUpdated(layout, transition: .immediate)
         installTransitionNavigationBars(state)
-        installTransitionButtonNavigationBars(state)
         updateInteractiveNavigationBarTransition(progress: 0.0, transition: .immediate)
+    }
+
+    private func startNonInteractiveNavigationBarButtonTransition(
+        _ state: NavigationBarInteractiveTransition,
+        layout: ContainerViewLayout
+    ) {
+        let bar = ensureSharedNavigationBar()
+        if bar.superview !== view {
+            view.addSubview(bar)
+        }
+
+        let buttonTransition = NavigationTransitionCoordinator.nonInteractiveCompletionTransition(direction: state.direction)
+        configureNavigationBar(
+            bar,
+            for: state.targetController,
+            in: state.targetStack,
+            layout: layout,
+            transition: .immediate,
+            animateContent: false,
+            buttonMorphTransition: buttonTransition,
+            includeAccessoryContent: false
+        )
+        updateExternalNavigationBarHeights(
+            layout: layout,
+            resolvedTopController: state.targetController,
+            resolvedTopHeight: bar.frame.height
+        )
+
+        bar.transform = .identity
+        bar.alpha = state.targetController.displayNavigationBar ? 1.0 : 0.0
+        bar.setTitleContentHiddenForTransition(true)
+        bar.setButtonContentHiddenForTransition(false)
+        bar.setButtonChromeScale(1.0, transition: .immediate)
+        sharedNavigationBarController = state.targetController
+        state.didResolveButtonTransition = true
+        state.resolvedCompleted = true
+        if view.subviews.last !== bar {
+            view.bringSubviewToFront(bar)
+        }
+        bar.bringButtonLayerToFrontIfNeeded()
     }
 
     private func refreshInteractiveNavigationBarTransition(
@@ -1184,7 +1229,6 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         state.sourceBaseFrame = sourceLayout.navigationFrame
         state.sourceBar.setTitleTransitionMode(true)
         state.sourceBar.setTitleContentHiddenForTransition(false)
-        state.sourceBar.setButtonChromeScale(1.0, transition: .immediate)
 
         let targetLayout = configureNavigationBar(
             state.targetBar,
@@ -1198,45 +1242,8 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         state.targetBaseFrame = targetLayout.navigationFrame
         state.targetBar.setTitleTransitionMode(true)
         state.targetBar.setTitleContentHiddenForTransition(false)
-        state.targetBar.setButtonChromeScale(1.0, transition: .immediate)
-
-        if let sourceButtonBar = state.sourceButtonBar {
-            let sourceButtonLayout = configureNavigationBar(
-                sourceButtonBar,
-                for: state.sourceController,
-                in: state.sourceStack,
-                layout: layout,
-                transition: .immediate,
-                animateContent: false,
-                includeAccessoryContent: false,
-                allowsContainerLayoutRequests: false
-            )
-            sourceButtonBar.frame = sourceButtonLayout.navigationFrame
-            sourceButtonBar.setButtonsOnlyTransitionMode(true)
-            sourceButtonBar.setTitleContentHiddenForTransition(true)
-            state.sourceButtonChromeLayout = sourceButtonBar.buttonChromeLayout()
-        }
-        if let targetButtonBar = state.targetButtonBar {
-            let targetButtonLayout = configureNavigationBar(
-                targetButtonBar,
-                for: state.targetController,
-                in: state.targetStack,
-                layout: layout,
-                transition: .immediate,
-                animateContent: false,
-                includeAccessoryContent: false,
-                allowsContainerLayoutRequests: false
-            )
-            targetButtonBar.frame = targetButtonLayout.navigationFrame
-            targetButtonBar.setButtonsOnlyTransitionMode(true)
-            targetButtonBar.setTitleContentHiddenForTransition(true)
-            state.targetButtonChromeLayout = targetButtonBar.buttonChromeLayout()
-        }
-        state.didPrepareHeldButtonChrome = false
-        state.lastHeldButtonHorizontalScale = nil
 
         installTransitionNavigationBars(state)
-        installTransitionButtonNavigationBars(state)
         updateExternalNavigationBarHeightsForTransition(state, layout: layout)
         if let minimizedContainer, minimizedContainer.superview === view {
             view.bringSubviewToFront(minimizedContainer)
@@ -1257,308 +1264,14 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         state.targetBar.layer.mask = nil
     }
 
-    private func interpolatedButtonChromeLayout(
-        source: NavigationBarImpl.ButtonChromeLayout?,
-        target: NavigationBarImpl.ButtonChromeLayout?,
-        progress: CGFloat
-    ) -> NavigationBarImpl.ButtonChromeLayout? {
-        guard let target else {
-            return nil
-        }
-        return NavigationBarImpl.ButtonChromeLayout(
-            leftFrame: interpolatedButtonChromeFrame(
-                source: source?.leftFrame,
-                target: target.leftFrame,
-                progress: progress,
-                alignment: .left
-            ),
-            rightFrame: interpolatedButtonChromeFrame(
-                source: source?.rightFrame,
-                target: target.rightFrame,
-                progress: progress,
-                alignment: .right
-            )
-        )
-    }
-
-    private func disappearingSourceButtonChromeLayout(
-        source: NavigationBarImpl.ButtonChromeLayout?,
-        target: NavigationBarImpl.ButtonChromeLayout?,
-        progress: CGFloat
-    ) -> NavigationBarImpl.ButtonChromeLayout? {
-        guard let source else {
-            return nil
-        }
-        return NavigationBarImpl.ButtonChromeLayout(
-            leftFrame: disappearingSourceButtonChromeFrame(
-                source: source.leftFrame,
-                target: target?.leftFrame,
-                progress: progress,
-                alignment: .left
-            ),
-            rightFrame: disappearingSourceButtonChromeFrame(
-                source: source.rightFrame,
-                target: target?.rightFrame,
-                progress: progress,
-                alignment: .right
-            )
-        )
-    }
-
-    private enum ButtonChromeSide {
-        case left
-        case right
-    }
-
-    private func interpolatedButtonChromeFrame(
-        source: CGRect?,
-        target: CGRect?,
-        progress: CGFloat,
-        alignment: ButtonChromeSide
-    ) -> CGRect? {
-        guard let target else {
-            return nil
-        }
-        let clampedProgress = max(0.0, min(1.0, progress))
-        let startFrame = source ?? collapsedButtonChromeFrame(from: target, alignment: alignment)
-        return interpolatedAnchoredButtonChromeFrame(
-            from: startFrame,
-            to: target,
-            progress: clampedProgress,
-            alignment: alignment,
-            anchorFrame: target
-        )
-    }
-
-    private func disappearingSourceButtonChromeFrame(
-        source: CGRect?,
-        target: CGRect?,
-        progress: CGFloat,
-        alignment: ButtonChromeSide
-    ) -> CGRect? {
-        guard let source else {
-            return nil
-        }
-        let clampedProgress = max(0.0, min(1.0, progress))
-        let endFrame = target ?? collapsedButtonChromeFrame(from: source, alignment: alignment)
-        return interpolatedAnchoredButtonChromeFrame(
-            from: source,
-            to: endFrame,
-            progress: clampedProgress,
-            alignment: alignment,
-            anchorFrame: source
-        )
-    }
-
-    private func collapsedButtonChromeFrame(from frame: CGRect, alignment: ButtonChromeSide) -> CGRect {
-        let collapsedWidth = min(frame.width, max(1.0, frame.height))
-        switch alignment {
-        case .left:
-            return CGRect(x: frame.minX, y: frame.minY, width: collapsedWidth, height: frame.height)
-        case .right:
-            return CGRect(x: frame.maxX - collapsedWidth, y: frame.minY, width: collapsedWidth, height: frame.height)
-        }
-    }
-
-    private func interpolatedAnchoredButtonChromeFrame(
-        from source: CGRect,
-        to target: CGRect,
-        progress: CGFloat,
-        alignment: ButtonChromeSide,
-        anchorFrame: CGRect
-    ) -> CGRect {
-        let width = source.width + (target.width - source.width) * progress
-        let height = source.height + (target.height - source.height) * progress
-        let y = anchorFrame.midY - height * 0.5
-        switch alignment {
-        case .left:
-            return CGRect(x: anchorFrame.minX, y: y, width: width, height: height)
-        case .right:
-            return CGRect(x: anchorFrame.maxX - width, y: y, width: width, height: height)
-        }
-    }
-
-    private func sourceButtonChromeAlpha(source: CGRect?, target: CGRect?, progress: CGFloat) -> CGFloat {
-        guard source != nil else {
-            return 0.0
-        }
-        guard let source, let target else {
-            return 1.0 - progress
-        }
-        if abs(source.width - target.width) > 1.0 || abs(source.height - target.height) > 1.0 {
-            return 0.0
-        }
-        return 0.0
-    }
-
-    private func targetButtonChromeAlpha(source: CGRect?, target: CGRect?, progress: CGFloat) -> CGFloat {
-        guard let target else {
-            return 0.0
-        }
-        guard let source else {
-            return progress
-        }
-        if abs(source.width - target.width) > 1.0 || abs(source.height - target.height) > 1.0 {
-            return 1.0
-        }
-        return 1.0
-    }
-
-    private func buttonChromeLayoutHasSizeChange(
-        source: NavigationBarImpl.ButtonChromeLayout?,
-        target: NavigationBarImpl.ButtonChromeLayout?
-    ) -> Bool {
-        func hasSizeChange(_ source: CGRect?, _ target: CGRect?) -> Bool {
-            guard let source, let target else {
-                return false
-            }
-            return abs(source.width - target.width) > 1.0 || abs(source.height - target.height) > 1.0
-        }
-        return hasSizeChange(source?.leftFrame, target?.leftFrame) || hasSizeChange(source?.rightFrame, target?.rightFrame)
-    }
-
-    private func updateInteractiveButtonNavigationBarTransition(
-        _ state: NavigationBarInteractiveTransition,
-        progress: CGFloat,
-        transition: ContainedViewLayoutTransition
-    ) {
-        guard let sourceButtonBar = state.sourceButtonBar, let targetButtonBar = state.targetButtonBar else {
-            return
-        }
-
-        let clampedProgress = max(0.0, min(1.0, progress))
-        let sourceEffectTransition = navigationBarButtonEffectTransition(from: transition, appearing: false)
-        let targetEffectTransition = navigationBarButtonEffectTransition(from: transition, appearing: true)
-        let maxBlurRadius: CGFloat = 10.0
-        let sourceAlpha = 1.0 - clampedProgress
-        let targetAlpha = clampedProgress
-        let transitionScaleDelta: CGFloat = 0.06
-        let sourceScale = 1.0 - transitionScaleDelta * clampedProgress
-        let targetScale = 1.0 - transitionScaleDelta * (1.0 - clampedProgress)
-        let keepsSharedPureBackButtonStable = sourceButtonBar.hasPureAutomaticBackButtonGroup && targetButtonBar.hasPureAutomaticBackButtonGroup
-        let hasChromeSizeChange = buttonChromeLayoutHasSizeChange(
-            source: state.sourceButtonChromeLayout,
-            target: state.targetButtonChromeLayout
-        )
-        let sourceChromeAlphaTransition: ContainedViewLayoutTransition = hasChromeSizeChange ? .immediate : sourceEffectTransition
-        let targetChromeAlphaTransition: ContainedViewLayoutTransition = hasChromeSizeChange ? .immediate : targetEffectTransition
-
-        sourceButtonBar.alpha = state.sourceController.displayNavigationBar ? 1.0 : 0.0
-        targetButtonBar.alpha = state.targetController.displayNavigationBar ? 1.0 : 0.0
-        if let sourceChromeLayout = disappearingSourceButtonChromeLayout(
-            source: state.sourceButtonChromeLayout,
-            target: state.targetButtonChromeLayout,
-            progress: clampedProgress
-        ) {
-            sourceButtonBar.setButtonChromeLayout(sourceChromeLayout, transition: sourceEffectTransition, appearing: false)
-        }
-        if let targetChromeLayout = interpolatedButtonChromeLayout(
-            source: state.sourceButtonChromeLayout,
-            target: state.targetButtonChromeLayout,
-            progress: clampedProgress
-        ) {
-            targetButtonBar.setButtonChromeLayout(targetChromeLayout, transition: targetEffectTransition, appearing: true)
-        }
-        sourceButtonBar.setButtonChromeAlpha(
-            left: sourceButtonChromeAlpha(
-                source: state.sourceButtonChromeLayout?.leftFrame,
-                target: state.targetButtonChromeLayout?.leftFrame,
-                progress: clampedProgress
-            ),
-            right: sourceButtonChromeAlpha(
-                source: state.sourceButtonChromeLayout?.rightFrame,
-                target: state.targetButtonChromeLayout?.rightFrame,
-                progress: clampedProgress
-            ),
-            keepsPureBackButtonStable: keepsSharedPureBackButtonStable,
-            transition: sourceChromeAlphaTransition
-        )
-        targetButtonBar.setButtonChromeAlpha(
-            left: targetButtonChromeAlpha(
-                source: state.sourceButtonChromeLayout?.leftFrame,
-                target: state.targetButtonChromeLayout?.leftFrame,
-                progress: clampedProgress
-            ),
-            right: targetButtonChromeAlpha(
-                source: state.sourceButtonChromeLayout?.rightFrame,
-                target: state.targetButtonChromeLayout?.rightFrame,
-                progress: clampedProgress
-            ),
-            keepsPureBackButtonStable: keepsSharedPureBackButtonStable,
-            transition: targetChromeAlphaTransition
-        )
-        sourceButtonBar.setButtonTransitionEffects(
-            alpha: sourceAlpha,
-            blurRadius: clampedProgress * maxBlurRadius,
-            scale: sourceScale,
-            pulseAmplitude: buttonPulseAmplitude(appearing: false),
-            keepsPureBackButtonStable: keepsSharedPureBackButtonStable,
-            transition: sourceEffectTransition
-        )
-        targetButtonBar.setButtonTransitionEffects(
-            alpha: targetAlpha,
-            blurRadius: (1.0 - clampedProgress) * maxBlurRadius,
-            scale: targetScale,
-            pulseAmplitude: buttonPulseAmplitude(appearing: true),
-            keepsPureBackButtonStable: keepsSharedPureBackButtonStable,
-            transition: targetEffectTransition
-        )
-    }
-
-    private func holdInteractiveButtonNavigationBarTransition(
-        _ state: NavigationBarInteractiveTransition,
-        progress: CGFloat,
-        transition: ContainedViewLayoutTransition
-    ) {
-        guard let sourceButtonBar = state.sourceButtonBar, let targetButtonBar = state.targetButtonBar else {
-            return
-        }
-
-        let horizontalScale = 1.0 + 0.012 * max(0.0, min(1.0, progress))
-        sourceButtonBar.alpha = state.sourceController.displayNavigationBar ? 1.0 : 0.0
-        targetButtonBar.alpha = 0.0
-        if !state.didPrepareHeldButtonChrome {
-            if let sourceChromeLayout = state.sourceButtonChromeLayout {
-                sourceButtonBar.setButtonChromeLayout(sourceChromeLayout, transition: .immediate)
-            }
-            if let targetInitialChromeLayout = interpolatedButtonChromeLayout(
-                source: state.sourceButtonChromeLayout,
-                target: state.targetButtonChromeLayout,
-                progress: 0.0
-            ) {
-                targetButtonBar.setButtonChromeLayout(targetInitialChromeLayout, transition: .immediate, appearing: true)
-            }
-            sourceButtonBar.setButtonChromeAlpha(left: 1.0, right: 1.0, transition: .immediate)
-            targetButtonBar.setButtonChromeAlpha(left: 0.0, right: 0.0, transition: .immediate)
-            sourceButtonBar.setButtonTransitionEffects(alpha: 1.0, blurRadius: 0.0, scale: 1.0, horizontalScale: horizontalScale, transition: .immediate)
-            targetButtonBar.setButtonTransitionEffects(alpha: 0.0, blurRadius: 10.0, scale: 1.0, transition: .immediate)
-            state.didPrepareHeldButtonChrome = true
-            state.lastHeldButtonHorizontalScale = nil
-        }
-
-        if transition.isAnimated || state.lastHeldButtonHorizontalScale == nil || abs((state.lastHeldButtonHorizontalScale ?? 1.0) - horizontalScale) > 0.0005 {
-            sourceButtonBar.setButtonContentTransform(scale: 1.0, horizontalScale: horizontalScale, transition: transition)
-            state.lastHeldButtonHorizontalScale = horizontalScale
-        }
-    }
-
     private func updateInteractiveNavigationBarTransition(progress: CGFloat, transition: ContainedViewLayoutTransition) {
         guard let state = interactiveNavigationBarTransition else {
             return
         }
 
         state.progress = progress
-        let clampedProgress = max(0.0, min(1.0, progress))
 
         applyNavigationBarTitleTransitionProgress(state, progress: progress, transition: transition)
-
-        if state.sourceButtonBar != nil && state.targetButtonBar != nil {
-            if state.isInteractive && state.resolvedCompleted != true {
-                holdInteractiveButtonNavigationBarTransition(state, progress: clampedProgress, transition: transition)
-            } else {
-                updateInteractiveButtonNavigationBarTransition(state, progress: clampedProgress, transition: transition)
-            }
-        }
 
         if let sharedNavigationBar {
             if let resolvedCompleted = state.resolvedCompleted {
@@ -1566,15 +1279,18 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
                 sharedNavigationBar.alpha = resolvedController.displayNavigationBar ? 1.0 : 0.0
                 sharedNavigationBar.transform = .identity
                 sharedNavigationBar.setTitleContentHiddenForTransition(true)
-                sharedNavigationBar.setButtonContentHiddenForTransition(true)
+                sharedNavigationBar.setButtonContentHiddenForTransition(false)
+                sharedNavigationBar.setButtonChromeScale(1.0, transition: transition)
+                sharedNavigationBar.bringButtonLayerToFrontIfNeeded()
                 return
             }
 
             sharedNavigationBar.alpha = state.sourceController.displayNavigationBar ? 1.0 : 0.0
             sharedNavigationBar.transform = .identity
             sharedNavigationBar.setTitleContentHiddenForTransition(true)
-            sharedNavigationBar.setButtonContentHiddenForTransition(true)
+            sharedNavigationBar.setButtonContentHiddenForTransition(false)
             sharedNavigationBar.setButtonChromeScale(1.0, transition: transition)
+            sharedNavigationBar.bringButtonLayerToFrontIfNeeded()
         }
     }
 
@@ -1594,16 +1310,17 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         let targetController = completed ? state.targetController : state.sourceController
         let targetStack = completed ? state.targetStack : state.sourceStack
 
-        if state.isInteractive {
+        if state.isInteractive && !completed {
             if let sharedNavigationBar {
                 sharedNavigationBar.transform = .identity
                 sharedNavigationBar.setTitleContentHiddenForTransition(true)
-                sharedNavigationBar.setButtonContentHiddenForTransition(true)
+                sharedNavigationBar.setButtonContentHiddenForTransition(false)
+                sharedNavigationBar.setButtonChromeScale(1.0, transition: .immediate)
                 if view.subviews.last !== sharedNavigationBar {
                     view.bringSubviewToFront(sharedNavigationBar)
                 }
+                sharedNavigationBar.bringButtonLayerToFrontIfNeeded()
             }
-            installTransitionButtonNavigationBars(state)
             return
         }
 
@@ -1634,19 +1351,13 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         bar.transform = .identity
         bar.alpha = targetController.displayNavigationBar ? 1.0 : 0.0
         bar.setTitleContentHiddenForTransition(true)
-        bar.setButtonContentHiddenForTransition(true)
-        if state.sourceButtonBar != nil && state.targetButtonBar != nil {
-            if !state.isInteractive {
-                updateInteractiveButtonNavigationBarTransition(state, progress: completed ? 1.0 : 0.0, transition: buttonTransition)
-            }
-        } else {
-            bar.setButtonChromeScale(1.0, transition: buttonTransition)
-        }
+        bar.setButtonContentHiddenForTransition(false)
+        bar.setButtonChromeScale(1.0, transition: buttonTransition)
         sharedNavigationBarController = targetController
         if view.subviews.last !== bar {
             view.bringSubviewToFront(bar)
         }
-        installTransitionButtonNavigationBars(state)
+        bar.bringButtonLayerToFrontIfNeeded()
     }
 
     private func finishInteractiveNavigationBarTransition(_ state: NavigationBarInteractiveTransition, completed: Bool) {
@@ -1661,7 +1372,9 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
 
         let shouldRunFinishButtonMorph = completed && state.isInteractive && !state.didResolveButtonTransition
         let finishButtonTransition: ContainedViewLayoutTransition = shouldRunFinishButtonMorph ? navigationBarButtonMorphTransition() : .immediate
-        if let layout = validLayout ?? currentLayoutForComputation() {
+        let buttonTransitionAlreadyResolved = state.didResolveButtonTransition && sharedNavigationBarController === targetController
+        let shouldConfigureFinalBar = !buttonTransitionAlreadyResolved
+        if shouldConfigureFinalBar, let layout = validLayout ?? currentLayoutForComputation() {
             configureNavigationBar(
                 bar,
                 for: targetController,
@@ -1676,6 +1389,12 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
                 resolvedTopController: targetController,
                 resolvedTopHeight: bar.frame.height
             )
+        } else if let layout = validLayout ?? currentLayoutForComputation() {
+            updateExternalNavigationBarHeights(
+                layout: layout,
+                resolvedTopController: targetController,
+                resolvedTopHeight: bar.frame.height
+            )
         }
         bar.transform = .identity
         bar.alpha = targetController.displayNavigationBar ? 1.0 : 0.0
@@ -1684,13 +1403,14 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         bar.setButtonChromeScale(1.0, transition: finishButtonTransition)
         sharedNavigationBarController = targetController
 
+        state.sourceBar.detachButtonLayerFromHost()
         state.sourceBar.removeFromSuperview()
+        state.targetBar.detachButtonLayerFromHost()
         state.targetBar.removeFromSuperview()
-        state.sourceButtonBar?.removeFromSuperview()
-        state.targetButtonBar?.removeFromSuperview()
         if view.subviews.last !== bar {
             view.bringSubviewToFront(bar)
         }
+        bar.bringButtonLayerToFrontIfNeeded()
     }
 
     private func cleanupRemovedChildren() {
@@ -1756,6 +1476,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         container.requestLayout = { [weak self] transition in
             self?.requestLayout(transition: transition)
         }
+        wireControllerLayoutProvider(to: container)
         wireNavigationBarTransitionCallbacks(to: container)
 
         installRootContainerView(container)
@@ -1793,12 +1514,35 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             }
         )
         container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        wireControllerLayoutProvider(to: container.masterContainer)
+        wireControllerLayoutProvider(to: container.detailContainer)
         wireNavigationBarTransitionCallbacks(to: container.masterContainer)
         wireNavigationBarTransitionCallbacks(to: container.detailContainer)
 
         installRootContainerView(container)
         rootContainer = .split(container)
         return container
+    }
+
+    private func updateRootContainerLayoutProviders() {
+        switch rootContainer {
+        case let .flat(container):
+            wireControllerLayoutProvider(to: container)
+        case let .split(container):
+            wireControllerLayoutProvider(to: container.masterContainer)
+            wireControllerLayoutProvider(to: container.detailContainer)
+        case nil:
+            break
+        }
+    }
+
+    private func wireControllerLayoutProvider(to container: NavigationContainer) {
+        container.layoutForController = { [weak self] controller, layout in
+            guard let self, let layoutForController = self.layoutForController else {
+                return layout
+            }
+            return layoutForController(controller, layout)
+        }
     }
 
     private func wireNavigationBarTransitionCallbacks(to container: NavigationContainer) {

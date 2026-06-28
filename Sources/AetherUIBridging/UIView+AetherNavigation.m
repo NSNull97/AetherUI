@@ -1,6 +1,12 @@
 #import "UIView+AetherNavigation.h"
 #import <objc/runtime.h>
 
+@protocol AetherRemoteKeyboardWindowProtocol
+
++ (UIWindow * _Nullable)remoteKeyboardWindowForScreen:(UIScreen * _Nullable)screen create:(BOOL)create;
+
+@end
+
 static const void *kDisablesInteractiveTransitionGestureRecognizerKey = &kDisablesInteractiveTransitionGestureRecognizerKey;
 static const void *kDisablesInteractiveKeyboardGestureRecognizerKey = &kDisablesInteractiveKeyboardGestureRecognizerKey;
 static const void *kDisablesInteractiveTransitionGestureRecognizerNowKey = &kDisablesInteractiveTransitionGestureRecognizerNowKey;
@@ -91,3 +97,16 @@ BOOL AetherViewTreeDisablesInteractiveKeyboardGesture(UIView *view) {
     }
     return NO;
 }
+
+@implementation UIApplication (AetherKeyboardRuntime)
+
+- (UIWindow * _Nullable)aether_internalGetKeyboardWindow {
+    Class windowClass = NSClassFromString(@"UIRemoteKeyboardWindow");
+    SEL selector = @selector(remoteKeyboardWindowForScreen:create:);
+    if (windowClass == Nil || ![windowClass respondsToSelector:selector]) {
+        return nil;
+    }
+    return [(id<AetherRemoteKeyboardWindowProtocol>)windowClass remoteKeyboardWindowForScreen:[UIScreen mainScreen] create:NO];
+}
+
+@end

@@ -105,6 +105,17 @@ final class NavigationTransitionCoordinator {
         return makeCompletionTransition(velocity: 0.0)
     }
 
+    static func nonInteractiveCompletionTransition(direction: NavigationTransitionDirection) -> ContainedViewLayoutTransition {
+        let duration: Double
+        switch direction {
+        case .push:
+            duration = 0.50
+        case .pop:
+            duration = 0.46
+        }
+        return .animated(duration: duration, curve: .navigationEaseOut)
+    }
+
     func completionTransition(velocity: CGFloat) -> ContainedViewLayoutTransition {
         return makeCompletionTransition(velocity: velocity)
     }
@@ -312,12 +323,7 @@ final class NavigationTransitionCoordinator {
             // Non-interactive (programmatic) completion. Slightly longer
             // than the previous 0.40s spring and explicitly ease-out, so the
             // card lands with a decelerating glide instead of a stiff snap.
-            let duration: Double
-            switch direction {
-            case .push: duration = 0.50
-            case .pop: duration = 0.46
-            }
-            return .animated(duration: duration, curve: .navigationEaseOut)
+            return Self.nonInteractiveCompletionTransition(direction: direction)
         } else {
             // Interactive slow release (fast flicks and already-overpulled
             // states are routed through the one-way exit path above).

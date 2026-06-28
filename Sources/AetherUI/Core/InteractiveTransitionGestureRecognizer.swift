@@ -30,6 +30,7 @@ public enum InteractiveTransitionGestureRecognizerEdgeWidth {
 public class InteractiveTransitionGestureRecognizer: UIPanGestureRecognizer {
     private let edgeWidth: InteractiveTransitionGestureRecognizerEdgeWidth
     private let allowedDirections: (CGPoint) -> InteractiveTransitionGestureRecognizerDirections
+    var edgeWidthOverride: (() -> InteractiveTransitionGestureRecognizerEdgeWidth?)?
     private var validatedGesture = false
     private var firstLocation = CGPoint()
     private var currentAllowedDirections: InteractiveTransitionGestureRecognizerDirections = []
@@ -95,13 +96,17 @@ public class InteractiveTransitionGestureRecognizer: UIPanGestureRecognizer {
             }
         }
 
-        let effectiveEdgeWidth = self.edgeWidth.effectiveWidth(for: view.bounds.width)
+        let effectiveEdgeWidth = (self.edgeWidthOverride?() ?? self.edgeWidth).effectiveWidth(for: view.bounds.width)
 
-        if self.currentAllowedDirections.contains(.leftEdge) && location.x < effectiveEdgeWidth {
-            self.validatedGesture = true
+        if self.currentAllowedDirections.contains(.leftEdge) && location.x >= effectiveEdgeWidth {
+            self.currentAllowedDirections.remove(.leftEdge)
         }
-        if self.currentAllowedDirections.contains(.rightEdge) && location.x > view.bounds.width - effectiveEdgeWidth {
-            self.validatedGesture = true
+        if self.currentAllowedDirections.contains(.rightEdge) && location.x <= view.bounds.width - effectiveEdgeWidth {
+            self.currentAllowedDirections.remove(.rightEdge)
+        }
+        if self.currentAllowedDirections.isEmpty {
+            self.state = .failed
+            return
         }
     }
 
@@ -120,7 +125,9 @@ public class InteractiveTransitionGestureRecognizer: UIPanGestureRecognizer {
         if !self.validatedGesture {
             if absX + absY > 4.0 {
                 if self.currentAllowedDirections.contains(.leftEdge) || self.currentAllowedDirections.contains(.rightEdge) {
-                    if absX > absY {
+                    let allowsRightwardEdgePan = self.currentAllowedDirections.contains(.leftEdge) && translation.x > 0.0
+                    let allowsLeftwardEdgePan = self.currentAllowedDirections.contains(.rightEdge) && translation.x < 0.0
+                    if absX > absY && (allowsRightwardEdgePan || allowsLeftwardEdgePan) {
                         self.validatedGesture = true
                     } else {
                         self.state = .failed
@@ -134,7 +141,9 @@ public class InteractiveTransitionGestureRecognizer: UIPanGestureRecognizer {
                         return
                     }
                 } else if self.currentAllowedDirections.contains(.right) || self.currentAllowedDirections.contains(.left) {
-                    if absX > absY {
+                    let allowsRightwardPan = self.currentAllowedDirections.contains(.right) && translation.x > 0.0
+                    let allowsLeftwardPan = self.currentAllowedDirections.contains(.left) && translation.x < 0.0
+                    if absX > absY && (allowsRightwardPan || allowsLeftwardPan) {
                         self.validatedGesture = true
                     } else {
                         self.state = .failed

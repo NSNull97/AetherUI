@@ -88,6 +88,7 @@ import AetherUIBridging
         }
         return item
     }()
+    public let pageItem = AetherPageItem()
 
     // MARK: - Tab Bar
 
@@ -488,7 +489,11 @@ import AetherUIBridging
     }
 
     open func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        let previousLayout = currentlyAppliedLayout
         self.updateCurrentContainerLayout(layout)
+        let navigationChromeTransition: ContainedViewLayoutTransition = previousLayout.map { layout.differsOnlyInKeyboardInput(from: $0) } == true
+            ? .immediate
+            : transition
 
         let navLayout = navigationLayout(layout: layout)
 
@@ -524,7 +529,7 @@ import AetherUIBridging
                 rightInset: layout.safeInsets.right,
                 appearsHidden: !displayNavigationBar,
                 isLandscape: layout.size.width > layout.size.height,
-                transition: transition
+                transition: navigationChromeTransition
             )
             view.bringSubviewToFront(bar)
         }
@@ -542,7 +547,7 @@ import AetherUIBridging
         // propagated `layout.safeInsets.bottom` stays stable; we use
         // that for the no-tab-bar fallback.
         let pillOrSafeTopY: CGFloat
-        if let tabBar = aetherTabBarController, let topY = tabBar.chromeTopY(in: view) {
+        if shouldAnchorToTabBarChrome, let tabBar = aetherTabBarController, let topY = tabBar.chromeTopY(in: view) {
             pillOrSafeTopY = topY
         } else {
             let rawSafeBottom: CGFloat = view.window?.safeAreaInsets.bottom ?? layout.safeInsets.bottom
@@ -947,6 +952,16 @@ import AetherUIBridging
             current = controller.parent
         }
         return nil
+    }
+
+    private var shouldAnchorToTabBarChrome: Bool {
+        guard hidesBottomBarWhenPushed,
+              let navigationController = aetherNavigationController,
+              let rootController = navigationController.viewControllerStack.first
+        else {
+            return true
+        }
+        return self === rootController
     }
 
     /// The closest `AetherTabBarController` up the parent chain, if

@@ -1,5 +1,18 @@
 import UIKit
 
+private final class PageScrollView: UIScrollView {
+    var shouldBeginPagePan: ((UIPanGestureRecognizer) -> Bool)?
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === panGestureRecognizer,
+           let panGestureRecognizer = gestureRecognizer as? UIPanGestureRecognizer,
+           let shouldBeginPagePan {
+            return shouldBeginPagePan(panGestureRecognizer)
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+}
+
 /// A Telegram-style horizontal page controller with a glass segmented pager.
 ///
 /// The controller owns a paging `UIScrollView` for page content and exposes
@@ -14,6 +27,14 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         public init(title: String, viewController: UIViewController) {
             self.title = title
             self.viewController = viewController
+        }
+
+        public init(viewController: UIViewController, title: String? = nil) {
+            self.viewController = viewController
+            self.title = title
+                ?? (viewController as? AetherViewController)?.pageItem.title
+                ?? viewController.title
+                ?? ""
         }
     }
 
@@ -86,7 +107,7 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
             items: [AetherSegmentedControl.Item],
             selectedIndex: Int,
             theme: AetherSegmentedControl.Theme = .system,
-            contentInsets: UIEdgeInsets = UIEdgeInsets(top: 6.0, left: 16.0, bottom: 8.0, right: 16.0),
+            contentInsets: UIEdgeInsets = .zero,
             maximumContentWidth: CGFloat? = nil
         ) {
             self.segmentedControl = AetherSegmentedControl(
@@ -120,6 +141,14 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
             segmentedControl.setSelectedIndex(index, animated: animated)
         }
 
+        internal func setSelectedIndex(_ index: Int, animated: Bool, updatesSelectionProgress: Bool) {
+            segmentedControl.setSelectedIndex(index, animated: animated, updatesSelectionProgress: updatesSelectionProgress)
+        }
+
+        internal func setSelectionProgress(_ progress: CGFloat, animated: Bool) {
+            segmentedControl.setSelectionProgress(progress, animated: animated)
+        }
+
         public func updateTheme(_ theme: Theme) {
             segmentedControl.updateTheme(theme)
         }
@@ -133,17 +162,17 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
             let horizontalInset = contentInsets.left + contentInsets.right
             let sideInset = max(leftInset, rightInset)
             let availableWidth = max(0.0, size.width - sideInset * 2.0 - horizontalInset)
-            let intrinsicWidth = segmentedControl.intrinsicContentSize.width
-            let limitedIntrinsicWidth: CGFloat
+            let controlWidth: CGFloat
             if let maximumContentWidth {
-                limitedIntrinsicWidth = min(intrinsicWidth, maximumContentWidth)
+                controlWidth = min(availableWidth, max(0.0, maximumContentWidth))
             } else {
-                limitedIntrinsicWidth = intrinsicWidth
+                controlWidth = availableWidth
             }
-            let controlWidth = min(availableWidth, max(0.0, limitedIntrinsicWidth))
-            let controlHeight = segmentedControl.preferredHeight
+            let verticalInset = contentInsets.top + contentInsets.bottom
+            let controlHeight = max(0.0, size.height - verticalInset)
+            let controlX = sideInset + contentInsets.left + floor((availableWidth - controlWidth) / 2.0)
             let controlFrame = CGRect(
-                x: floor((size.width - controlWidth) / 2.0),
+                x: controlX,
                 y: contentInsets.top,
                 width: controlWidth,
                 height: controlHeight
@@ -179,6 +208,13 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
     private var isApplyingProgrammaticScroll = false
     private var pendingValidatedScrollIndex: Int?
 
+    private static let topBarAccessoryPagerContentInsets = UIEdgeInsets(
+        top: 0.0,
+        left: 16.0,
+        bottom: 0.0,
+        right: 16.0
+    )
+
     public init(
         pages: [Page],
         selectedIndex: Int = 0,
@@ -188,19 +224,24 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         self.pages = pages
         let clampedSelectedIndex = Self.clampedIndex(selectedIndex, pageCount: pages.count)
         self.selectedIndex = clampedSelectedIndex
-        self.scrollView = UIScrollView(frame: .zero)
+        self.scrollView = PageScrollView(frame: .zero)
         self.viewPager = PagerView(
-            items: pages.map { AetherSegmentedControl.Item(title: $0.title) },
-            selectedIndex: clampedSelectedIndex
+            items: Self.segmentedItems(for: pages),
+            selectedIndex: clampedSelectedIndex,
+            contentInsets: installViewPagerAsTopBarAccessory ? Self.topBarAccessoryPagerContentInsets : .zero
         )
 
         super.init(navigationBarPresentationData: navigationBarPresentationData)
+
+        configureEmbeddedPageControllers()
 
         if installViewPagerAsTopBarAccessory {
             topBarAccessory = viewPager
         }
 
         configurePagerSelectionHandling()
+        configurePageScrollGestureHandling()
+        configurePageItems()
     }
 
     public init<Index: RawRepresentable>(
@@ -212,23 +253,42 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         self.pages = pages
         let clampedSelectedIndex = Self.clampedIndex(selectedIndex.rawValue, pageCount: pages.count)
         self.selectedIndex = clampedSelectedIndex
-        self.scrollView = UIScrollView(frame: .zero)
+        self.scrollView = PageScrollView(frame: .zero)
         self.viewPager = PagerView(
-            items: pages.map { AetherSegmentedControl.Item(title: $0.title) },
-            selectedIndex: clampedSelectedIndex
+            items: Self.segmentedItems(for: pages),
+            selectedIndex: clampedSelectedIndex,
+            contentInsets: installViewPagerAsTopBarAccessory ? Self.topBarAccessoryPagerContentInsets : .zero
         )
 
         super.init(navigationBarPresentationData: navigationBarPresentationData)
+
+        configureEmbeddedPageControllers()
 
         if installViewPagerAsTopBarAccessory {
             topBarAccessory = viewPager
         }
 
         configurePagerSelectionHandling()
+        configurePageScrollGestureHandling()
+        configurePageItems()
     }
 
     public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private static func segmentedItems(for pages: [Page]) -> [AetherSegmentedControl.Item] {
+        pages.map { page in
+            let pageItem = (page.viewController as? AetherViewController)?.pageItem
+            return AetherSegmentedControl.Item(
+                title: pageItem?.title ?? page.title,
+                badgeValue: pageItem?.badgeValue
+            )
+        }
+    }
+
+    open override var interactiveNavivationGestureEdgeWidth: InteractiveTransitionGestureRecognizerEdgeWidth? {
+        isAtFirstPageForInteractivePop ? .widthMultiplier(factor: 1.0, min: 0.0, max: .greatestFiniteMagnitude) : .constant(0.0)
     }
 
     private func configurePagerSelectionHandling() {
@@ -249,6 +309,83 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         scrollToTop = { [weak self] in
             self?.scrollToTopSelectedPage()
         }
+    }
+
+    private func configurePageScrollGestureHandling() {
+        guard let pageScrollView = scrollView as? PageScrollView else {
+            return
+        }
+        pageScrollView.shouldBeginPagePan = { [weak self] panGestureRecognizer in
+            self?.shouldBeginPagePan(panGestureRecognizer) ?? true
+        }
+    }
+
+    private func configurePageItems() {
+        for (index, page) in pages.enumerated() {
+            guard let controller = page.viewController as? AetherViewController else {
+                continue
+            }
+            let pageItem = controller.pageItem
+            pageItem.contentDidChange = { [weak self] in
+                self?.updatePagerItems(animated: false)
+            }
+            pageItem.selectionRequested = { [weak self] animated in
+                self?.setSelectedIndex(index, animated: animated)
+            }
+        }
+        updatePageItemSelectionState()
+    }
+
+    private func configureEmbeddedPageControllers() {
+        for page in pages {
+            configureEmbeddedPageController(page.viewController)
+        }
+    }
+
+    private func configureEmbeddedPageController(_ controller: UIViewController) {
+        guard let controller = controller as? AetherViewController else {
+            return
+        }
+
+        controller.navigationBarIsExternallyHosted = true
+        controller.externalNavigationBarHeight = 0.0
+
+        if controller.isViewLoaded,
+           let bar = controller.navigationBarView,
+           bar.superview === controller.view {
+            bar.removeFromSuperview()
+        }
+    }
+
+    private func updatePagerItems(animated: Bool) {
+        viewPager.setItems(Self.segmentedItems(for: pages), selectedIndex: selectedIndex, animated: animated)
+    }
+
+    private func updatePageItemSelectionState() {
+        for (index, page) in pages.enumerated() {
+            (page.viewController as? AetherViewController)?.pageItem.setIsSelected(index == selectedIndex)
+        }
+    }
+
+    private var isAtFirstPageForInteractivePop: Bool {
+        guard selectedIndex == 0 else {
+            return false
+        }
+        guard isViewLoaded, scrollView.bounds.width > 0.0 else {
+            return true
+        }
+        return scrollView.contentOffset.x <= 0.5
+    }
+
+    private func shouldBeginPagePan(_ panGestureRecognizer: UIPanGestureRecognizer) -> Bool {
+        shouldBeginPagePan(for: panGestureRecognizer.velocity(in: scrollView))
+    }
+
+    internal func shouldBeginPagePan(for velocity: CGPoint) -> Bool {
+        guard abs(velocity.x) > abs(velocity.y), velocity.x > 0.0 else {
+            return true
+        }
+        return !isAtFirstPageForInteractivePop
     }
 
     open override func viewDidLoad() {
@@ -273,6 +410,7 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
 
         for page in pages {
             let controller = page.viewController
+            configureEmbeddedPageController(controller)
             addChild(controller)
             scrollView.addSubview(controller.view)
             controller.didMove(toParent: self)
@@ -299,8 +437,14 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         }
 
         selectedIndex = clampedIndex
-        viewPager.setSelectedIndex(clampedIndex, animated: animated)
+        let drivesPagerFromScroll = animated && isViewLoaded && scrollView.bounds.width > 0.0
+        viewPager.setSelectedIndex(
+            clampedIndex,
+            animated: animated && !drivesPagerFromScroll,
+            updatesSelectionProgress: !drivesPagerFromScroll
+        )
         scrollToPage(at: clampedIndex, animated: animated)
+        updatePageItemSelectionState()
         selectedIndexChanged(clampedIndex)
         pageIndexDidChange(clampedIndex)
     }
@@ -336,7 +480,9 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
         }
         let rawProgress = scrollView.contentOffset.x / width
         let maxProgress = CGFloat(max(0, pages.count - 1))
-        scrollingProgressChanged(max(0.0, min(maxProgress, rawProgress)))
+        let progress = max(0.0, min(maxProgress, rawProgress))
+        viewPager.setSelectionProgress(progress, animated: false)
+        scrollingProgressChanged(progress)
     }
 
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -357,6 +503,7 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
     public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         isApplyingProgrammaticScroll = false
         alignScrollOffsetToSelectedPageIfNeeded()
+        viewPager.setSelectionProgress(CGFloat(selectedIndex), animated: false)
     }
 
     // MARK: - Private
@@ -388,6 +535,7 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
             transition.updateFrame(view: page.viewController.view, frame: pageFrame)
 
             if let controller = page.viewController as? AetherViewController {
+                configureEmbeddedPageController(controller)
                 controller.containerLayoutUpdated(layout.withUpdatedSize(pageFrame.size), transition: transition)
             }
         }
@@ -449,7 +597,9 @@ open class AetherPageViewController: AetherViewController, UIScrollViewDelegate 
 
             if commit {
                 self.selectedIndex = targetIndex
-                self.viewPager.setSelectedIndex(targetIndex, animated: true)
+                self.viewPager.setSelectionProgress(CGFloat(targetIndex), animated: false)
+                self.viewPager.setSelectedIndex(targetIndex, animated: false, updatesSelectionProgress: false)
+                self.updatePageItemSelectionState()
                 self.selectedIndexChanged(targetIndex)
                 self.pageIndexDidChange(targetIndex)
             } else {
