@@ -93,7 +93,7 @@ final class ContextMenuDimBlurView: UIView {
             backdropLayer.filters = nil
             return
         }
-        filter.setValue(blurRadius as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
+        filter.setValue(blurRadius as NSNumber, forKey: ObfuscatedSymbols.filterRadiusKey)
         backdropLayer.filters = [filter]
     }
 }

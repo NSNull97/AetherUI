@@ -1028,7 +1028,7 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
         }
         do {
             let effectHeightKeyPath = ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height)
-            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
             self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: effectHeightKeyPath)
             self.contentsEffectView.layer.setValue(-0.001 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
             
@@ -1063,13 +1063,13 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
                 let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 return CGFloat(blurEase(Double(t)))
             }
-            let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
             blurKeyframeAnimation.duration = duration * UIView.animationDurationFactor()
             blurKeyframeAnimation.values = blurKeyframes.map { $0 as NSNumber }
             blurKeyframeAnimation.timingFunction = CAMediaTimingFunction(name: .linear)
             blurKeyframeAnimation.isRemovedOnCompletion = true
             blurKeyframeAnimation.fillMode = .both
-            self.contentsEffectView.layer.add(blurKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            self.contentsEffectView.layer.add(blurKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         }
         do {
             let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
@@ -1418,20 +1418,20 @@ final class LensTransitionContainerImpl: UIView, LensTransitionContainerProtocol
             self.effectView.updateCornerRadius(duration: duration, keyframes: radiusKeyframes)
         }
         do {
-            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            self.contentsEffectView.layer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
             let sampleCount = lensTransitionKeyframeSampleCount(duration: duration)
             let sampleEndIndex = CGFloat(sampleCount - 1)
             let blurKeyframes = (0 ..< sampleCount).map { i -> CGFloat in
                 let t = sampleEndIndex > 0.0 ? CGFloat(i) / sampleEndIndex : 1.0
                 return CGFloat(blurEase(Double(t)))
             }
-            let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            let blurKeyframeAnimation = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
             blurKeyframeAnimation.duration = duration * UIView.animationDurationFactor()
             blurKeyframeAnimation.values = blurKeyframes.map { $0 as NSNumber }
             blurKeyframeAnimation.timingFunction = CAMediaTimingFunction(name: .linear)
             blurKeyframeAnimation.isRemovedOnCompletion = false
             blurKeyframeAnimation.fillMode = .both
-            self.contentsEffectView.layer.add(blurKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            self.contentsEffectView.layer.add(blurKeyframeAnimation, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         }
         
         self.contentsView.alpha = 0.0

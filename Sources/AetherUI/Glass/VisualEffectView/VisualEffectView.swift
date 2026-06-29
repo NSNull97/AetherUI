@@ -102,15 +102,15 @@ open class VisualEffectView: UIVisualEffectView {
      */
     open var colorTint: UIColor? {
         get {
-            return sourceOver?.value(forKeyPath: "color") as? UIColor
+            return sourceOver?.value(forKeyPath: ObfuscatedSymbols.color) as? UIColor
         }
         set {
             customSnapshot.colorTint = newValue
             guard case .customBlur = style else { return }
             
             prepareForChanges()
-            sourceOver?.setValue(newValue, forKeyPath: "color")
-            sourceOver?.perform(Selector(("applyRequestedEffectToView:")), with: overlayView)
+            sourceOver?.setValue(newValue, forKeyPath: ObfuscatedSymbols.color)
+            sourceOver?.perform(NSSelectorFromString(ObfuscatedSymbols.applyRequestedEffectToView), with: overlayView)
             applyChanges()
             overlayView?.backgroundColor = newValue
         }
@@ -124,7 +124,7 @@ open class VisualEffectView: UIVisualEffectView {
      The default value is 0.0.
      */
     open var colorTintAlpha: CGFloat {
-        get { return _value(forKey: .colorTintAlpha) ?? 0.0 }
+        get { return _value(forKey: .tintAlpha) ?? 0.0 }
         set { colorTint = colorTint?.withAlphaComponent(newValue) }
     }
     
@@ -136,14 +136,14 @@ open class VisualEffectView: UIVisualEffectView {
      */
     open var blurRadius: CGFloat {
         get {
-            return gaussianBlur?.requestedValues?[ObfuscatedSymbols.inputRadius] as? CGFloat ?? 0
+            return gaussianBlur?.requestedValues?[ObfuscatedSymbols.filterRadiusKey] as? CGFloat ?? 0
         }
         set {
             customSnapshot.blurRadius = newValue
             guard case .customBlur = style else { return }
             
             prepareForChanges()
-            gaussianBlur?.requestedValues?[ObfuscatedSymbols.inputRadius] = newValue
+            gaussianBlur?.requestedValues?[ObfuscatedSymbols.filterRadiusKey] = newValue
             applyChanges()
         }
     }
@@ -157,12 +157,12 @@ open class VisualEffectView: UIVisualEffectView {
      The default value is 1.0.
      */
     open var saturation: CGFloat {
-        get { return _value(forKey: .saturationDeltaFactor) ?? 1.0 }
+        get { return _value(forKey: .saturation) ?? 1.0 }
         set {
             customSnapshot.saturation = newValue
             guard case .customBlur = style else { return }
             
-            _setValue(newValue, forKey: .saturationDeltaFactor)
+            _setValue(newValue, forKey: .saturation)
         }
     }
     
@@ -175,12 +175,12 @@ open class VisualEffectView: UIVisualEffectView {
      The default value is 1.0.
      */
     open var scale: CGFloat {
-        get { return _value(forKey: .scale) ?? 1.0 }
+        get { return _value(forKey: .samplingScale) ?? 1.0 }
         set {
             customSnapshot.scale = newValue
             guard case .customBlur = style else { return }
             
-            _setValue(newValue, forKey: .scale)
+            _setValue(newValue, forKey: .samplingScale)
         }
     }
     
@@ -266,19 +266,35 @@ private extension VisualEffectView {
     
     /// Returns the value for the key on the blurEffect.
     func _value<T>(forKey key: Key) -> T? {
-        return blurEffect.value(forKeyPath: key.rawValue) as? T
+        return blurEffect.value(forKeyPath: key.value) as? T
     }
     
     /// Sets the value for the key on the blurEffect.
     func _setValue<T>(_ value: T?, forKey key: Key) {
-        blurEffect.setValue(value, forKeyPath: key.rawValue)
+        blurEffect.setValue(value, forKeyPath: key.value)
     }
     
-    enum Key: String {
-        case colorTint, colorTintAlpha, blurRadius, saturationDeltaFactor, scale
+    enum Key {
+        case tint
+        case tintAlpha
+        case radius
+        case saturation
+        case samplingScale
+
+        var value: String {
+            switch self {
+            case .tint:
+                return ObfuscatedSymbols.colorTint
+            case .tintAlpha:
+                return ObfuscatedSymbols.colorTintAlpha
+            case .radius:
+                return ObfuscatedSymbols.blurRadius
+            case .saturation:
+                return ObfuscatedSymbols.saturationDeltaFactor
+            case .samplingScale:
+                return ObfuscatedSymbols.scale
+            }
+        }
     }
     
 }
-
-// Available keys for reference:
-// ["grayscaleTintLevel", "grayscaleTintAlpha", "lightenGrayscaleWithSourceOver", "colorTint", "colorTintAlpha", "colorBurnTintLevel", "colorBurnTintAlpha", "darkeningTintAlpha", "darkeningTintHue", "darkeningTintSaturation", "darkenWithSourceOver", "blurRadius", "saturationDeltaFactor", "scale", "zoom"]

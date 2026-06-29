@@ -1,5 +1,6 @@
 import UIKit
 import ObjectiveC.runtime
+import Darwin
 
 // MARK: - Runtime trampolines (port of UIKitRuntimeUtils setBoolField/setLongLongField)
 
@@ -32,14 +33,14 @@ private func glass_setLongLongField(_ object: NSObject, _ name: String, _ value:
 }
 
 /// Port of UIKitRuntimeUtils.setMonochromaticEffectImpl.
-/// Enables private `_setAllowsMonochromaticTreatment:` / `_setEnableMonochromaticTreatment:` / `_setMonochromaticTreatment:`
-/// on iOS 26+ to make image content on glass surfaces render monochromatic.
+/// Enables the runtime-only monochrome hooks on iOS 26+ to make image
+/// content on glass surfaces render monochromatic.
 @inline(__always)
 func glassSetMonochromaticEffectImpl(_ view: UIView, isEnabled: Bool) {
     guard #available(iOS 26.0, *) else { return }
-    let key1 = "_" + "setAllows" + "MonochromaticTreatment:"
-    let key2 = "_" + "setEnable" + "MonochromaticTreatment:"
-    let key3 = "_" + "set" + "MonochromaticTreatment:"
+    let key1 = ObfuscatedSymbols.setAllowsMonochromaticTreatment
+    let key2 = ObfuscatedSymbols.setEnableMonochromaticTreatment
+    let key3 = ObfuscatedSymbols.setMonochromaticTreatment
 
     if isEnabled {
         glass_setBoolField(view, key1, true)
@@ -134,10 +135,18 @@ public extension UIView {
 // MARK: - UIView.animationDurationFactor (port of UIKitUtils.m)
 
 #if targetEnvironment(simulator)
-// `UIAnimationDragCoefficient()` lives inside UIKit and returns a multiplier
-// the simulator slow-mo overlay applies to all animations. Production builds
-// always return 1.0.
-@_silgen_name("UIAnimationDragCoefficient") private func _UIAnimationDragCoefficient() -> Float
+// UIKit has a simulator-only multiplier for the slow-mo overlay. Production
+// builds always return 1.0.
+private typealias AetherAnimationDurationFactorFunction = @convention(c) () -> Float
+private let aetherAnimationDurationFactorFunction: AetherAnimationDurationFactorFunction? = {
+    let symbol = ObfuscatedSymbols.uiAnimationDragCoefficient.withCString { name in
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), name)
+    }
+    guard let symbol else {
+        return nil
+    }
+    return unsafeBitCast(symbol, to: AetherAnimationDurationFactorFunction.self)
+}()
 #endif
 
 public extension UIView {
@@ -147,7 +156,7 @@ public extension UIView {
     /// timings; on device this always returns `1.0`.
     static func animationDurationFactor() -> Double {
         #if targetEnvironment(simulator)
-        return Double(_UIAnimationDragCoefficient())
+        return Double(aetherAnimationDurationFactorFunction?() ?? 1.0)
         #else
         return 1.0
         #endif

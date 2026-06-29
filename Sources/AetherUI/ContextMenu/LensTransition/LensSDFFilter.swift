@@ -8,7 +8,7 @@ import UIKit
 ///   - `displacement.height` — drives `sublayers.sdfLayer.effect.height` and
 ///     mirrors it on `filters.displacementMap.inputAmount` (negated).
 ///     Larger value = stronger "bulge" distortion.
-///   - `gaussianBlur.inputRadius` — soft blur applied alongside the
+///   - `gaussianBlur.blurAmount` — soft blur applied alongside the
 ///     displacement so the morphing edges look glassy.
 ///
 /// On iOS < 26 (or when the private CASDFLayer / CASDFGlassDisplacementEffect
@@ -121,7 +121,7 @@ final class LensSDFFilter {
             // Intentionally do NOT add our `blurFilter` — there's
             // already a system blur in the chain and chaining ours
             // would either double-blur or make the keypath
-            // `filters.gaussianBlur.inputRadius` ambiguous.
+            // `filters.gaussianBlur.blurAmount` ambiguous.
             previousFilters = target.filters
             var chain = target.filters ?? []
             chain.append(displacementFilter)
@@ -172,7 +172,7 @@ final class LensSDFFilter {
         guard ownsBlurFilter, let targetLayer else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        targetLayer.setValue(max(0.0, radius) as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+        targetLayer.setValue(max(0.0, radius) as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         CATransaction.commit()
     }
 
@@ -199,7 +199,7 @@ final class LensSDFFilter {
         // `animateDisplacementPulse` instead, which has its own
         // model-value setup so the lens finalises to zero at rest.
         if ownsBlurFilter {
-            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         }
         targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
@@ -268,7 +268,7 @@ final class LensSDFFilter {
         // and the rounded-rect shape mask shows through cleanly.
         let finalHeight = heightKeyframes.last ?? 0
         if ownsBlurFilter {
-            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+            targetLayer.setValue(0.0 as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         }
         targetLayer.setValue(finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.sublayers, ObfuscatedSymbols.sdfLayer, ObfuscatedSymbols.effect, ObfuscatedSymbols.height))
         targetLayer.setValue(-finalHeight as NSNumber, forKeyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
@@ -292,7 +292,7 @@ final class LensSDFFilter {
         targetLayer.add(dispAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.displacementMap, ObfuscatedSymbols.inputAmount))
     }
 
-    /// Animate `gaussianBlur.inputRadius` via the file-private `blurEase`
+    /// Animate `gaussianBlur.blurAmount` via the file-private `blurEase`
     /// curve (matches Telegram's lens blur ramp). No-op when the SDF
     /// was installed onto a layer that already had its own filter
     /// chain (= backdrop mode) — touching the shared keypath would
@@ -308,13 +308,13 @@ final class LensSDFFilter {
             return CGFloat(blurEase(Double(t)))
         }
 
-        let blurAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+        let blurAnim = CAKeyframeAnimation(keyPath: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
         blurAnim.duration = duration * UIView.animationDurationFactor()
         blurAnim.values = blurKeyframes.map { $0 as NSNumber }
         blurAnim.timingFunction = CAMediaTimingFunction(name: .linear)
         blurAnim.isRemovedOnCompletion = true
         blurAnim.fillMode = .both
-        targetLayer.add(blurAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.inputRadius))
+        targetLayer.add(blurAnim, forKey: ObfuscatedSymbols.keypath(ObfuscatedSymbols.filters, ObfuscatedSymbols.gaussianBlur, ObfuscatedSymbols.filterRadiusKey))
     }
 }
 

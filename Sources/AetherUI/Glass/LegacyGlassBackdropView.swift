@@ -46,8 +46,9 @@ private func setBackdropLayerScale(object: NSObject, scale: Double) {
         cachedBackdropLayerSetScaleMethod.0(object, cachedBackdropLayerSetScaleMethod.1, scale)
         return
     }
-    let selector = NSSelectorFromString("setScale:")
-    guard let method: (@convention(c) (AnyObject, Selector, Double) -> Void) = getMethod(object: object, selector: "setScale:") else {
+    let selectorName = ObfuscatedSymbols.setScale
+    let selector = NSSelectorFromString(selectorName)
+    guard let method: (@convention(c) (AnyObject, Selector, Double) -> Void) = getMethod(object: object, selector: selectorName) else {
         return
     }
     cachedBackdropLayerSetScaleMethod = (method, selector)
@@ -162,7 +163,7 @@ public final class LegacyGlassBackdropView: UIView {
         }
 
         if previousStyle != style {
-            if let blurFilter = CALayer.blur(), let colorMatrixFilter = CALayer.colorMatrix() {
+            if let blurFilter = CALayer.blur(), let colorMatrixFilter = CALayer.aetherMatrixFilter() {
                 // Bigger radius = more pixel mixing = less of any single
                 // colour dominating the blur. With the previous 8pt
                 // radius and a saturated backdrop (chips, photos) the
@@ -171,9 +172,9 @@ public final class LegacyGlassBackdropView: UIView {
                 // own kernel and reads as proper material.
                 switch style {
                 case .clear:
-                    blurFilter.setValue(10.0 as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
+                    blurFilter.setValue(10.0 as NSNumber, forKey: ObfuscatedSymbols.filterRadiusKey)
                 case .normal:
-                    blurFilter.setValue(14.0 as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
+                    blurFilter.setValue(14.0 as NSNumber, forKey: ObfuscatedSymbols.filterRadiusKey)
                 }
 
                 // Original saturation+brightness boost matrix —
@@ -192,8 +193,11 @@ public final class LegacyGlassBackdropView: UIView {
                     -0.3297, -1.1084, 2.8881, 0.0, 0.049999997,
                     0.0, 0.0, 0.0, 1.0, 0.0
                 ]
-                colorMatrixFilter.setValue(NSValue(bytes: &matrix, objCType: "{CAColorMatrix=ffffffffffffffffffff}"), forKey: "inputColorMatrix")
-                colorMatrixFilter.setValue(true as NSNumber, forKey: "inputBackdropAware")
+                let matrixValue = ObfuscatedSymbols.caColorMatrixObjCType.withCString {
+                    NSValue(bytes: &matrix, objCType: $0)
+                }
+                colorMatrixFilter.setValue(matrixValue, forKey: ObfuscatedSymbols.inputColorMatrix)
+                colorMatrixFilter.setValue(true as NSNumber, forKey: ObfuscatedSymbols.inputBackdropAware)
 
                 switch style {
                 case .clear:

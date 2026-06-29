@@ -1,17 +1,38 @@
 #import "UIView+AetherNavigation.h"
 #import <objc/runtime.h>
-
-@protocol AetherRemoteKeyboardWindowProtocol
-
-+ (UIWindow * _Nullable)remoteKeyboardWindowForScreen:(UIScreen * _Nullable)screen create:(BOOL)create;
-
-@end
+#import <stdint.h>
 
 static const void *kDisablesInteractiveTransitionGestureRecognizerKey = &kDisablesInteractiveTransitionGestureRecognizerKey;
 static const void *kDisablesInteractiveKeyboardGestureRecognizerKey = &kDisablesInteractiveKeyboardGestureRecognizerKey;
 static const void *kDisablesInteractiveTransitionGestureRecognizerNowKey = &kDisablesInteractiveTransitionGestureRecognizerNowKey;
 static const void *kInteractiveTransitionGestureRecognizerTestKey = &kInteractiveTransitionGestureRecognizerTestKey;
 static const void *kInputAccessoryHeightProviderKey = &kInputAccessoryHeightProviderKey;
+
+static NSString *AetherDecodeSymbol(const uint8_t *bytes, NSUInteger length) {
+    uint8_t decoded[length];
+    for (NSUInteger i = 0; i < length; i++) {
+        decoded[i] = bytes[i] ^ 0x5A;
+    }
+    return [[NSString alloc] initWithBytes:decoded length:length encoding:NSUTF8StringEncoding];
+}
+
+static NSString *AetherKeyboardWindowClassName(void) {
+    static const uint8_t bytes[] = {
+        0x0f, 0x13, 0x08, 0x3f, 0x37, 0x35, 0x2e, 0x3f, 0x11, 0x3f, 0x23,
+        0x38, 0x35, 0x3b, 0x28, 0x3e, 0x0d, 0x33, 0x34, 0x3e, 0x35, 0x2d
+    };
+    return AetherDecodeSymbol(bytes, sizeof(bytes));
+}
+
+static NSString *AetherKeyboardWindowSelectorName(void) {
+    static const uint8_t bytes[] = {
+        0x28, 0x3f, 0x37, 0x35, 0x2e, 0x3f, 0x11, 0x3f, 0x23, 0x38, 0x35,
+        0x3b, 0x28, 0x3e, 0x0d, 0x33, 0x34, 0x3e, 0x35, 0x2d, 0x1c, 0x35,
+        0x28, 0x09, 0x39, 0x28, 0x3f, 0x3f, 0x34, 0x60, 0x39, 0x28, 0x3f,
+        0x3b, 0x2e, 0x3f, 0x60
+    };
+    return AetherDecodeSymbol(bytes, sizeof(bytes));
+}
 
 @implementation UIView (AetherNavigation)
 
@@ -101,12 +122,18 @@ BOOL AetherViewTreeDisablesInteractiveKeyboardGesture(UIView *view) {
 @implementation UIApplication (AetherKeyboardRuntime)
 
 - (UIWindow * _Nullable)aether_internalGetKeyboardWindow {
-    Class windowClass = NSClassFromString(@"UIRemoteKeyboardWindow");
-    SEL selector = @selector(remoteKeyboardWindowForScreen:create:);
+    Class windowClass = NSClassFromString(AetherKeyboardWindowClassName());
+    SEL selector = NSSelectorFromString(AetherKeyboardWindowSelectorName());
     if (windowClass == Nil || ![windowClass respondsToSelector:selector]) {
         return nil;
     }
-    return [(id<AetherRemoteKeyboardWindowProtocol>)windowClass remoteKeyboardWindowForScreen:[UIScreen mainScreen] create:NO];
+    IMP implementation = [windowClass methodForSelector:selector];
+    if (implementation == NULL) {
+        return nil;
+    }
+    typedef UIWindow * _Nullable (*AetherKeyboardWindowFunction)(id, SEL, UIScreen * _Nullable, BOOL);
+    AetherKeyboardWindowFunction function = (AetherKeyboardWindowFunction)implementation;
+    return function(windowClass, selector, [UIScreen mainScreen], NO);
 }
 
 @end

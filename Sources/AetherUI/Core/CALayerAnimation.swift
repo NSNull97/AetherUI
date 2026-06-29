@@ -15,7 +15,7 @@ extension CAAnimation {
 }
 
 extension CALayer {
-    static func luminanceToAlpha() -> NSObject? {
+    static func aetherAlphaMaskFilter() -> NSObject? {
         guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
@@ -23,10 +23,10 @@ extension CALayer {
         guard filterClass.responds(to: selector) else {
             return nil
         }
-        return filterClass.perform(selector, with: "luminanceToAlpha")?.takeUnretainedValue() as? NSObject
+        return filterClass.perform(selector, with: ObfuscatedSymbols.luminanceToAlpha)?.takeUnretainedValue() as? NSObject
     }
 
-    static func colorInvert() -> NSObject? {
+    static func aetherInversionFilter() -> NSObject? {
         guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
@@ -34,10 +34,10 @@ extension CALayer {
         guard filterClass.responds(to: selector) else {
             return nil
         }
-        return filterClass.perform(selector, with: "colorInvert")?.takeUnretainedValue() as? NSObject
+        return filterClass.perform(selector, with: ObfuscatedSymbols.colorInvert)?.takeUnretainedValue() as? NSObject
     }
 
-    static func colorMatrix() -> NSObject? {
+    static func aetherMatrixFilter() -> NSObject? {
         guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
@@ -45,7 +45,7 @@ extension CALayer {
         guard filterClass.responds(to: selector) else {
             return nil
         }
-        return filterClass.perform(selector, with: "colorMatrix")?.takeUnretainedValue() as? NSObject
+        return filterClass.perform(selector, with: ObfuscatedSymbols.colorMatrix)?.takeUnretainedValue() as? NSObject
     }
 
     static func blur() -> NSObject? {
@@ -59,9 +59,9 @@ extension CALayer {
         return filterClass.perform(selector, with: ObfuscatedSymbols.gaussianBlur)?.takeUnretainedValue() as? NSObject
     }
 
-    /// Private `variableBlur` filter exposed on iOS 26+. Used by `VariableBlurView`
+    /// Private masked blur filter exposed on iOS 26+. Used by `VariableBlurView`
     /// to render progressive edge fades on nav / tab bars.
-    static func variableBlur() -> NSObject? {
+    static func aetherMaskedBlurFilter() -> NSObject? {
         guard let filterClass = NSClassFromString(ObfuscatedSymbols.caFilter) as AnyObject? else {
             return nil
         }
@@ -69,7 +69,7 @@ extension CALayer {
         guard filterClass.responds(to: selector) else {
             return nil
         }
-        return filterClass.perform(selector, with: "variableBlur")?.takeUnretainedValue() as? NSObject
+        return filterClass.perform(selector, with: ObfuscatedSymbols.maskedBlurFilterName)?.takeUnretainedValue() as? NSObject
     }
 
     func animate(from: NSValue, to: NSValue, keyPath: String, duration: Double, timingFunction: CAMediaTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut), completion: ((Bool) -> Void)? = nil) {

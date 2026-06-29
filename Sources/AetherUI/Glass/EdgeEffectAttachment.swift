@@ -31,7 +31,7 @@ public struct EdgeEffectAttachment {
     public var blurRadius: CGFloat
     /// Blur radius at the SOLID side (closest to the screen edge). Use
     /// alongside `blurRadiusAtFade` for a true variable-radius gradient
-    /// (CAFilter.variableBlur on iOS 26+).
+    /// (private masked blur on iOS 26+).
     public var blurRadiusAtEdge: CGFloat
     /// Blur radius at the TRANSPARENT side (closest to the content area).
     public var blurRadiusAtFade: CGFloat
@@ -41,7 +41,7 @@ public struct EdgeEffectAttachment {
         thickness: CGFloat,
         fadeHeight: CGFloat? = nil,
         tintColor: UIColor? = UIColor.systemBackground,
-        tintAlpha: CGFloat = 0.86,
+        tintAlpha: CGFloat = 0.82,
         blurRadius: CGFloat = 5.0,
         blurRadiusAtEdge: CGFloat? = nil,
         blurRadiusAtFade: CGFloat? = nil

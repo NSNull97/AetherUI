@@ -193,6 +193,7 @@ public class GlassBackgroundView: UIView {
     private let nativeView: UIVisualEffectView?
     private var nativeViewShape: Shape?
     private let nativeParamsView: EffectSettingsContainerView?
+    private let syntheticStrokeLayer = CAShapeLayer()
 
     // Legacy path.
     private let legacyView: LegacyGlassBackdropView?
@@ -220,6 +221,26 @@ public class GlassBackgroundView: UIView {
             return nativeView.contentView
         }
         return contentContainer
+    }
+
+    public func updateStyle(_ style: Style) {
+        guard self.style != style else {
+            return
+        }
+        self.style = style
+        if let memo = lastUpdateMemo {
+            update(
+                size: memo.size,
+                cornerRadius: memo.cornerRadius,
+                isDark: resolvedIsDark,
+                tintColor: memo.tintColor,
+                isInteractive: memo.isInteractive,
+                isVisible: memo.isVisible,
+                transition: .immediate
+            )
+        } else {
+            setNeedsLayout()
+        }
     }
 
     public private(set) var params: Params?
@@ -295,6 +316,31 @@ public class GlassBackgroundView: UIView {
     /// out of the deformation.
     public var glassIsInteractive: Bool = true {
         didSet { setNeedsLayout() }
+    }
+
+    /// Optional stroke override for the glass outline.
+    /// `nil` keeps the automatic fallback: Aether's iOS27 appearance gets a
+    /// synthetic hairline only on OS versions before iOS 27, because iOS 27+
+    /// provides the native glass outline itself.
+    public var strokeAppearance: AetherGlassStrokeAppearance? {
+        didSet {
+            setNeedsLayout()
+        }
+    }
+
+    internal var isSyntheticStrokeVisible: Bool {
+        !syntheticStrokeLayer.isHidden
+    }
+
+    internal var isSyntheticStrokeHostedByNativeEffectView: Bool {
+        guard let nativeView else {
+            return false
+        }
+        return syntheticStrokeLayer.superlayer === nativeView.layer
+    }
+
+    internal var syntheticStrokeAnimationKeys: [String] {
+        syntheticStrokeLayer.animationKeys() ?? []
     }
 
     /// Install a per-corner shape on the native `UIVisualEffectView` host of
@@ -400,7 +446,7 @@ public class GlassBackgroundView: UIView {
         self.maskContainerView = UIView()
         self.maskContainerView.backgroundColor = .white
         self.maskContainerView.clipsToBounds = true
-        if let filter = CALayer.luminanceToAlpha() {
+        if let filter = CALayer.aetherAlphaMaskFilter() {
             self.maskContainerView.layer.filters = [filter]
         }
 
@@ -436,6 +482,9 @@ public class GlassBackgroundView: UIView {
         if let legacyHighlightContainerView {
             addSubview(legacyHighlightContainerView)
         }
+        (nativeView?.layer ?? layer).addSublayer(syntheticStrokeLayer)
+        syntheticStrokeLayer.fillColor = UIColor.clear.cgColor
+        syntheticStrokeLayer.isHidden = true
     }
 
     required init?(coder: NSCoder) {
@@ -746,9 +795,11 @@ public class GlassBackgroundView: UIView {
                     // contrast against backdrop content but lets the
                     // material breathe.
                     if isDark {
-                        fillColor = UIColor(white: 1.0, alpha: 1.0).mixedWith(.black, alpha: 1.0 - 0.11).withAlphaComponent(0.55)
+                        fillColor = UIColor(white: 1.0, alpha: 1.0)
+                            .mixedWith(.black, alpha: 1.0 - 0.11)
+                            .withAlphaComponent(style == .prominent ? 0.68 : 0.55)
                     } else {
-                        fillColor = UIColor(white: 1.0, alpha: 0.35)
+                        fillColor = UIColor(white: 1.0, alpha: style == .prominent ? 0.48 : 0.35)
                     }
                 case .clear:
                     borderWidthFactor = 2.0
@@ -781,8 +832,8 @@ public class GlassBackgroundView: UIView {
                         // material specular stays the dominant effect
                         // and the surface doesn't look painted-on.
                         value.tintColor = isDark
-                            ? UIColor(white: 1.0, alpha: 0.015)
-                            : UIColor(white: 1.0, alpha: 0.06)
+                            ? UIColor(white: 1.0, alpha: style == .prominent ? 0.04 : 0.015)
+                            : UIColor(white: 1.0, alpha: style == .prominent ? 0.12 : 0.06)
                     case let .custom(style, color):
                         switch style {
                         case .default:
@@ -843,6 +894,7 @@ public class GlassBackgroundView: UIView {
         if let nativeParamsView {
             transition.setFrame(view: nativeParamsView, frame: CGRect(origin: .zero, size: size))
         }
+        updateSyntheticStroke(size: size, cornerRadius: cornerRadius, isVisible: isVisible, transition: transition)
         transition.setFrame(view: maskContainerView, frame: CGRect(
             origin: .zero,
             size: CGSize(width: size.width + shadowInset * 2.0, height: size.height + shadowInset * 2.0)
@@ -858,11 +910,93 @@ public class GlassBackgroundView: UIView {
         transition.setFrame(view: contentContainer, frame: CGRect(origin: .zero, size: size))
     }
 
-    /// Back-compat shim for callers that used to swap between `.regular` / `.prominent` blur
-    /// styles on a single view. In the new pipeline the visual "style" is derived from
-    /// `tintColor` passed to `update(...)`, so this just records the preference.
-    public func updateStyle(_ style: Style) {
-        self.style = style
+    private static var shouldUseSyntheticStrokeFallback: Bool {
+        if #available(iOS 27.0, *) {
+            return false
+        }
+        return true
+    }
+
+    private var resolvedStrokeAppearance: AetherGlassStrokeAppearance {
+        if let strokeAppearance {
+            return strokeAppearance
+        }
+        let appearance = AetherAppearance.runtimeCurrent
+        guard appearance.style == .iOS27, Self.shouldUseSyntheticStrokeFallback else {
+            return .none
+        }
+        return .hairline(color: appearance.separatorColor, opacity: 0.40)
+    }
+
+    private func updateSyntheticStroke(size: CGSize, cornerRadius: CGFloat, isVisible: Bool, transition: ContainedViewLayoutTransition) {
+        let previousFrame = syntheticStrokeLayer.presentation()?.frame ?? syntheticStrokeLayer.frame
+        let previousPath = syntheticStrokeLayer.presentation()?.path ?? syntheticStrokeLayer.path
+        let wasHidden = syntheticStrokeLayer.isHidden
+
+        func applyWithoutImplicitAnimation(_ update: () -> Void) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            update()
+            CATransaction.commit()
+        }
+
+        guard isVisible, size.width > 0.0, size.height > 0.0 else {
+            applyWithoutImplicitAnimation {
+                syntheticStrokeLayer.isHidden = true
+            }
+            return
+        }
+
+        switch resolvedStrokeAppearance {
+        case .none:
+            applyWithoutImplicitAnimation {
+                syntheticStrokeLayer.isHidden = true
+            }
+        case let .hairline(color, opacity):
+            let strokeColor = (color ?? .separator)
+                .resolvedColor(with: traitCollection)
+                .withAlphaComponent(opacity)
+            let lineWidth = max(UIScreenPixel, 1.0 / max(UIScreen.main.scale, 1.0))
+            let bounds = CGRect(origin: .zero, size: size)
+            let rect = bounds.insetBy(dx: lineWidth * 0.5, dy: lineWidth * 0.5)
+            let radius = max(0.0, cornerRadius - lineWidth * 0.5)
+            let path = UIBezierPath(
+                roundedRect: rect,
+                cornerRadius: radius
+            ).cgPath
+
+            applyWithoutImplicitAnimation {
+                syntheticStrokeLayer.isHidden = false
+                syntheticStrokeLayer.frame = bounds
+                syntheticStrokeLayer.path = path
+                syntheticStrokeLayer.lineWidth = lineWidth
+                syntheticStrokeLayer.strokeColor = strokeColor.cgColor
+            }
+
+            guard !wasHidden, transition.isAnimated else {
+                return
+            }
+            if case let .animated(duration, curve) = transition {
+                let timingFunction = curve.mediaTimingFunction()
+                syntheticStrokeLayer.animateFrame(
+                    from: previousFrame,
+                    to: bounds,
+                    duration: duration,
+                    timingFunction: timingFunction
+                )
+                if let previousPath {
+                    let animation = CABasicAnimation(keyPath: "path")
+                    animation.fromValue = previousPath
+                    animation.toValue = path
+                    animation.duration = duration
+                    animation.timingFunction = timingFunction
+                    animation.isRemovedOnCompletion = true
+                    animation.fillMode = .forwards
+                    animation.aetherPreferHighFrameRate()
+                    syntheticStrokeLayer.add(animation, forKey: "path")
+                }
+            }
+        }
     }
 
     // MARK: Static image generators (port of helpers)
@@ -1025,6 +1159,10 @@ public final class GlassBackgroundContainerView: UIView {
 
     public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    internal var isUsingNativeContainerEffect: Bool {
+        nativeView != nil
     }
 
     /// Explicit override for the `isDark` passed to `update(...)`. When

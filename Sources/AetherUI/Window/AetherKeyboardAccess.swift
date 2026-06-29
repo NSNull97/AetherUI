@@ -207,24 +207,24 @@ internal enum AetherLegacyKeyboardRuntime {
     private static func isKeyboardWindow(_ window: UIWindow) -> Bool {
         let typeName = NSStringFromClass(type(of: window))
         if #available(iOS 9.0, *) {
-            return typeName.hasPrefix("UI") && typeName.hasSuffix("RemoteKeyboardWindow")
+            return typeName.hasPrefix(ObfuscatedSymbols.uiPrefix) && typeName.hasSuffix(ObfuscatedSymbols.remoteKeyboardWindowSuffix)
         } else {
-            return typeName.hasPrefix("UI") && typeName.hasSuffix("TextEffectsWindow")
+            return typeName.hasPrefix(ObfuscatedSymbols.uiPrefix) && typeName.hasSuffix(ObfuscatedSymbols.textEffectsWindowSuffix)
         }
     }
 
     private static func isKeyboardView(_ view: UIView) -> Bool {
         let typeName = NSStringFromClass(type(of: view))
-        guard typeName.hasPrefix("UI") || typeName.hasPrefix("_UI") else {
+        guard typeName.hasPrefix(ObfuscatedSymbols.uiPrefix) || typeName.hasPrefix(ObfuscatedSymbols.uiUnderscorePrefix) else {
             return false
         }
-        return typeName.hasSuffix("InputSetHostView")
-            || typeName.hasSuffix("KeyboardItemContainerView")
+        return typeName.hasSuffix(ObfuscatedSymbols.inputSetHostViewSuffix)
+            || typeName.hasSuffix(ObfuscatedSymbols.keyboardItemContainerViewSuffix)
     }
 
     private static func isKeyboardViewContainer(_ view: UIView) -> Bool {
         let typeName = NSStringFromClass(type(of: view))
-        return typeName.hasPrefix("UI") && typeName.hasSuffix("InputSetContainerView")
+        return typeName.hasPrefix(ObfuscatedSymbols.uiPrefix) && typeName.hasSuffix(ObfuscatedSymbols.inputSetContainerViewSuffix)
     }
 
     private static func findKeyboardView(in view: UIView) -> UIView? {

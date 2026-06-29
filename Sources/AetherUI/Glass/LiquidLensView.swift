@@ -3,7 +3,7 @@ import UIKit
 private final class LiquidLensRestingBackgroundView: UIVisualEffectView {
     private var isDarkValue: Bool?
 
-    private static func colorMatrix(isDark: Bool) -> [Float32] {
+    private static func matrixValues(isDark: Bool) -> [Float32] {
         if isDark {
             return [
                 1.082, -0.113, -0.011, 0.0, 0.135,
@@ -25,7 +25,7 @@ private final class LiquidLensRestingBackgroundView: UIVisualEffectView {
         super.init(effect: UIBlurEffect(style: .light))
 
         clipsToBounds = true
-        for subview in subviews where String(describing: type(of: subview)).contains("VisualEffectSubview") {
+        for subview in subviews where String(describing: type(of: subview)).contains(ObfuscatedSymbols.visualEffectSubviewSuffix) {
             subview.isHidden = true
         }
     }
@@ -46,12 +46,15 @@ private final class LiquidLensRestingBackgroundView: UIVisualEffectView {
         }
         isDarkValue = isDark
 
-        guard let filter = CALayer.colorMatrix() else {
+        guard let filter = CALayer.aetherMatrixFilter() else {
             return
         }
 
-        var matrix = Self.colorMatrix(isDark: isDark)
-        filter.setValue(NSValue(bytes: &matrix, objCType: "{CAColorMatrix=ffffffffffffffffffff}"), forKey: "inputColorMatrix")
+        var matrix = Self.matrixValues(isDark: isDark)
+        let matrixValue = ObfuscatedSymbols.caColorMatrixObjCType.withCString {
+            NSValue(bytes: &matrix, objCType: $0)
+        }
+        filter.setValue(matrixValue, forKey: ObfuscatedSymbols.inputColorMatrix)
 
         if let sublayer = layer.sublayers?.first {
             sublayer.filters = [filter]
@@ -152,6 +155,21 @@ public final class LiquidLensView: UIView {
         liftedContainerView
     }
 
+    /// Enables hit testing for controls hosted inside `contentView`.
+    /// Disabled by default because most lens users render visual-only
+    /// content and keep their controls outside the punched-out layer.
+    public var allowsContentInteraction: Bool = false {
+        didSet {
+            containerView.isUserInteractionEnabled = allowsContentInteraction
+        }
+    }
+
+    public var glassStyle: GlassBackgroundView.Style = .regular {
+        didSet {
+            backgroundView?.updateStyle(glassStyle)
+        }
+    }
+
     /// Explicit override for the `isDark` flag. When non-`nil`, wins over
     /// the `isDark:` parameter passed to `update(...)` and pins the lens
     /// tint/tone regardless of caller or system theme. Set once on the
@@ -241,7 +259,7 @@ public final class LiquidLensView: UIView {
 
         if #available(iOS 26.0, *), let viewClass = NSClassFromString(ObfuscatedSymbols.uiLiquidLensView) as AnyObject? {
             let allocSelector = NSSelectorFromString("alloc")
-            let initSelector = NSSelectorFromString("initWithRestingBackground:")
+            let initSelector = NSSelectorFromString(ObfuscatedSymbols.initWithRestingBackground)
             if let allocated = viewClass.perform(allocSelector)?.takeUnretainedValue() as AnyObject?,
                let instance = allocated.perform(initSelector, with: UIView())?.takeUnretainedValue() as? UIView {
                 lensView = instance
@@ -262,20 +280,20 @@ public final class LiquidLensView: UIView {
             containerView.addSubview(contentView)
 
             if let backgroundContainer {
-                setNativeContainer(on: lensView, selectorName: "setLiftedContainerView:", view: backgroundContainer.contentView)
+                setNativeContainer(on: lensView, selectorName: ObfuscatedSymbols.setLiftedContainerView, view: backgroundContainer.contentView)
             } else if let genericBackgroundContainer {
-                setNativeContainer(on: lensView, selectorName: "setLiftedContainerView:", view: genericBackgroundContainer)
+                setNativeContainer(on: lensView, selectorName: ObfuscatedSymbols.setLiftedContainerView, view: genericBackgroundContainer)
             }
-            setNativeContainer(on: lensView, selectorName: "setLiftedContentView:", view: liftedContainerView)
-            setNativeContainer(on: lensView, selectorName: "setOverridePunchoutView:", view: contentView)
-            setNativeInt(on: lensView, selectorName: "setLiftedContentMode:", value: 1)
-            setNativeInt(on: lensView, selectorName: "setStyle:", value: 1)
-            setNativeBool(on: lensView, selectorName: "setWarpsContentBelow:", value: true)
+            setNativeContainer(on: lensView, selectorName: ObfuscatedSymbols.setLiftedContentView, view: liftedContainerView)
+            setNativeContainer(on: lensView, selectorName: ObfuscatedSymbols.setOverridePunchoutView, view: contentView)
+            setNativeInt(on: lensView, selectorName: ObfuscatedSymbols.setLiftedContentMode, value: 1)
+            setNativeInt(on: lensView, selectorName: ObfuscatedSymbols.setStyle, value: 1)
+            setNativeBool(on: lensView, selectorName: ObfuscatedSymbols.setWarpsContentBelow, value: true)
             // Match Telegram-iOS LiquidLensView: a soft resting tint (alpha 0.1)
             // so the capsule has a faint visible body even in the non-lifted
             // state. Full transparency made the selection dissolve entirely
             // when the underlying content was low-contrast.
-            lensView.setValue(UIColor(white: 0.0, alpha: 0.1), forKey: "restingBackgroundColor")
+            lensView.setValue(UIColor(white: 0.0, alpha: 0.1), forKey: ObfuscatedSymbols.restingBackgroundColor)
         } else {
             let legacySelectionView = GlassBackgroundView.ContentImageView()
             self.legacySelectionView = legacySelectionView
@@ -297,7 +315,7 @@ public final class LiquidLensView: UIView {
             let legacyContentMaskView = UIView()
             legacyContentMaskView.backgroundColor = .white
             self.legacyContentMaskView = legacyContentMaskView
-            if let filter = CALayer.luminanceToAlpha() {
+            if let filter = CALayer.aetherAlphaMaskFilter() {
                 legacyContentMaskView.layer.filters = [filter]
             }
             contentView.mask = legacyContentMaskView
@@ -327,7 +345,7 @@ public final class LiquidLensView: UIView {
         guard let lensView else {
             return
         }
-        setNativeContainer(on: lensView, selectorName: "setLiftedContainerView:", view: view)
+        setNativeContainer(on: lensView, selectorName: ObfuscatedSymbols.setLiftedContainerView, view: view)
     }
 
     public func update(
@@ -455,7 +473,7 @@ public final class LiquidLensView: UIView {
             // selector ourselves rather than through the simple wrapper, so
             // the bounds update runs INSIDE the same native animation block
             // as the lift — no desync.
-            let selector = NSSelectorFromString("setLifted:animated:alongsideAnimations:completion:")
+            let selector = NSSelectorFromString(ObfuscatedSymbols.setLiftedAnimatedAlongsideAnimationsCompletion)
             var didProcessUpdate = false
             var shouldScheduleUpdate = false
             pendingLensParams = params
@@ -592,7 +610,7 @@ public final class LiquidLensView: UIView {
     }
 
     private func setNativeLifted(on view: UIView, value: Bool, animated: Bool) {
-        let complexSelector = NSSelectorFromString("setLifted:animated:alongsideAnimations:completion:")
+        let complexSelector = NSSelectorFromString(ObfuscatedSymbols.setLiftedAnimatedAlongsideAnimationsCompletion)
         if let method = view.method(for: complexSelector) {
             typealias Function = @convention(c) (AnyObject, Selector, Bool, Bool, @escaping () -> Void, (() -> Void)?) -> Void
             let function = unsafeBitCast(method, to: Function.self)
@@ -600,7 +618,7 @@ public final class LiquidLensView: UIView {
             return
         }
 
-        let simpleSelector = NSSelectorFromString("setLifted:")
+        let simpleSelector = NSSelectorFromString(ObfuscatedSymbols.setLifted)
         if let method = view.method(for: simpleSelector) {
             typealias Function = @convention(c) (AnyObject, Selector, Bool) -> Void
             let function = unsafeBitCast(method, to: Function.self)

@@ -14,10 +14,10 @@ public final class EdgeEffectView: UIView {
 
     private let contentView: UIView
     private let contentMaskView: UIImageView
-    /// Variable-blur layer (`CAFilter.variableBlur` on iOS 26+, mask-gradient
+    /// Variable-blur layer (private masked blur on iOS 26+, mask-gradient
     /// fallback elsewhere). True *progressive* blur — strong at the edge,
     /// tapering to zero near the content.
-    private var variableBlurView: VariableBlurView?
+    private var maskedBlurView: VariableBlurView?
     /// Fallback UIVisualEffectView path used when variable blur isn't needed
     /// / available (e.g. legacy theme).
     private var blurView: UIVisualEffectView?
@@ -37,6 +37,7 @@ public final class EdgeEffectView: UIView {
         let blurRadiusAtFade: CGFloat
         let solidBlur: Bool
         let fadeCurveExponent: CGFloat
+        let minimumFadeAlpha: CGFloat
     }
     private var lastUpdateSignature: UpdateSignature?
 
@@ -68,7 +69,7 @@ public final class EdgeEffectView: UIView {
     ///
     /// `blurRadiusAtEdge` is the radius at the solid (screen-facing) side;
     /// `blurRadiusAtFade` is the radius at the transparent (content-facing)
-    /// side. When the two differ, the view uses `CAFilter.variableBlur` to
+    /// side. When the two differ, the view uses a private masked blur to
     /// ramp the radius spatially.
     public func update(
         content: UIColor?,
@@ -81,6 +82,7 @@ public final class EdgeEffectView: UIView {
         blurRadiusAtFade: CGFloat = 3.0,
         solidBlur: Bool = false,
         fadeCurveExponent: CGFloat = 1.0,
+        minimumFadeAlpha: CGFloat = 0.04,
         transition: ContainedViewLayoutTransition
     ) {
         // Fast-path early return when layout is driven by a non-animated
@@ -97,7 +99,8 @@ public final class EdgeEffectView: UIView {
                 blurRadiusAtEdge: blurRadiusAtEdge,
                 blurRadiusAtFade: blurRadiusAtFade,
                 solidBlur: solidBlur,
-                fadeCurveExponent: fadeCurveExponent
+                fadeCurveExponent: fadeCurveExponent,
+                minimumFadeAlpha: minimumFadeAlpha
             )
             if signature == lastUpdateSignature {
                 return
@@ -130,16 +133,16 @@ public final class EdgeEffectView: UIView {
         transition.setFrame(view: contentView, frame: bounds)
         transition.setFrame(view: contentMaskView, frame: bounds)
 
-        // Use the SAME tapered-gradient helper as the blur path so the tint
-        // layer and the blur layer fade to zero at the exact same spot —
-        // otherwise the terminus shows a visible band where the tint persists
-        // past where the blur stops.
-        if edgeSize > 0.0, useFill {
+        // Use the SAME tapered-gradient helper as the blur path for
+        // progressive blur so tint and blur terminate at the exact same
+        // alpha. Solid blur intentionally has no transition/mask.
+        if edgeSize > 0.0, useFill, !solidBlur {
             contentMaskView.image = EdgeEffectView.generateTaperedGradient(
                 totalHeight: bounds.height,
                 fadeHeight: min(edgeSize, bounds.height),
                 edge: edge,
-                curveExponent: fadeCurveExponent
+                curveExponent: fadeCurveExponent,
+                minimumAlpha: minimumFadeAlpha
             )
         } else {
             contentMaskView.image = nil
@@ -150,8 +153,35 @@ public final class EdgeEffectView: UIView {
             let fadeHeight = min(edgeSize, blurFrame.size.height)
             let useVariable = !solidBlur && abs(blurRadiusAtEdge - blurRadiusAtFade) > 0.01
 
-            if useVariable {
-                // Variable radius: use the private `CAFilter.variableBlur`
+            if solidBlur {
+                let effectView: UIVisualEffectView
+                if let current = blurView {
+                    effectView = current
+                    if effectView.effect == nil {
+                        effectView.effect = UIBlurEffect(style: .systemMaterial)
+                    }
+                } else {
+                    effectView = VisualEffectView()
+                    effectView.isUserInteractionEnabled = false
+                    (effectView as! VisualEffectView).blurRadius = blurRadiusAtEdge
+                    (effectView as! VisualEffectView).colorTint = content
+                    (effectView as! VisualEffectView).colorTintAlpha = alpha
+                    insertSubview(effectView, at: 0)
+                    blurView = effectView
+                }
+                transition.setFrame(view: effectView, frame: blurFrame)
+
+                if let host = backdropBlurView {
+                    backdropBlurView = nil
+                    host.removeFromSuperview()
+                }
+                blurMaskView = nil
+                if let vBlur = maskedBlurView {
+                    maskedBlurView = nil
+                    vBlur.removeFromSuperview()
+                }
+            } else if useVariable {
+                // Variable radius: use the private masked blur filter
                 // via `VariableBlurView`. The mask's alpha directly controls
                 // per-pixel radius — white = max, black = 0. To realise
                 // `blurRadiusAtEdge` → `blurRadiusAtFade`, we build a mask
@@ -159,13 +189,13 @@ public final class EdgeEffectView: UIView {
                 // `blurRadiusAtFade / blurRadiusAtEdge` at the transparent
                 // side, then scale `maxBlurRadius = blurRadiusAtEdge`.
                 let vBlur: VariableBlurView
-                if let current = variableBlurView, current.maxBlurRadius == blurRadiusAtEdge {
+                if let current = maskedBlurView, current.maxBlurRadius == blurRadiusAtEdge {
                     vBlur = current
                 } else {
-                    variableBlurView?.removeFromSuperview()
+                    maskedBlurView?.removeFromSuperview()
                     let newView = VariableBlurView(maxBlurRadius: blurRadiusAtEdge)
                     insertSubview(newView, at: 0)
-                    variableBlurView = newView
+                    maskedBlurView = newView
                     vBlur = newView
                 }
                 // alphas describe per-pixel blur intensity along the axis from
@@ -176,15 +206,8 @@ public final class EdgeEffectView: UIView {
                 // solid-edge alpha, so blur stays at full strength all the way
                 // out to the screen edge.
                 //
-                // Floor at 0.04 (instead of 0) for the same reason as the
-                // tint mask above: when callers ask for `blurRadiusAtFade=0`
-                // the strict 0 fraction left the bottom row of the backdrop
-                // entirely unfiltered, exposing presenter dim through the
-                // navbar-bottom edge during sheet resizes. A 4% blur scale
-                // is below the visible-blur threshold but keeps the
-                // backdrop opaque enough to mask the gap.
                 let rawFraction = blurRadiusAtFade / max(0.001, blurRadiusAtEdge)
-                let minFraction = max(0.04, min(1.0, rawFraction))
+                let minFraction = max(max(0.0, min(1.0, minimumFadeAlpha)), min(1.0, rawFraction))
                 let gradient = VariableBlurEffect.Gradient(
                     height: fadeHeight,
                     alpha: [1.0, minFraction],
@@ -220,29 +243,25 @@ public final class EdgeEffectView: UIView {
                     insertSubview(blurHost, at: 0)
                     backdropBlurView = blurHost
                 }
-                blurHost.inputRadius = blurRadiusAtEdge
+                blurHost.blurAmount = blurRadiusAtEdge
                 blurHost.frame = blurFrame
 
-                if solidBlur {
-                    blurHost.mask = nil
-                    blurMaskView = nil
+                let mask: UIImageView
+                if let current = blurMaskView {
+                    mask = current
                 } else {
-                    let mask: UIImageView
-                    if let current = blurMaskView {
-                        mask = current
-                    } else {
-                        mask = UIImageView()
-                        blurMaskView = mask
-                        blurHost.mask = mask
-                    }
-                    mask.frame = CGRect(origin: .zero, size: blurFrame.size)
-                    mask.image = EdgeEffectView.generateTaperedGradient(
-                        totalHeight: blurFrame.size.height,
-                        fadeHeight: fadeHeight,
-                        edge: edge,
-                        curveExponent: fadeCurveExponent
-                    )
+                    mask = UIImageView()
+                    blurMaskView = mask
+                    blurHost.mask = mask
                 }
+                mask.frame = CGRect(origin: .zero, size: blurFrame.size)
+                mask.image = EdgeEffectView.generateTaperedGradient(
+                    totalHeight: blurFrame.size.height,
+                    fadeHeight: fadeHeight,
+                    edge: edge,
+                    curveExponent: fadeCurveExponent,
+                    minimumAlpha: minimumFadeAlpha
+                )
 
                 transition.setFrame(view: blurHost, frame: blurFrame)
 
@@ -251,8 +270,8 @@ public final class EdgeEffectView: UIView {
                     blurView = nil
                     view.removeFromSuperview()
                 }
-                if let vBlur = variableBlurView {
-                    variableBlurView = nil
+                if let vBlur = maskedBlurView {
+                    maskedBlurView = nil
                     vBlur.removeFromSuperview()
                 }
             }
@@ -266,8 +285,8 @@ public final class EdgeEffectView: UIView {
                 host.removeFromSuperview()
             }
             blurMaskView = nil
-            if let vBlur = variableBlurView {
-                variableBlurView = nil
+            if let vBlur = maskedBlurView {
+                maskedBlurView = nil
                 vBlur.removeFromSuperview()
             }
         }
@@ -312,20 +331,23 @@ public final class EdgeEffectView: UIView {
         totalHeight: CGFloat,
         fadeHeight: CGFloat,
         edge: Edge,
-        curveExponent: CGFloat = 1.0
+        curveExponent: CGFloat = 1.0,
+        minimumAlpha: CGFloat = 0.04
     ) -> UIImage? {
         let height = max(1.0, totalHeight)
         let size = CGSize(width: 1.0, height: height)
         let clampedFade = min(max(0.0, fadeHeight), height)
         let solidHeight = max(0.0, height - clampedFade)
         let exponent = max(0.01, curveExponent)
+        let minAlpha = max(0.0, min(1.0, minimumAlpha))
 
         // Quantize to tenths of a point — sub-pixel changes on float h
         // would otherwise miss the cache on every layoutSubviews.
         let keyHeight = Int((height * 10.0).rounded())
         let keyFade = Int((clampedFade * 10.0).rounded())
         let keyExponent = Int((exponent * 100.0).rounded())
-        let key = "\(edge == .top ? "t" : "b")-\(keyHeight)-\(keyFade)-\(keyExponent)" as NSString
+        let keyMinAlpha = Int((minAlpha * 1000.0).rounded())
+        let key = "\(edge == .top ? "t" : "b")-\(keyHeight)-\(keyFade)-\(keyExponent)-\(keyMinAlpha)" as NSString
         if let cached = taperedGradientCache.object(forKey: key) {
             return cached
         }
@@ -336,18 +358,10 @@ public final class EdgeEffectView: UIView {
 
             // Cosine-sampled fade: N+1 stops from alpha 1 → minAlpha.
             //
-            // `minAlpha = 0.04` (was 0). The previous "fade to fully
-            // transparent" endpoint left the very last row of the
-            // backdrop unfiltered — so on a sheet that resizes (modal
-            // detent change, search-bar moving navbar↔bottom on launch),
-            // the transparent row at navbar.bottom revealed presenter
-            // dim through the gap. With a small floor of 0.04 the row
-            // is still ~96% transparent (visually indistinguishable from
-            // 0) but backdrop blur stays active there and masks the
-            // presenter behind. No visible "stripe" because 0.04 alpha
-            // tint is below the perceptual threshold over typical
-            // backgrounds.
-            let minAlpha: CGFloat = 0.04
+            // Callers can keep a tiny non-zero terminal alpha when the
+            // effect is bounded exactly by chrome geometry. Regular
+            // edgeEffect surfaces pass 0 so blur/tint fully disappear
+            // instead of ending in a visible rectangular boundary.
             let steps = 32
             var fadeColors: [CGColor] = []
             var fadeLocations: [CGFloat] = []
@@ -457,7 +471,7 @@ public final class EdgeEffectView: UIView {
 
 // MARK: - BackdropBlurHostView
 // Thin wrapper around a `CABackdropLayer` (private) with a custom `CAFilter.blur`
-// at a configurable `inputRadius`. Used by `EdgeEffectView` for fine-grained
+// at a configurable `blurAmount`. Used by `EdgeEffectView` for fine-grained
 // blur strength control (lighter than any `UIBlurEffect` system material).
 
 final class BackdropBlurHostView: UIView {
@@ -465,9 +479,9 @@ final class BackdropBlurHostView: UIView {
     private var filter: NSObject?
     private var appliedRadius: CGFloat = -1.0
 
-    var inputRadius: CGFloat = 5.0 {
+    var blurAmount: CGFloat = 5.0 {
         didSet {
-            if inputRadius != oldValue {
+            if blurAmount != oldValue {
                 applyRadius()
             }
         }
@@ -499,16 +513,16 @@ final class BackdropBlurHostView: UIView {
 
     private func applyRadius() {
         guard let backdropLayer else { return }
-        if appliedRadius == inputRadius, filter != nil { return }
+        if appliedRadius == blurAmount, filter != nil { return }
 
         if filter == nil, let blur = CALayer.blur() {
             filter = blur
         }
         if let filter {
-            filter.setValue(inputRadius as NSNumber, forKey: ObfuscatedSymbols.inputRadius)
+            filter.setValue(blurAmount as NSNumber, forKey: ObfuscatedSymbols.filterRadiusKey)
             backdropLayer.filters = [filter]
         }
-        appliedRadius = inputRadius
+        appliedRadius = blurAmount
     }
 
     private static func createBackdropLayer() -> CALayer? {
@@ -524,7 +538,7 @@ final class BackdropBlurHostView: UIView {
 
 // MARK: - VariableBlurEffect
 // Direct port of `VariableBlurEffect` — applies a variable-radius blur
-// to a host layer using the private `CAFilter` `variableBlur` on iOS 26+, or a
+// to a host layer using the private masked blur filter on iOS 26+, or a
 // `CABackdropLayer` fallback on earlier systems.
 
 public final class VariableBlurEffect {
@@ -581,15 +595,15 @@ public final class VariableBlurEffect {
             self.imageSubview = imageSubview
             imageSubview.layer.name = "mask_source"
 
-            if let variableBlur = CALayer.variableBlur() {
-                variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
-                variableBlur.setValue("mask_source", forKey: ObfuscatedSymbols.inputSourceSublayerName)
+            if let maskedBlur = CALayer.aetherMaskedBlurFilter() {
+                maskedBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.filterRadiusKey)
+                maskedBlur.setValue("mask_source", forKey: ObfuscatedSymbols.inputSourceSublayerName)
                 if isTransparent {
-                    variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
+                    maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
                 } else {
-                    variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
+                    maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
                 }
-                self.layer.filters = [variableBlur]
+                self.layer.filters = [maskedBlur]
             }
             self.layer.addSublayer(imageSubview.layer)
         } else {
@@ -726,14 +740,14 @@ public final class VariableBlurEffect {
 
     private func updateLegacyEffect() {
         guard let params else { return }
-        guard let variableBlur = CALayer.variableBlur() else { return }
+        guard let maskedBlur = CALayer.aetherMaskedBlurFilter() else { return }
         guard let gradientImage else { return }
 
-        variableBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.inputRadius)
+        maskedBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.filterRadiusKey)
         if self.isTransparent {
-            variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
+            maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
         } else {
-            variableBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
+            maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
         }
 
         let image = generateImage(CGSize(width: 1.0, height: min(800.0, params.size.height)), rotatedContext: { size, context in
@@ -762,16 +776,16 @@ public final class VariableBlurEffect {
         })
 
         if let cgImage = image?.cgImage {
-            variableBlur.setValue(cgImage, forKey: ObfuscatedSymbols.inputMaskImage)
+            maskedBlur.setValue(cgImage, forKey: ObfuscatedSymbols.inputMaskImage)
         }
 
-        self.layer.filters = [variableBlur]
+        self.layer.filters = [maskedBlur]
     }
 }
 
 // MARK: - VariableBlurView
 // Port of `VariableBlurView`. Uses `CABackdropLayer` as host so the blur
-// samples real backdrop content (critical for iOS 26+ `variableBlur` filter).
+// samples real backdrop content (critical for the iOS 26+ masked blur filter).
 
 public final class VariableBlurView: UIView {
     public let maxBlurRadius: CGFloat
