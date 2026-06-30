@@ -151,15 +151,14 @@ func makeRootTabBarController() -> AetherTabBarController {
         tabBarSelectedIconColor: .systemBlue,
         style: .liquidGlass
     ))
+    let search = UIViewController()
+    search.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass")!)
+
     tabs.setControllers([
         tab(HomeController(),     item: UITabBarItem(title: "Home",     image: UIImage(systemName: "house.fill"),     tag: 0)),
         tab(SettingsController(), item: UITabBarItem(title: "Settings", image: UIImage(systemName: "gearshape.fill"), tag: 1)),
+        search
     ], selectedIndex: 0)
-
-    tabs.searchShowcase = TabBarView.SearchShowcase(
-        icon: UIImage(systemName: "magnifyingglass")!,
-        action: { [weak tabs] in tabs?.activateSearch() }
-    )
     return tabs
 }
 ```

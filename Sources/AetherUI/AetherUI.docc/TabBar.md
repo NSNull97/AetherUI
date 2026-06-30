@@ -1,6 +1,6 @@
 # TabBar
 
-Корневой плавающий tab bar с glass-pill, опциональным search-кружком,
+Корневой плавающий tab bar с glass-pill, опциональным search tab item,
 bottomBarAccessory, минимизацией при скролле и Apple-Music-style
 expanded accessory.
 
@@ -15,8 +15,8 @@ tab bar. В отличие от `UITabBarController`, не владеет nav ba
 
 - ``TabBarView`` — плавающий glass-pill с item'ами, badges, edge-effect
   на скролле.
-- ``AetherTabBarController/searchShowcase`` — опциональный search-кружок
-  рядом с pill'ом.
+- ``SearchTabItem`` — обычный `tabBarItem`, который рендерится как
+  search-кружок рядом с pill'ом.
 - ``AetherTabBarController/bottomBarAccessory`` — accessory-полоса над
   pill'ом (Now Playing pill и аналогичные сценарии).
 - ``AetherTabBarController/tabBarMinimizeBehavior`` — авто-минимизация
@@ -32,7 +32,7 @@ tab bar. В отличие от `UITabBarController`, не владеет nav ba
 func makeRootController() -> AetherTabBarController {
 
     func makeTab(_ root: ViewController, item: UITabBarItem) -> AetherNavigationController {
-        let nav = AetherNavigationController(mode: .single, theme: .liquidGlass())
+        let nav = AetherNavigationController(mode: .single)
         nav.setViewControllers([root], animated: false)
         nav.tabBarItem = item
         return nav
@@ -49,11 +49,7 @@ func makeRootController() -> AetherTabBarController {
         tag: 1
     ))
 
-    let tabs = AetherTabBarController(tabBarTheme: TabBarView.Theme(
-        tabBarSelectedIconColor: .systemBlue,
-        tabBarSelectedTextColor: .systemBlue,
-        style: .liquidGlass
-    ))
+    let tabs = AetherTabBarController()
     tabs.setControllers([chats, settings], selectedIndex: 0)
     return tabs
 }
@@ -73,72 +69,44 @@ tabs.currentController        // UIViewController?
 tabs.selectedIndex = 1        // программное переключение
 ```
 
-## TabBarView.Theme
+## Appearance
 
-Полный список свойств темы:
-
-| Свойство | Тип | По умолчанию | Назначение |
-|---|---|---|---|
-| `tabBarBackgroundColor` | `UIColor` | `.clear` | Фон pill'а в `.legacy` стиле. |
-| `tabBarSeparatorColor` | `UIColor` | `.separator` | Separator между tab bar и контентом. |
-| `tabBarIconColor` | `UIColor` | `.label` | Tint неактивных иконок. |
-| `tabBarSelectedIconColor` | `UIColor` | `.systemBlue` | Tint активной иконки. |
-| `tabBarTextColor` | `UIColor` | `.label` | Цвет неактивного label. |
-| `tabBarSelectedTextColor` | `UIColor` | `.systemBlue` | Цвет активного label. |
-| `tabBarBadgeBackgroundColor` | `UIColor` | `.systemRed` | Фон badge. |
-| `tabBarBadgeStrokeColor` | `UIColor` | `.white` | Обводка badge. |
-| `tabBarBadgeTextColor` | `UIColor` | `.white` | Цвет текста в badge. |
-| `enableBlur` | `Bool` | `true` | Системный blur за фоном (`.legacy`). |
-| `isDark` | `Bool` | `false` | Принудительный dark-режим glass. |
-| `style` | ``TabBarView/Style`` | `.liquidGlass` | `.legacy` или `.liquidGlass`. |
-| `outerInsets` | `UIEdgeInsets` | `(4,25,4,25)` | Внешние insets контента. |
-| `pillHeight` | `CGFloat` | `62.0` | Высота glass-pill'а. |
-| `totalHeight` | `CGFloat` | `103.0` | Общая высота tab bar view (с учётом safe area). |
-| `bottomInset` | `CGFloat` | `25.0` | Расстояние от низа экрана до pill'а (на устройствах с home indicator). |
-| `sideInset` | `CGFloat` | `16.0` | Горизонтальный margin pill'а. |
-| `innerPadding` | `CGFloat` | `2.0` | Внутренний padding pill'а. |
-| `showcaseSpacing` | `CGFloat` | `7.0` | Gap между pill и search-кружком. |
-| `edgeEffectAlpha` | `CGFloat` | `0.75` | Opacity scroll-edge frost. |
-| `edgeEffectBlurRadiusAtEdge` | `CGFloat` | `2.0` | Blur radius на нижней границе. |
-| `edgeEffectBlurRadiusAtFade` | `CGFloat` | `0.0` | Blur radius на верхней границе. |
-| `edgeEffectTintColor` | `UIColor?` | `nil` | Tint frost (nil → tabBarBackgroundColor). |
-
-### Стили
-
-| Стиль | Описание |
-|---|---|
-| `.legacy` | Классический UIKit-style: непрозрачный фон, separator, no-glass. |
-| `.liquidGlass` | iOS 26 liquid glass: системный `UIGlassEffect`, морф между состояниями. |
-
-### Динамическая смена темы
+``AetherTabBarController`` не принимает theme-объекты. Базовый вид берётся
+из app-level ``AppearanceStyle``. Локальная настройка делается через
+``AetherControllerAppearanceProviding`` на активном экране:
 
 ```swift
-tabs.tabBarTheme = TabBarView.Theme(
-    tabBarSelectedIconColor: .systemPink,
-    style: .liquidGlass
-)
+final class SettingsController: AetherViewController, AetherControllerAppearanceProviding {
+    func aetherAppearanceOverride(for context: AetherAppearanceOverrideContext) -> AetherAppearanceOverride? {
+        guard context.surface == .tab else { return nil }
+        return AetherAppearanceOverride(
+            tabBar: AetherTabBarAppearanceOverride(
+                selectedIconColor: .systemPink
+            )
+        )
+    }
+}
 ```
 
-`didSet` автоматически вызывает `tabBarView.updateTheme(_:)`.
+Если состояние override меняется во время жизни экрана, вызовите
+``AetherTabBarController/invalidateAppearance()``. Текущее разрешённое
+значение доступно read-only через ``AetherTabBarController/resolvedAppearance``.
 
-### Bottom inset на устройствах без home indicator
+### Bottom inset
 
-`effectiveBottomInset` автоматически корректирует `bottomInset` на
-устройствах без home indicator: при `safeAreaInsets.bottom == 0` (старые
-iPhone, iPod touch) значение коллапсируется до 16pt вместо
-`theme.bottomInset` (25pt) для соответствия стандартному iOS-spacing.
+`effectiveBottomInset` использует `theme.bottomInset` без дополнительного
+fallback: floating pill держит фиксированный 25pt visual gap от нижней
+границы экрана на всех устройствах.
 
-## Search showcase
+## Search tab item
 
 Search-кружок рядом с pill'ом (Apple Music style):
 
 ```swift
-tabs.searchShowcase = TabBarView.SearchShowcase(
-    icon: UIImage(systemName: "magnifyingglass")!,
-    action: { [weak tabs] in
-        tabs?.activateSearch()
-    }
-)
+let search = UIViewController()
+search.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass")!)
+
+tabs.setControllers([chats, settings, search], selectedIndex: 0)
 ```
 
 При вызове ``AetherTabBarController/activateSearch()``:
@@ -188,7 +156,7 @@ tabs.setBottomBarAccessory(accessory, animated: true)            // blur-crossfa
 Accessory:
 
 - Оборачивается во внутренний `GlassBackgroundView`-wrapper.
-- Позиционируется 8pt над pill'ом, `sideInset` = `tabBarTheme.sideInset`.
+- Позиционируется 8pt над pill'ом и использует текущие layout metrics tab bar.
 - Tab bar автоматически включает accessory в
   `additionalSafeAreaInsets.bottom` и childLayout.additionalInsets, что
   обеспечивает корректный отступ для scroll-контента.
@@ -265,7 +233,7 @@ tabs.tabBarMinimizeBehavior = .onScrollDown   // или .never (default)
 При `.onScrollDown`:
 
 - Скролл вниз (от верха) → tab bar коллапсируется: pill сжимается в
-  48×48 active-tab кружок на leading edge, search showcase — в matching
+  48×48 active-tab кружок на leading edge, search tab item — в matching
   кружок на trailing edge. `bottomBarAccessory` reflows между ними.
 - Скролл вверх (или достижение верха) → tab bar расширяется обратно.
 
@@ -352,13 +320,13 @@ tabs.chromeTopY(in: someView)    // CGFloat? — верхняя Y-координ
 
 | Свойство / метод | Назначение |
 |---|---|
-| `init(tabBarTheme:)` | Создание с темой. |
+| `init()` | Создание с app-level appearance. |
 | `controllers` | Массив дочерних контроллеров. |
 | `currentController` | Контроллер активной вкладки. |
 | `selectedIndex` | Индекс активной вкладки (read-write). |
 | `setControllers(_:selectedIndex:)` | Установка контроллеров и активной вкладки. |
-| `tabBarTheme` | Текущая тема tab bar (`didSet` → updateTheme). |
-| `searchShowcase` | Search-кружок рядом с pill'ом. |
+| `resolvedAppearance` | Текущий resolved appearance tab bar (read-only). |
+| `invalidateAppearance()` | Повторно применить app appearance и override активного экрана. |
 | `tabContextMenuItemsProvider` | Provider для long-press context menu. |
 | `bottomBarAccessory` | Accessory над pill'ом. |
 | `setBottomBarAccessory(_:animated:)` | Установка с crossfade. |
@@ -379,7 +347,6 @@ tabs.chromeTopY(in: someView)    // CGFloat? — верхняя Y-координ
 |---|---|
 | `init(theme:)` | Создание view. |
 | `selectedIndex` | Индекс активной вкладки. |
-| `searchShowcase` | Search-кружок. |
 | `isMinimized` | Read-only состояние минимизации. |
 | `setMinimized(_:transition:)` | Программная минимизация. |
 | `bottomAccessoryReservedHeight` | Высота, которую edge-effect должен покрыть выше bar. |
@@ -414,10 +381,9 @@ tabs.chromeTopY(in: someView)    // CGFloat? — верхняя Y-координ
   12pt над bar bounds через `bandShift`) перекроет accessory glass
   surface. После dismiss expanded accessory выполняется re-layout для
   восстановления corrct z-order.
-- **`safeAreaInsets.bottom == 0` на старых устройствах.** На iPhone без
-  home indicator `effectiveBottomInset` автоматически коллапсируется до
-  16pt (вместо `theme.bottomInset`) для соответствия стандартному
-  iOS-spacing'у.
+- **Bottom inset.** `effectiveBottomInset` использует `theme.bottomInset`
+  напрямую, поэтому floating pill сохраняет одинаковый 25pt visual gap от
+  нижней границы экрана.
 
 ## See Also
 

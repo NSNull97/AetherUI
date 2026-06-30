@@ -23,7 +23,7 @@ final class AetherTabBarControllerTests: XCTestCase {
         let fixture = makeTabBarFixture()
         let tabs = fixture.tabs
         guard let searchButton = tabs.view.firstDescendant(of: GlassBarButtonView.self) else {
-            XCTFail("Expected search showcase button")
+            XCTFail("Expected search tab item button")
             return
         }
         let initialFrame = searchButton.frame
@@ -47,7 +47,7 @@ final class AetherTabBarControllerTests: XCTestCase {
         tabs.bottomBarAccessory = FixedBottomAccessoryView(height: 56.0)
         tabs.view.layoutIfNeeded()
         guard let searchButton = tabs.view.firstDescendant(of: GlassBarButtonView.self) else {
-            XCTFail("Expected search showcase button")
+            XCTFail("Expected search tab item button")
             return
         }
         let initialFrame = searchButton.frame
@@ -61,6 +61,48 @@ final class AetherTabBarControllerTests: XCTestCase {
         XCTAssertEqual(searchButton.frame.width, initialFrame.width, accuracy: 0.5)
         XCTAssertEqual(searchButton.frame.height, initialFrame.height, accuracy: 0.5)
         XCTAssertTrue(searchButton.layer.animationKeys()?.isEmpty ?? true)
+
+        fixture.window.isHidden = true
+    }
+
+    func testSearchTabItemOnNavigationRootRendersAsSearchButton() {
+        let searchTab = makeNavigationSearchController()
+        let fixture = makeTabBarFixture(controllers: [
+            makeController(title: "One", image: "house"),
+            makeController(title: "Two", image: "person"),
+            searchTab
+        ])
+        let tabs = fixture.tabs
+
+        XCTAssertEqual(tabs.controllers.count, 2)
+        XCTAssertFalse(tabs.controllers.contains { $0 === searchTab })
+        XCTAssertNotNil(tabs.view.firstDescendant(of: GlassBarButtonView.self))
+
+        fixture.window.isHidden = true
+    }
+
+    func testRefreshingCurrentControllersPreservesSearchTabItem() {
+        let fixture = makeTabBarFixture()
+        let tabs = fixture.tabs
+
+        tabs.setControllers(tabs.controllers, selectedIndex: tabs.selectedIndex)
+        tabs.view.layoutIfNeeded()
+
+        XCTAssertEqual(tabs.controllers.count, 2)
+        XCTAssertNotNil(tabs.view.firstDescendant(of: GlassBarButtonView.self))
+
+        fixture.window.isHidden = true
+    }
+
+    func testClearingControllersRemovesSearchTabItem() {
+        let fixture = makeTabBarFixture()
+        let tabs = fixture.tabs
+
+        tabs.setControllers([], selectedIndex: nil)
+        tabs.view.layoutIfNeeded()
+
+        XCTAssertTrue(tabs.controllers.isEmpty)
+        XCTAssertNil(tabs.view.firstDescendant(of: GlassBarButtonView.self))
 
         fixture.window.isHidden = true
     }
@@ -96,16 +138,13 @@ final class AetherTabBarControllerTests: XCTestCase {
     }
     #endif
 
-    private func makeTabBarFixture() -> (window: UIWindow, tabs: AetherTabBarController) {
+    private func makeTabBarFixture(controllers: [UIViewController]? = nil) -> (window: UIWindow, tabs: AetherTabBarController) {
         let window = UIWindow(frame: CGRect(x: 0.0, y: 0.0, width: 390.0, height: 844.0))
         let tabs = AetherTabBarController()
-        tabs.searchShowcase = TabBarView.SearchShowcase(
-            icon: UIImage(systemName: "magnifyingglass"),
-            action: {}
-        )
-        tabs.setControllers([
+        tabs.setControllers(controllers ?? [
             makeController(title: "One", image: "house"),
-            makeController(title: "Two", image: "person")
+            makeController(title: "Two", image: "person"),
+            makeSearchController()
         ], selectedIndex: 0)
 
         window.rootViewController = tabs
@@ -125,6 +164,20 @@ final class AetherTabBarControllerTests: XCTestCase {
         let icon = UIImage(systemName: image)
         controller.tabBarItem = UITabBarItem(title: title, image: icon, selectedImage: icon)
         return controller
+    }
+
+    private func makeSearchController() -> UIViewController {
+        let controller = UIViewController()
+        controller.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass"))
+        return controller
+    }
+
+    private func makeNavigationSearchController() -> AetherNavigationController {
+        let root = AetherViewController()
+        root.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass"))
+        let navigationController = AetherNavigationController(mode: .single)
+        navigationController.setViewControllers([root], animated: false)
+        return navigationController
     }
 }
 

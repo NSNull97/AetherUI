@@ -89,6 +89,13 @@ public final class GlassControlGroup: UIView {
 
     public var minWidth: CGFloat = 44.0
     public var animatesInsertedItemsAlpha: Bool = true
+    var pressedSizeIncrease: CGFloat = TouchEffect.Parameters().pressedSizeIncrease {
+        didSet {
+            var parameters = elasticRecognizer?.parameters ?? TouchEffect.Parameters()
+            parameters.pressedSizeIncrease = pressedSizeIncrease
+            elasticRecognizer?.parameters = parameters
+        }
+    }
     private var naturalSize: CGSize = .zero
     private var updateGeneration: Int = 0
 
@@ -119,18 +126,16 @@ public final class GlassControlGroup: UIView {
         addSubview(backgroundView)
         backgroundView.contentView.addSubview(controlsView)
 
-        // iOS ≤25 doesn't have UIGlassEffect.isInteractive — port the
-        // Telegram elastic touch feedback so the whole capsule (glass
-        // surface + inner buttons) stretches under the finger and
-        // springs back on release. iOS 26+ gets the native warp via
-        // `isInteractive` on the glass (see `update`).
-        if #unavailable(iOS 26.0) {
-            let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
-            elastic.touchEffectView = self
-            elastic.highlightContainerView = controlsView
-            addGestureRecognizer(elastic)
-            self.elasticRecognizer = elastic
-        }
+        // Group items are real button cells. On iOS 26+ those cells can
+        // consume the touch stream before UIGlassEffect observes enough
+        // movement, so keep the Telegram elastic tracker on every OS.
+        // The group's own native interactive glass warp is disabled below;
+        // otherwise the native warp and this tracker compound on press.
+        let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
+        elastic.touchEffectView = self
+        elastic.highlightContainerView = controlsView
+        addGestureRecognizer(elastic)
+        self.elasticRecognizer = elastic
     }
 
     required init?(coder: NSCoder) {
@@ -313,7 +318,7 @@ public final class GlassControlGroup: UIView {
             animateRemovedButton(stale.button, transition: transition)
         }
         itemViews = newEntries
-        currentIsInteractive = isInteractiveOverall
+        currentIsInteractive = false
 
         // If there are no items, collapse the group entirely — otherwise the
         // glass capsule would still render at its min-width size, producing a
@@ -368,14 +373,7 @@ public final class GlassControlGroup: UIView {
 
         transition.updateFrame(view: backgroundView, frame: CGRect(origin: .zero, size: size))
         transition.updateFrame(view: controlsView, frame: CGRect(origin: .zero, size: size))
-        backgroundView.update(
-            size: size,
-            cornerRadius: size.height * 0.5,
-            isDark: isDark,
-            tintColor: tintColor,
-            isInteractive: isInteractiveOverall,
-            transition: transition
-        )
+        updateBackgroundChrome(size: size, isDark: isDark, tintColor: tintColor, transition: transition)
         if didChangeVisualItems {
             let pulseAmplitude = insertedEntryCount > 0 || removedEntryCount == 0 ? Overspring.itemChangeAmplitude : -Overspring.itemChangeAmplitude
             animateGroupPulse(transition: transition, amplitude: pulseAmplitude)
@@ -532,18 +530,31 @@ public final class GlassControlGroup: UIView {
         transition.updateFrame(view: self, frame: resolvedFrame)
         transition.updateFrame(view: backgroundView, frame: CGRect(origin: .zero, size: resolvedSize))
         transition.updateFrame(view: controlsView, frame: CGRect(origin: .zero, size: resolvedSize))
-        backgroundView.update(
-            size: resolvedSize,
-            cornerRadius: resolvedSize.height * 0.5,
-            isDark: isDarkAppearance,
-            tintColor: currentTintColor,
-            isInteractive: currentIsInteractive,
-            transition: transition
-        )
+        updateBackgroundChrome(size: resolvedSize, isDark: isDarkAppearance, tintColor: currentTintColor, transition: transition)
     }
 
     public func setTransitionChromeAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition) {
         transition.updateAlpha(view: backgroundView, alpha: alpha)
+    }
+
+    private func updateBackgroundChrome(
+        size: CGSize,
+        isDark: Bool,
+        tintColor: GlassBackgroundView.TintColor,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let cornerRadius = size.height * 0.5
+        if #available(iOS 26.0, *) {
+            backgroundView.setNativeUniformCornerRadius(cornerRadius)
+        }
+        backgroundView.update(
+            size: size,
+            cornerRadius: cornerRadius,
+            isDark: isDark,
+            tintColor: tintColor,
+            isInteractive: currentIsInteractive,
+            transition: transition
+        )
     }
 
     private func applyForegroundColorToItems() {

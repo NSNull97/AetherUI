@@ -63,7 +63,7 @@ public struct AetherToolbarTheme: Equatable {
     }
 
     public static let light = AetherToolbarTheme(
-        backgroundColor: UIColor.white.withAlphaComponent(0.86),
+        backgroundColor: UIColor.white.withAlphaComponent(0.82),
         separatorColor: UIColor(white: 0.0, alpha: 0.12),
         textColor: .black,
         accentColor: UIColor(red: 0.0, green: 0.478, blue: 1.0, alpha: 1.0),
@@ -72,7 +72,7 @@ public struct AetherToolbarTheme: Equatable {
     )
 
     public static let dark = AetherToolbarTheme(
-        backgroundColor: UIColor(white: 0.1, alpha: 0.86),
+        backgroundColor: UIColor(white: 0.1, alpha: 0.82),
         separatorColor: UIColor(white: 1.0, alpha: 0.12),
         textColor: .white,
         accentColor: UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0),

@@ -46,18 +46,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             symbolConfig: symbolConfig
         )
 
-        let tabs = AetherTabBarController(
-            tabBarTheme: TabBarView.Theme(
-                tabBarSelectedIconColor: .systemBlue,
-                tabBarSelectedTextColor: .systemBlue,
-                style: .liquidGlass
-            )
+        let searchTab = UIViewController()
+        searchTab.tabBarItem = SearchTabItem(
+            image: UIImage(systemName: "magnifyingglass", withConfiguration: symbolConfig)
         )
-        tabs.setControllers([componentsTab, statesTab, collectionTab, settingsTab], selectedIndex: 0)
-        tabs.searchShowcase = TabBarView.SearchShowcase(
-            icon: UIImage(systemName: "magnifyingglass", withConfiguration: symbolConfig),
-            action: { [weak tabs] in tabs?.activateSearch() }
-        )
+
+        let tabs = AetherTabBarController()
+        tabs.setControllers([componentsTab, statesTab, collectionTab, settingsTab, searchTab], selectedIndex: 0)
 
         // SettingsController drives the tab bar's chrome — wire the
         // back-reference now so toggles inside Settings find it.
@@ -72,12 +67,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         root: AetherViewController,
         title: String,
         symbolName: String,
-        symbolConfig: UIImage.SymbolConfiguration
+        symbolConfig: UIImage.SymbolConfiguration,
+        isSearch: Bool = false
     ) -> AetherNavigationController {
         let icon = UIImage(systemName: symbolName, withConfiguration: symbolConfig)
-        let item = UITabBarItem(title: title, image: icon, selectedImage: icon)
+        let item = isSearch ? SearchTabItem(image: icon, selectedImage: icon) : UITabBarItem(title: title, image: icon, selectedImage: icon)
         root.tabBarItem = item
-        let nav = AetherNavigationController(mode: .single, theme: .liquidGlass())
+        let nav = AetherNavigationController(mode: .single)
         nav.setViewControllers([root], animated: false)
         nav.tabBarItem = item
         return nav

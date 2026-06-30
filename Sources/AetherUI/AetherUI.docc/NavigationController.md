@@ -23,17 +23,14 @@
   взаимодействия с push/pop.
 - **Минимизация (Picture-in-Picture-style).** Контроллеры могут быть
   свернуты в нижнюю «полку» с возможностью разворота.
-- **Динамическая смена темы.**
-  ``AetherNavigationController/updateTheme(_:)`` обновляет nav bar и
-  status bar во всём стеке.
+- **App appearance + local overrides.**
+  ``AetherNavigationController`` берёт базовый вид из ``AppearanceStyle`` и
+  перечитывает ``AetherControllerAppearanceProviding`` у верхнего экрана.
 
 ## Базовый шаблон
 
 ```swift
-let nav = AetherNavigationController(
-    mode: .single,
-    theme: NavigationControllerTheme.liquidGlass()
-)
+let nav = AetherNavigationController(mode: .single)
 nav.setViewControllers([HomeController()], animated: false)
 ```
 
@@ -61,45 +58,36 @@ nav.replaceTopController(NewController(), animated: true)
 ```swift
 class ProfileController: AetherViewController {
     init() {
-        super.init(navigationBarPresentationData: .liquidGlass())
+        super.init()
         navigationPresentation = .master   // прижимается к master-колонке
     }
 }
 
 class MessageController: AetherViewController {
     init() {
-        super.init(navigationBarPresentationData: .liquidGlass())
+        super.init()
         navigationPresentation = .default  // отображается в detail
     }
 }
 ```
 
-## Theme
-
-``NavigationControllerTheme`` объединяет настройки nav bar, status bar и
-цвета пустых областей (видимых, например, во время split-view layout):
+## Appearance
 
 ```swift
-let theme = NavigationControllerTheme(
-    statusBar: .black,                       // .black | .white
-    navigationBar: NavigationBarTheme.liquidGlass(),
-    emptyAreaColor: .systemBackground
-)
-
-// Стандартный preset:
-let theme = NavigationControllerTheme.liquidGlass(
-    overallDarkAppearance: false,
-    emptyAreaColor: .systemBackground
-)
+final class ProfileController: AetherViewController, AetherControllerAppearanceProviding {
+    func aetherAppearanceOverride(for context: AetherAppearanceOverrideContext) -> AetherAppearanceOverride? {
+        guard context.surface == .navigation else { return nil }
+        return AetherAppearanceOverride(
+            navigationBar: AetherNavigationBarAppearanceOverride(
+                buttonColor: .systemPink
+            )
+        )
+    }
+}
 ```
 
-Динамическая смена темы:
-
-```swift
-nav.updateTheme(.liquidGlass(overallDarkAppearance: true))
-```
-
-Подробнее о настройках бара — <doc:NavigationBar>.
+Если состояние override меняется во время жизни экрана, вызовите
+``AetherNavigationController/invalidateAppearance()``.
 
 ## Стек контроллеров
 
@@ -221,19 +209,14 @@ nav.requestLayout(transition: .animated(duration: 0.3, curve: .easeInOut))
 `childForStatusBarStyle` и `childForStatusBarHidden` указывают на
 ``AetherNavigationController/topController``, что обеспечивает
 автоматическое следование за стилем верхнего контроллера. Базовый стиль
-определяется ``NavigationControllerTheme/statusBar``:
+определяется app-level ``AppearanceStyle``:
 
 | Значение | UIStatusBarStyle |
 |---|---|
 | `.black` | `.darkContent` |
 | `.white` | `.lightContent` |
 
-Изменение стиля на лету:
-
-```swift
-nav.updateTheme(.liquidGlass(overallDarkAppearance: true))
-// → currentStatusBarStyle = .white → .lightContent
-```
+После изменения app appearance runtime вызывает ``AetherNavigationController/updateAppearance(_:)``.
 
 ## API
 

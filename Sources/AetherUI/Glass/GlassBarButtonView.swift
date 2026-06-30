@@ -173,7 +173,11 @@ public final class GlassBarButtonView: UIView {
 
         let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
         glassBackground.frame = bounds
-        glassBackground.update(size: bounds.size, cornerRadius: bounds.height / 2.0, isDark: resolvedDark, tintColor: .init(kind: .panel), isInteractive: displayState == .glass || displayState == .tintedGlass, isVisible: true, transition: .immediate)
+        let cornerRadius = bounds.height / 2.0
+        if #available(iOS 26.0, *) {
+            glassBackground.setNativeUniformCornerRadius(cornerRadius)
+        }
+        glassBackground.update(size: bounds.size, cornerRadius: cornerRadius, isDark: resolvedDark, tintColor: .init(kind: .panel), isInteractive: displayState == .glass || displayState == .tintedGlass, isVisible: true, transition: .immediate)
         contentContainer.frame = bounds
 
         if let iconView = iconView, titleLabel == nil {

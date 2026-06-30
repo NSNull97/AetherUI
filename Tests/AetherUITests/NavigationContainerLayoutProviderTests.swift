@@ -77,10 +77,7 @@ final class NavigationContainerLayoutProviderTests: XCTestCase {
         let window = UIWindow(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 640.0))
         let root = LayoutProbeController()
         root.displayNavigationBar = false
-        let navigationController = AetherNavigationController(
-            rootViewController: root,
-            theme: .liquidGlass()
-        )
+        let navigationController = AetherNavigationController(rootViewController: root)
         let tabBarController = AetherTabBarController()
         tabBarController.setControllers([navigationController], selectedIndex: 0)
 
@@ -111,10 +108,7 @@ final class NavigationContainerLayoutProviderTests: XCTestCase {
         let root = LayoutProbeController()
         let accessory = TransitionProbeAccessoryView()
         root.topBarAccessory = accessory
-        let navigationController = AetherNavigationController(
-            rootViewController: root,
-            theme: .liquidGlass()
-        )
+        let navigationController = AetherNavigationController(rootViewController: root)
         window.rootViewController = navigationController
         window.isHidden = false
         navigationController.loadViewIfNeeded()
@@ -150,10 +144,7 @@ final class NavigationContainerLayoutProviderTests: XCTestCase {
         let root = LayoutProbeController()
         let accessory = TransitionProbeAccessoryView()
         root.topBarAccessory = accessory
-        let navigationController = AetherNavigationController(
-            rootViewController: root,
-            theme: .liquidGlass()
-        )
+        let navigationController = AetherNavigationController(rootViewController: root)
         window.rootViewController = navigationController
         window.isHidden = false
         navigationController.loadViewIfNeeded()

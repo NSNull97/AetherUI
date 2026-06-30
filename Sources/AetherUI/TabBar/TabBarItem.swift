@@ -17,4 +17,22 @@ public final class AetherTabBarItem {
     }
 }
 
-public typealias SearchTabBarItem = UITabBarItem
+/// Configuration for the standalone search control shown next to the tab bar pill.
+public final class SearchTabItem: UITabBarItem {
+    public var action: (() -> Void)?
+
+    public init(
+        image: UIImage? = UIImage(systemName: "magnifyingglass"),
+        selectedImage: UIImage? = nil,
+        action: (() -> Void)? = nil
+    ) {
+        self.action = action
+        super.init()
+        self.image = image
+        self.selectedImage = selectedImage ?? image
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+}

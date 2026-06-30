@@ -1,7 +1,7 @@
 # Search
 
 Поисковые controllers и компоненты AetherUI: glass-pill в nav bar,
-плавающий bottom-pill, активный search bar и tab-bar search showcase.
+плавающий bottom-pill, активный search bar и tab-bar search item.
 
 ## Overview
 
@@ -16,7 +16,7 @@ AetherUI предоставляет несколько вариантов пои
 - ``AetherActiveSearchBar`` — активный search bar с встроенным
   `UITextField` и cancel-кнопкой; используется как
   `NavigationBarContentView` в `.replacement` режиме.
-- ``TabBarView/SearchShowcase`` — search-кружок рядом с tab bar pill'ом
+- ``SearchTabItem`` — search-кружок рядом с tab bar pill'ом
   в стиле Apple Music; запускает поиск во весь экран.
 
 ## AetherSearchController
@@ -144,9 +144,9 @@ search.updateEdgeEffect(color: .systemGray6)
 
 ### Tab bar integration
 
-Если ViewController находится внутри ``AetherTabBarController`` с
-``AetherTabBarController/searchShowcase``, search-кружок tab bar'а может
-триггерить активацию поиска через override:
+Если ViewController находится внутри ``AetherTabBarController``, а один из
+переданных контроллеров имеет `tabBarItem is SearchTabItem`, search-кружок
+tab bar'а может триггерить активацию поиска через override:
 
 ```swift
 class HomeController: AetherViewController {
@@ -252,17 +252,15 @@ activeBar.activate()    // become first responder
 activeBar.deactivate()  // resign first responder
 ```
 
-## TabBarView.SearchShowcase
+## SearchTabItem
 
 Кружок поиска рядом с tab bar pill'ом (Apple Music style):
 
 ```swift
-tabs.searchShowcase = TabBarView.SearchShowcase(
-    icon: UIImage(systemName: "magnifyingglass")!,
-    action: { [weak tabs] in
-        tabs?.activateSearch()
-    }
-)
+let search = UIViewController()
+search.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass")!)
+
+tabs.setControllers([home, settings, search], selectedIndex: 0)
 ```
 
 При вызове ``AetherTabBarController/activateSearch()``:

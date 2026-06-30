@@ -68,6 +68,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
     // MARK: - Properties
 
     private let mode: NavigationControllerMode
+    private var appearance: AetherAppearance
     private var theme: NavigationControllerTheme
     private var defaultNavigationBarPresentationData: NavigationBarPresentationData
 
@@ -106,6 +107,8 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         let isInteractive: Bool
         var sourceBaseFrame: CGRect = .zero
         var targetBaseFrame: CGRect = .zero
+        var sourceButtonChromeLayout = NavigationBarImpl.ButtonChromeLayout(leftFrame: nil, rightFrame: nil)
+        var targetButtonChromeLayout = NavigationBarImpl.ButtonChromeLayout(leftFrame: nil, rightFrame: nil)
         var progress: CGFloat = 0.0
         var didResolveButtonTransition: Bool = false
         var resolvedCompleted: Bool?
@@ -231,16 +234,19 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
 
     // MARK: - Init
 
-    public init(mode: NavigationControllerMode, theme: NavigationControllerTheme) {
+    public init(mode: NavigationControllerMode = .single) {
+        let appearance = AetherAppearance.runtimeCurrent
+        let theme = NavigationControllerTheme(aetherAppearance: appearance)
         self.mode = mode
+        self.appearance = appearance
         self.theme = theme
         self.currentStatusBarStyle = theme.statusBar
         self.defaultNavigationBarPresentationData = NavigationBarPresentationData(theme: theme.navigationBar)
         super.init(nibName: nil, bundle: nil)
     }
 
-    public convenience init(rootViewController: AetherViewController, mode: NavigationControllerMode = .single, theme: NavigationControllerTheme) {
-        self.init(mode: mode, theme: theme)
+    public convenience init(rootViewController: AetherViewController, mode: NavigationControllerMode = .single) {
+        self.init(mode: mode)
         setViewControllers([rootViewController], animated: false)
     }
 
@@ -552,22 +558,68 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
 
     // MARK: - Theme
 
-    public func updateTheme(_ theme: NavigationControllerTheme) {
+    public func invalidateAppearance() {
+        updateAppearance(appearance)
+    }
+
+    public func updateAppearance(_ appearance: AetherAppearance) {
+        self.appearance = appearance
+        applyNavigationControllerTheme(resolvedNavigationControllerTheme(for: appearance), transition: .immediate)
+    }
+
+    private func applyNavigationControllerTheme(_ theme: NavigationControllerTheme, transition: ContainedViewLayoutTransition) {
         self.theme = theme
         self.currentStatusBarStyle = theme.statusBar
         self.defaultNavigationBarPresentationData = NavigationBarPresentationData(theme: theme.navigationBar)
-        view.backgroundColor = theme.emptyAreaColor
-        sharedNavigationBar?.updatePresentationData(defaultNavigationBarPresentationData, transition: .immediate)
+        if isViewLoaded {
+            view.backgroundColor = theme.emptyAreaColor
+        }
+        sharedNavigationBar?.updatePresentationData(defaultNavigationBarPresentationData, transition: transition)
 
         if case let .split(container)? = rootContainer {
             container.updateTheme(theme: theme)
         }
 
         if let layout = validLayout {
-            updateVisibleContainers(layout: layout, transition: .immediate)
+            updateVisibleContainers(layout: layout, transition: transition)
         } else {
             setNeedsStatusBarAppearanceUpdate()
         }
+    }
+
+    private func resolvedNavigationBarAppearance(
+        for controller: AetherViewController?,
+        appearance: AetherAppearance
+    ) -> AetherNavigationBarResolvedAppearance {
+        let resolutionContext = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: .navigation,
+            placement: .navigation,
+            traitCollection: traitCollection
+        )
+        guard let controller else {
+            return AetherNavigationBarAppearanceResolver.resolve(context: resolutionContext)
+        }
+        let overrideContext = AetherAppearanceOverrideContext(
+            appearance: appearance,
+            surface: .navigation,
+            placement: .navigation,
+            traitCollection: traitCollection,
+            viewController: controller
+        )
+        let override = (controller as? AetherControllerAppearanceProviding)?
+            .aetherAppearanceOverride(for: overrideContext)?
+            .navigationBar
+        return AetherNavigationBarAppearanceResolver.resolve(context: resolutionContext, override: override)
+    }
+
+    private func resolvedNavigationControllerTheme(for appearance: AetherAppearance) -> NavigationControllerTheme {
+        let resolved = resolvedNavigationBarAppearance(for: topController, appearance: appearance)
+        return NavigationControllerTheme(
+            statusBar: appearance.overallDarkAppearance ? .white : .black,
+            navigationBar: NavigationBarTheme(aetherResolvedAppearance: resolved),
+            emptyAreaColor: resolved.emptyAreaColor
+        )
     }
 
     // MARK: - Private
@@ -756,7 +808,11 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
     }
 
     private func navigationBarPresentationData(for controller: AetherViewController) -> NavigationBarPresentationData {
-        controller.explicitNavigationBarPresentationData ?? defaultNavigationBarPresentationData
+        if let explicitNavigationBarPresentationData = controller.explicitNavigationBarPresentationData {
+            return explicitNavigationBarPresentationData
+        }
+        let resolved = resolvedNavigationBarAppearance(for: controller, appearance: appearance)
+        return NavigationBarPresentationData(theme: NavigationBarTheme(aetherResolvedAppearance: resolved))
     }
 
     private func activeRootStack(for rootLayout: RootNavigationLayout) -> [AetherViewController] {
@@ -1094,8 +1150,6 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         bar.autoresizingMask = [.flexibleWidth]
         bar.requestContainerLayout = nil
         bar.hostsNavigationItemTitleView = false
-        bar.setTitleTransitionMode(true)
-        bar.setTitleContentHiddenForTransition(false)
         configureNavigationBar(
             bar,
             for: controller,
@@ -1105,6 +1159,8 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             animateContent: false,
             allowsContainerLayoutRequests: false
         )
+        bar.setTitleTransitionMode(true)
+        bar.setTitleContentHiddenForTransition(false)
         return bar
     }
 
@@ -1217,6 +1273,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
         layout: ContainerViewLayout,
         transition: ContainedViewLayoutTransition
     ) {
+        state.sourceBar.setTitleTransitionMode(false)
         let sourceLayout = configureNavigationBar(
             state.sourceBar,
             for: state.sourceController,
@@ -1227,9 +1284,11 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             allowsContainerLayoutRequests: false
         )
         state.sourceBaseFrame = sourceLayout.navigationFrame
+        state.sourceButtonChromeLayout = state.sourceBar.transitionMeasuredButtonChromeLayout()
         state.sourceBar.setTitleTransitionMode(true)
         state.sourceBar.setTitleContentHiddenForTransition(false)
 
+        state.targetBar.setTitleTransitionMode(false)
         let targetLayout = configureNavigationBar(
             state.targetBar,
             for: state.targetController,
@@ -1240,6 +1299,7 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             allowsContainerLayoutRequests: false
         )
         state.targetBaseFrame = targetLayout.navigationFrame
+        state.targetButtonChromeLayout = state.targetBar.transitionMeasuredButtonChromeLayout()
         state.targetBar.setTitleTransitionMode(true)
         state.targetBar.setTitleContentHiddenForTransition(false)
 
@@ -1289,9 +1349,35 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
             sharedNavigationBar.transform = .identity
             sharedNavigationBar.setTitleContentHiddenForTransition(true)
             sharedNavigationBar.setButtonContentHiddenForTransition(false)
-            sharedNavigationBar.setButtonChromeScale(1.0, transition: transition)
+            if state.isInteractive && state.direction == .pop {
+                applyInteractivePopButtonChromePreview(state, progress: progress, transition: transition)
+            } else {
+                sharedNavigationBar.setButtonChromeScale(1.0, transition: transition)
+            }
             sharedNavigationBar.bringButtonLayerToFrontIfNeeded()
         }
+    }
+
+    private func applyInteractivePopButtonChromePreview(
+        _ state: NavigationBarInteractiveTransition,
+        progress: CGFloat,
+        transition: ContainedViewLayoutTransition
+    ) {
+        guard let sharedNavigationBar else {
+            return
+        }
+
+        let previewLayout = state.sourceButtonChromeLayout.interactivePopPreviewLayout(
+            towards: state.targetButtonChromeLayout,
+            progress: progress
+        )
+        let scales = state.sourceButtonChromeLayout.interactivePopMissingTargetScales(
+            towards: state.targetButtonChromeLayout,
+            progress: progress
+        )
+
+        sharedNavigationBar.setButtonChromeLayout(previewLayout, transition: transition)
+        sharedNavigationBar.setButtonChromeScale(left: scales.left, right: scales.right, transition: transition)
     }
 
     private func resolveInteractiveNavigationBarTransition(
@@ -1315,7 +1401,9 @@ open class AetherNavigationController: UIViewController, UIGestureRecognizerDele
                 sharedNavigationBar.transform = .identity
                 sharedNavigationBar.setTitleContentHiddenForTransition(true)
                 sharedNavigationBar.setButtonContentHiddenForTransition(false)
-                sharedNavigationBar.setButtonChromeScale(1.0, transition: .immediate)
+                let resetTransition = buttonTransition ?? .immediate
+                sharedNavigationBar.setButtonChromeLayout(state.sourceButtonChromeLayout, transition: resetTransition)
+                sharedNavigationBar.setButtonChromeScale(1.0, transition: resetTransition)
                 if view.subviews.last !== sharedNavigationBar {
                     view.bringSubviewToFront(sharedNavigationBar)
                 }

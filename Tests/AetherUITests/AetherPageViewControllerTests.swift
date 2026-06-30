@@ -204,6 +204,46 @@ final class AetherPageViewControllerTests: XCTestCase {
         XCTAssertFalse(child.navigationBarView?.superview === child.view)
     }
 
+    func testEmbeddedPageScrollUpdatesHostingNavigationBarSeparator() throws {
+        let parentData = AetherAppearance.withRuntimeCurrent(.iOS27) {
+            NavigationBarPresentationData.aetherAppearance()
+        }
+        let childData = AetherAppearance.withRuntimeCurrent(.iOS27) {
+            NavigationBarPresentationData.aetherAppearance()
+        }
+        let child = AetherViewController(navigationBarPresentationData: childData)
+        child.loadViewIfNeeded()
+        let childBar = try XCTUnwrap(child.navigationBarView as? NavigationBarImpl)
+        let controller = AetherPageViewController(
+            pages: [
+                AetherPageViewController.Page(title: "Child", viewController: child)
+            ],
+            installViewPagerAsTopBarAccessory: false,
+            navigationBarPresentationData: parentData
+        )
+
+        controller.loadViewIfNeeded()
+        controller.containerLayoutUpdated(
+            ContainerViewLayout(
+                size: CGSize(width: 320.0, height: 640.0),
+                safeInsets: UIEdgeInsets(top: 47.0, left: 0.0, bottom: 34.0, right: 0.0),
+                statusBarHeight: 47.0
+            ),
+            transition: .immediate
+        )
+
+        let hostingBar = try XCTUnwrap(controller.navigationBarView as? NavigationBarImpl)
+        let scrollView = UIScrollView()
+        scrollView.contentOffset.y = 32.0
+
+        child.updateNavigationBarScrollEdgeOffset(for: scrollView, transition: .immediate)
+
+        XCTAssertTrue(child.navigationBarIsExternallyHosted)
+        XCTAssertFalse(childBar.superview === child.view)
+        XCTAssertEqual(childBar.stripeView.alpha, 0.0)
+        XCTAssertEqual(hostingBar.stripeView.alpha, 1.0)
+    }
+
     func testPagerAllowsFullWidthInteractivePopOnlyOnFirstPage() {
         let controller = AetherPageViewController(
             pages: [

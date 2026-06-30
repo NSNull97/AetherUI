@@ -4,7 +4,7 @@ import AetherUI
 /// Tab 4 — settings panel that drives the rest of the app's chrome:
 /// toggles the navbar `topBarAccessory`, the tabbar `bottomBarAccessory`,
 /// the minimize behaviour, and edge-effect blur via context menus.
-final class SettingsController: AetherViewController {
+final class SettingsController: AetherViewController, AetherControllerAppearanceProviding {
     weak var hostTabBar: AetherTabBarController?
 
     private var tableView: UITableView!
@@ -29,6 +29,7 @@ final class SettingsController: AetherViewController {
     private var minimizeBehavior: AetherTabBarController.TabBarMinimizeBehavior = .never
     private var edgeBlurAtEdge: CGFloat = 2.0
     private var edgeBlurAtFade: CGFloat = 0.0
+    private var overridesTabBarEdgeEffect = false
 
     init() {
         super.init(navigationBarPresentationData: .defaultTheme(edgeColor: .systemGroupedBackground))
@@ -62,8 +63,8 @@ final class SettingsController: AetherViewController {
         // opened after some other code touched the chrome.
         if let tabs = hostTabBar {
             minimizeBehavior = tabs.tabBarMinimizeBehavior
-            edgeBlurAtEdge = tabs.tabBarTheme.edgeEffectBlurRadiusAtEdge
-            edgeBlurAtFade = tabs.tabBarTheme.edgeEffectBlurRadiusAtFade
+            edgeBlurAtEdge = tabs.resolvedAppearance.edgeEffect.blurRadiusAtEdge
+            edgeBlurAtFade = tabs.resolvedAppearance.edgeEffect.blurRadiusAtFade
             rebuildRows()
             tableView.reloadData()
         }
@@ -213,43 +214,33 @@ final class SettingsController: AetherViewController {
         case .atEdge: edgeBlurAtEdge = value
         case .atFade: edgeBlurAtFade = value
         }
-        guard let tabs = hostTabBar else {
-            rebuildRows()
-            tableView.reloadData()
-            return
-        }
-        let old = tabs.tabBarTheme
-        tabs.tabBarTheme = TabBarView.Theme(
-            tabBarBackgroundColor: old.tabBarBackgroundColor,
-            tabBarSeparatorColor: old.tabBarSeparatorColor,
-            tabBarIconColor: old.tabBarIconColor,
-            tabBarSelectedIconColor: old.tabBarSelectedIconColor,
-            tabBarTextColor: old.tabBarTextColor,
-            tabBarSelectedTextColor: old.tabBarSelectedTextColor,
-            tabBarBadgeBackgroundColor: old.tabBarBadgeBackgroundColor,
-            tabBarBadgeStrokeColor: old.tabBarBadgeStrokeColor,
-            tabBarBadgeTextColor: old.tabBarBadgeTextColor,
-            enableBlur: old.enableBlur,
-            isDark: old.isDark,
-            style: old.style,
-            outerInsets: old.outerInsets,
-            pillHeight: old.pillHeight,
-            totalHeight: old.totalHeight,
-            bottomInset: old.bottomInset,
-            sideInset: old.sideInset,
-            innerPadding: old.innerPadding,
-            showcaseSpacing: old.showcaseSpacing,
-            edgeEffectAlpha: old.edgeEffectAlpha,
-            edgeEffectBlurRadiusAtEdge: edgeBlurAtEdge,
-            edgeEffectBlurRadiusAtFade: edgeBlurAtFade,
-            edgeEffectTintColor: old.edgeEffectTintColor
-        )
+        overridesTabBarEdgeEffect = true
+        hostTabBar?.invalidateAppearance()
         rebuildRows()
         tableView.reloadData()
     }
 
     private func visibleCell(forRowIndex index: Int) -> UIView? {
         return tableView.cellForRow(at: IndexPath(row: index, section: 0))
+    }
+
+    func aetherAppearanceOverride(for context: AetherAppearanceOverrideContext) -> AetherAppearanceOverride? {
+        guard context.surface == .tab, overridesTabBarEdgeEffect else {
+            return nil
+        }
+
+        let hasVisibleEdgeEffect = edgeBlurAtEdge > 0.001 || edgeBlurAtFade > 0.001
+        return AetherAppearanceOverride(
+            tabBar: AetherTabBarAppearanceOverride(
+                edgeEffect: AetherEdgeEffectAppearance(
+                    tintColor: hasVisibleEdgeEffect ? context.appearance.edgeEffectColor : .clear,
+                    alpha: hasVisibleEdgeEffect ? context.appearance.edgeEffectAlpha : 0.0,
+                    blurRadiusAtEdge: edgeBlurAtEdge,
+                    blurRadiusAtFade: edgeBlurAtFade,
+                    style: context.appearance.edgeEffectStyle
+                )
+            )
+        )
     }
 }
 

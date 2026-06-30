@@ -60,13 +60,9 @@ open class AetherModalNavigationController: AetherModalController {
     /// or `pushViewController` after construction.
     public init(
         config: Config = Config(),
-        navigationMode: NavigationControllerMode = .single,
-        navigationTheme: NavigationControllerTheme = .liquidGlass()
+        navigationMode: NavigationControllerMode = .single
     ) {
-        self.internalNavigationController = AetherNavigationController(
-            mode: navigationMode,
-            theme: navigationTheme
-        )
+        self.internalNavigationController = AetherNavigationController(mode: navigationMode)
         super.init(config: config)
         internalNavigationController.view.backgroundColor = .clear
     }
@@ -81,13 +77,9 @@ open class AetherModalNavigationController: AetherModalController {
     public init(
         rootViewController: AetherViewController,
         config: Config = Config(),
-        navigationMode: NavigationControllerMode = .single,
-        navigationTheme: NavigationControllerTheme = .liquidGlass()
+        navigationMode: NavigationControllerMode = .single
     ) {
-        self.internalNavigationController = AetherNavigationController(
-            mode: navigationMode,
-            theme: navigationTheme
-        )
+        self.internalNavigationController = AetherNavigationController(mode: navigationMode)
         super.init(config: config)
         internalNavigationController.view.backgroundColor = .clear
         internalNavigationController.setViewControllers([rootViewController], animated: false)

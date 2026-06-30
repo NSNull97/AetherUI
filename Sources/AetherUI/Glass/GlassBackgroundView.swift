@@ -343,6 +343,14 @@ public class GlassBackgroundView: UIView {
         syntheticStrokeLayer.animationKeys() ?? []
     }
 
+    internal var isNativeGlassLayerMaskedForTesting: Bool? {
+        nativeView?.layer.masksToBounds
+    }
+
+    internal var hasNativeCornerConfigurationForTesting: Bool {
+        hasCustomNativeCornerConfiguration
+    }
+
     /// Install a per-corner shape on the native `UIVisualEffectView` host of
     /// `UIGlassEffect`. Use this instead of a CAShapeLayer mask when the
     /// outline needs different top/bottom radii — the layer mask clips the
@@ -367,6 +375,11 @@ public class GlassBackgroundView: UIView {
         nativeView.layer.masksToBounds = false
         nativeView.layer.cornerRadius = 0.0
         nativeViewShape = nil
+    }
+
+    @available(iOS 26.0, *)
+    public func setNativeUniformCornerRadius(_ radius: CGFloat) {
+        setNativeCornerConfiguration(.uniformCorners(radius: .fixed(radius)))
     }
 
     /// Remembers the last `cornerRadius`, `tintColor`, `isInteractive`,

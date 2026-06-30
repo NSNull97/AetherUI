@@ -22,8 +22,12 @@ open class AetherTabBarController: AetherViewController {
     // MARK: - Properties
 
     private let tabBarView: TabBarView
+    private var appearance: AetherAppearance
     private var _controllers: [UIViewController] = []
+    private var searchItem: SearchTabItem?
+    private var searchItemSourceController: UIViewController?
     private var _selectedIndex: Int = 0
+    public private(set) var resolvedAppearance: AetherTabBarResolvedAppearance
 
     public var controllers: [UIViewController] {
         return _controllers
@@ -35,6 +39,13 @@ open class AetherTabBarController: AetherViewController {
         return _controllers[_selectedIndex]
     }
 
+    private var currentAppearanceController: UIViewController? {
+        if let navigationController = currentController as? AetherNavigationController {
+            return navigationController.topController
+        }
+        return currentController
+    }
+
     public var selectedIndex: Int {
         get { _selectedIndex }
         set {
@@ -43,27 +54,13 @@ open class AetherTabBarController: AetherViewController {
             _selectedIndex = newValue
             tabBarView.selectedIndex = newValue
             transitionToController(at: newValue, from: previousIndex, animated: true)
+            invalidateAppearance()
         }
     }
 
-    public var tabBarTheme: TabBarView.Theme {
+    private var tabBarTheme: TabBarView.Theme {
         didSet {
             tabBarView.updateTheme(tabBarTheme)
-        }
-    }
-
-    /// iOS 26-style `UISearchTab` showcase capsule placed next to the tab pill.
-    /// Forwarded straight through to the underlying `TabBarView`.
-    public var searchShowcase: TabBarView.SearchShowcase? {
-        didSet { tabBarView.searchShowcase = searchShowcase }
-    }
-
-    public var searchTabBarItem: TabBarView.SearchShowcase? {
-        get {
-            return searchShowcase
-        }
-        set {
-            searchShowcase = newValue
         }
     }
 
@@ -779,7 +776,7 @@ open class AetherTabBarController: AetherViewController {
         case never
         /// Scrolling DOWN (away from the top) collapses the tab bar into
         /// the iOS 26 minimized chrome: pill → 48×48 active-tab circle on
-        /// the leading edge, search showcase → matching circle on the
+        /// the leading edge, search tab item → matching circle on the
         /// trailing edge, `bottomBarAccessory` reflows between them.
         /// Scrolling UP (or hitting the content top) expands it back.
         case onScrollDown
@@ -904,7 +901,17 @@ open class AetherTabBarController: AetherViewController {
 
     // MARK: - Init
 
-    public init(tabBarTheme: TabBarView.Theme = TabBarView.Theme()) {
+    public init() {
+        let appearance = AetherAppearance.runtimeCurrent
+        let context = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: .tab,
+            placement: .tab
+        )
+        let resolved = AetherTabBarAppearanceResolver.resolve(context: context)
+        let tabBarTheme = TabBarView.Theme(aetherResolvedAppearance: resolved)
+        self.appearance = appearance
+        self.resolvedAppearance = resolved
         self.tabBarTheme = tabBarTheme
         self.tabBarView = TabBarView(theme: tabBarTheme)
 
@@ -915,6 +922,49 @@ open class AetherTabBarController: AetherViewController {
 
     required public init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    public func invalidateAppearance() {
+        updateAppearance(appearance)
+    }
+
+    public func updateAppearance(_ appearance: AetherAppearance) {
+        self.appearance = appearance
+        let context = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: .tab,
+            placement: .tab,
+            traitCollection: traitCollection
+        )
+        let controllerOverrideContext = AetherAppearanceOverrideContext(
+            appearance: appearance,
+            surface: .tab,
+            placement: .tab,
+            traitCollection: traitCollection,
+            viewController: self
+        )
+        let controllerOverride = (self as? AetherControllerAppearanceProviding)?
+            .aetherAppearanceOverride(for: controllerOverrideContext)?
+            .tabBar
+        let contentOverride: AetherTabBarAppearanceOverride?
+        if let currentAppearanceController {
+            let contentOverrideContext = AetherAppearanceOverrideContext(
+                appearance: appearance,
+                surface: .tab,
+                placement: .tab,
+                traitCollection: traitCollection,
+                viewController: currentAppearanceController
+            )
+            contentOverride = (currentAppearanceController as? AetherControllerAppearanceProviding)?
+                .aetherAppearanceOverride(for: contentOverrideContext)?
+                .tabBar
+        } else {
+            contentOverride = nil
+        }
+        let override = controllerOverride?.merged(with: contentOverride) ?? contentOverride
+        let resolved = AetherTabBarAppearanceResolver.resolve(context: context, override: override)
+        resolvedAppearance = resolved
+        tabBarTheme = TabBarView.Theme(aetherResolvedAppearance: resolved)
     }
 
     // MARK: - View Lifecycle
@@ -1039,15 +1089,52 @@ open class AetherTabBarController: AetherViewController {
 
     // MARK: - Public API
 
+    private struct ResolvedSearchItem {
+        let item: SearchTabItem
+        let sourceController: UIViewController
+    }
+
     public func setControllers(_ controllers: [UIViewController], selectedIndex: Int?) {
         let previousController = currentController
+        var regularControllers: [UIViewController] = []
+        var detectedSearchItem: ResolvedSearchItem?
 
-        self._controllers = controllers
-        self._selectedIndex = selectedIndex ?? min(_selectedIndex, max(0, controllers.count - 1))
-        controllers.forEach(installBottomBarVisibilityCallbacks(on:))
+        for controller in controllers {
+            // A SearchTabItem is still provided through a normal
+            // UIViewController.tabBarItem slot. When tabs are wrapped in a
+            // navigation controller, apps often set it on the root screen
+            // instead of the wrapper, so resolve through the visible stack.
+            if let item = resolvedSearchItem(for: controller) {
+                if detectedSearchItem == nil {
+                    detectedSearchItem = item
+                }
+                continue
+            }
+            regularControllers.append(controller)
+        }
+
+        if detectedSearchItem == nil, shouldPreserveCurrentSearchItem(for: controllers) {
+            if let item = searchItem, let sourceController = searchItemSourceController {
+                detectedSearchItem = ResolvedSearchItem(item: item, sourceController: sourceController)
+            }
+        }
+
+        if detectedSearchItem?.item.action == nil {
+            detectedSearchItem?.item.action = { [weak self] in
+                self?.activateSearch()
+            }
+        }
+
+        self._controllers = regularControllers
+        self.searchItem = detectedSearchItem?.item
+        self.searchItemSourceController = detectedSearchItem?.sourceController
+        let requestedSelectedIndex = selectedIndex ?? _selectedIndex
+        self._selectedIndex = max(0, min(requestedSelectedIndex, max(0, regularControllers.count - 1)))
+        regularControllers.forEach(installBottomBarVisibilityCallbacks(on:))
+        tabBarView.setSearchItem(detectedSearchItem?.item)
 
         // Build tab items
-        let items = controllers.map { controller -> AetherTabBarItem in
+        let items = regularControllers.map { controller -> AetherTabBarItem in
             let tabItem = controller.tabBarItem
             return AetherTabBarItem(
                 title: tabItem?.title ?? "",
@@ -1071,6 +1158,46 @@ open class AetherTabBarController: AetherViewController {
         // New tab tree → new primary scroll view. Drop the old observer
         // and bind to the freshly visible tab's content.
         attachScrollObserverIfPossible()
+        invalidateAppearance()
+    }
+
+    private func shouldPreserveCurrentSearchItem(for controllers: [UIViewController]) -> Bool {
+        guard searchItem != nil, !controllers.isEmpty, controllers.count == _controllers.count else {
+            return false
+        }
+        return zip(controllers, _controllers).allSatisfy { incoming, current in
+            incoming === current
+        }
+    }
+
+    private func resolvedSearchItem(for controller: UIViewController) -> ResolvedSearchItem? {
+        if let item = controller.tabBarItem as? SearchTabItem {
+            return ResolvedSearchItem(item: item, sourceController: controller)
+        }
+
+        if let navigationController = controller as? AetherNavigationController {
+            if let item = navigationController.topController?.tabBarItem as? SearchTabItem {
+                return ResolvedSearchItem(item: item, sourceController: navigationController.topController ?? navigationController)
+            }
+            if let sourceController = navigationController.viewControllerStack.first(where: { $0.tabBarItem is SearchTabItem }),
+               let item = sourceController.tabBarItem as? SearchTabItem {
+                return ResolvedSearchItem(item: item, sourceController: sourceController)
+            }
+            return nil
+        }
+
+        if let navigationController = controller as? UINavigationController {
+            if let item = navigationController.topViewController?.tabBarItem as? SearchTabItem {
+                return ResolvedSearchItem(item: item, sourceController: navigationController.topViewController ?? navigationController)
+            }
+            if let sourceController = navigationController.viewControllers.first(where: { $0.tabBarItem is SearchTabItem }),
+               let item = sourceController.tabBarItem as? SearchTabItem {
+                return ResolvedSearchItem(item: item, sourceController: sourceController)
+            }
+            return nil
+        }
+
+        return nil
     }
 
     public func updateIsTabBarHidden(_ hidden: Bool, transition: ContainedViewLayoutTransition) {

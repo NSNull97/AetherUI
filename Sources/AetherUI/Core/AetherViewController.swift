@@ -248,12 +248,86 @@ import AetherUIBridging
         return 49.0
     }
 
+    /// Bottom gap for `inputBarAccessoryView` when it is not attached to
+    /// the keyboard or an ancestor tab-bar chrome.
+    open var inputBarAccessoryBottomInset: CGFloat {
+        return 28.0
+    }
+
     open var inputBarAccessoryUsesBottomEdgeEffect: Bool {
         return false
     }
 
     open var primaryScrollViewForChrome: UIScrollView? {
         return nil
+    }
+
+    open func resolvedNavigationBarAppearance(
+        placement: AetherBarPlacement = .navigation
+    ) -> AetherNavigationBarResolvedAppearance {
+        let appearance = AetherAppearance.runtimeCurrent
+        let resolutionContext = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: .navigation,
+            placement: placement,
+            traitCollection: traitCollection
+        )
+        let overrideContext = AetherAppearanceOverrideContext(
+            appearance: appearance,
+            surface: .navigation,
+            placement: placement,
+            traitCollection: traitCollection,
+            viewController: self
+        )
+        let override = (self as? AetherControllerAppearanceProviding)?
+            .aetherAppearanceOverride(for: overrideContext)?
+            .navigationBar
+        return AetherNavigationBarAppearanceResolver.resolve(context: resolutionContext, override: override)
+    }
+
+    open func resolvedSearchAppearance(
+        surface: AetherAppearanceSurface = .search,
+        placement: AetherBarPlacement = .top
+    ) -> AetherSearchResolvedAppearance {
+        let appearance = AetherAppearance.runtimeCurrent
+        let resolutionContext = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: surface,
+            placement: placement,
+            traitCollection: traitCollection
+        )
+        let overrideContext = AetherAppearanceOverrideContext(
+            appearance: appearance,
+            surface: surface,
+            placement: placement,
+            traitCollection: traitCollection,
+            viewController: self
+        )
+        let override = (self as? AetherControllerAppearanceProviding)?
+            .aetherAppearanceOverride(for: overrideContext)?
+            .search
+        return AetherSearchAppearanceResolver.resolve(context: resolutionContext, override: override)
+    }
+
+    open func resolvedInputBarAppearance() -> AetherInputBarResolvedAppearance {
+        let appearance = AetherAppearance.runtimeCurrent
+        let resolutionContext = AetherAppearanceResolutionContext(
+            appearance: appearance,
+            surface: .inputBar,
+            placement: .inputAccessory,
+            traitCollection: traitCollection
+        )
+        let overrideContext = AetherAppearanceOverrideContext(
+            appearance: appearance,
+            surface: .inputBar,
+            placement: .inputAccessory,
+            traitCollection: traitCollection,
+            viewController: self
+        )
+        let override = (self as? AetherControllerAppearanceProviding)?
+            .aetherAppearanceOverride(for: overrideContext)?
+            .inputBar
+        return AetherInputBarAppearanceResolver.resolve(context: resolutionContext, override: override)
     }
 
     /// Height reserved for `inputBarAccessoryView` in safe-area propagation.
@@ -568,18 +642,21 @@ import AetherUIBridging
         // to `.zero` on every layout pass, so it flickers. UIKit's
         // propagated `layout.safeInsets.bottom` stays stable; we use
         // that for the no-tab-bar fallback.
-        let pillOrSafeTopY: CGFloat
+        let tabBarChromeTopY: CGFloat?
         if shouldAnchorToTabBarChrome, let tabBar = aetherTabBarController, let topY = tabBar.chromeTopY(in: view) {
-            pillOrSafeTopY = topY
+            tabBarChromeTopY = topY
         } else {
-            let rawSafeBottom: CGFloat = view.window?.safeAreaInsets.bottom ?? layout.safeInsets.bottom
-            pillOrSafeTopY = layout.size.height - rawSafeBottom
+            tabBarChromeTopY = nil
         }
+        let rawSafeBottom: CGFloat = view.window?.safeAreaInsets.bottom ?? layout.safeInsets.bottom
+        let pillOrSafeTopY = tabBarChromeTopY ?? (layout.size.height - rawSafeBottom)
+        let inputAccessoryRestingAnchorTopY = tabBarChromeTopY
+            ?? (layout.size.height - max(0.0, inputBarAccessoryBottomInset))
 
         let keyboardHeight = max(0.0, layout.inputHeight ?? 0.0)
         let inputAnchorTopY = keyboardHeight > 0.0
-            ? layout.size.height - keyboardHeight
-            : pillOrSafeTopY
+            ? layout.size.height - max(keyboardHeight, max(0.0, inputBarAccessoryBottomInset))
+            : inputAccessoryRestingAnchorTopY
 
         var inputBarAccessoryTopY = inputAnchorTopY
         let inputBarHeight: CGFloat
@@ -633,7 +710,9 @@ import AetherUIBridging
         // folds it into its own additional inset). Reading only the
         // propagated side reconciles the TabBar/Nav dispatch paths.
         let previousContentBottomY = layout.size.height - layout.safeInsets.bottom
-        let addedInputBarBottom: CGFloat = inputBarAccessoryView != nil ? inputBarHeight : 0.0
+        let addedInputBarBottom: CGFloat = inputBarAccessoryView != nil
+            ? max(0.0, previousContentBottomY - inputBarAccessoryTopY)
+            : 0.0
         let addedToolbarBottom: CGFloat
         if floatingToolbar != nil {
             if inputBarAccessoryView != nil {
@@ -768,7 +847,36 @@ import AetherUIBridging
     ) {
         let visibleOffset = scrollView.contentOffset.y + scrollView.contentInset.top
         let alpha = min(1.0, max(0.0, visibleOffset / 16.0))
-        navigationBarView?.updateBackgroundAlpha(alpha, transition: transition)
+        scrollEdgeNavigationBar()?.updateBackgroundAlpha(alpha, transition: transition)
+    }
+
+    private func scrollEdgeNavigationBar() -> NavigationBarView? {
+        if let bar = navigationBarView, shouldUseNavigationBarForScrollEdgeOffset(bar) {
+            return bar
+        }
+
+        var ancestor = parent
+        while let current = ancestor {
+            if let viewController = current as? AetherViewController,
+               viewController.displayNavigationBar,
+               let bar = viewController.navigationBarView,
+               viewController.shouldUseNavigationBarForScrollEdgeOffset(bar) {
+                return bar
+            }
+            ancestor = current.parent
+        }
+
+        return nil
+    }
+
+    private func shouldUseNavigationBarForScrollEdgeOffset(_ bar: NavigationBarView) -> Bool {
+        if !navigationBarIsExternallyHosted {
+            return true
+        }
+        if bar.superview != nil {
+            return true
+        }
+        return (externalNavigationBarHeight ?? 0.0) > 0.0
     }
 
     open func updateNavigationCustomData(_ data: Any?, progress: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -818,9 +926,6 @@ import AetherUIBridging
         guard let inputBarAccessoryView else {
             return 0.0
         }
-        if inputBarAccessoryView.bounds.height > 0.0 {
-            return inputBarAccessoryView.bounds.height
-        }
 
         let fittingWidth = width > 0.0 ? width : UIView.layoutFittingCompressedSize.width
         let fittingSize = inputBarAccessoryView.systemLayoutSizeFitting(
@@ -830,6 +935,9 @@ import AetherUIBridging
         )
         if fittingSize.height > 0.0 {
             return fittingSize.height
+        }
+        if inputBarAccessoryView.bounds.height > 0.0 {
+            return inputBarAccessoryView.bounds.height
         }
         return inputBarAccessoryDefaultHeight
     }

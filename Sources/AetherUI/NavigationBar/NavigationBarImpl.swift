@@ -146,6 +146,11 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     public let badgeView: NavigationBarBadgeView
     private var titleContentView: UIView?
 
+    private enum ButtonPressFeedback {
+        static let standardPressedSizeIncrease: CGFloat = 20.0
+        static let trailingPressedSizeIncrease: CGFloat = 8.0
+    }
+
     private var _contentView: NavigationBarContentView?
     public var contentView: NavigationBarContentView? { _contentView }
     private weak var pendingAppearingContentView: NavigationBarContentView?
@@ -172,6 +177,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     private var validLayout: (size: CGSize, defaultHeight: CGFloat, leftInset: CGFloat, rightInset: CGFloat)?
     private var isSearchModeActive = false
     private var contentHeightOverride: CGFloat?
+    private var scrollEdgeAlpha: CGFloat = 0.0
 
     /// Natural height of `titleContentView`, measured during `updateLayout` for
     /// the available width. The title row in `contentHeight(defaultHeight:)`
@@ -274,6 +280,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         buttonsContainerView
     }
 
+    internal var debugEdgeEffectView: EdgeEffectView? {
+        edgeEffectView
+    }
+
     override public var alpha: CGFloat {
         didSet {
             updateButtonLayerEffectiveVisibility()
@@ -293,6 +303,41 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         public init(leftFrame: CGRect?, rightFrame: CGRect?) {
             self.leftFrame = leftFrame
             self.rightFrame = rightFrame
+        }
+
+        internal func interactivePopPreviewLayout(towards target: ButtonChromeLayout, progress: CGFloat) -> ButtonChromeLayout {
+            let interpolationProgress = Self.clampedProgress(progress) * 0.5
+            return ButtonChromeLayout(
+                leftFrame: Self.previewFrame(from: leftFrame, to: target.leftFrame, progress: interpolationProgress, anchorsTrailingEdge: false),
+                rightFrame: Self.previewFrame(from: rightFrame, to: target.rightFrame, progress: interpolationProgress, anchorsTrailingEdge: true)
+            )
+        }
+
+        internal func interactivePopMissingTargetScales(towards target: ButtonChromeLayout, progress: CGFloat) -> (left: CGFloat, right: CGFloat) {
+            let scale = 1.0 - 0.3 * Self.clampedProgress(progress)
+            return (
+                left: leftFrame != nil && target.leftFrame == nil ? scale : 1.0,
+                right: rightFrame != nil && target.rightFrame == nil ? scale : 1.0
+            )
+        }
+
+        private static func previewFrame(from source: CGRect?, to target: CGRect?, progress: CGFloat, anchorsTrailingEdge: Bool) -> CGRect? {
+            guard let source else {
+                return nil
+            }
+            guard let target else {
+                return source
+            }
+            let resolvedWidth = source.width + (target.width - source.width) * progress
+            if anchorsTrailingEdge {
+                return CGRect(x: source.maxX - resolvedWidth, y: source.minY, width: resolvedWidth, height: source.height)
+            } else {
+                return CGRect(x: source.minX, y: source.minY, width: resolvedWidth, height: source.height)
+            }
+        }
+
+        private static func clampedProgress(_ progress: CGFloat) -> CGFloat {
+            return max(0.0, min(1.0, progress))
         }
     }
 
@@ -417,7 +462,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             // sees a nil/detached source, and the navbar's own group
             // layout gets stuck mid-rebuild.
             dismissPresentedBarButtonContextMenu()
-            let isEffectivelyDark = presentationData.theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark
+            let isEffectivelyDark = isEffectivelyDarkGlassChrome
             backButtonView.isDark = isEffectivelyDark
             if let layout = validLayout {
                 updateLayout(
@@ -587,6 +632,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
 
     internal func detachButtonLayerFromHost() {
         buttonLayer.removeFromSuperview()
+    }
+
+    private var isEffectivelyDarkGlassChrome: Bool {
+        presentationData.theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark
     }
 
     private enum ButtonChromePlacementID: Hashable {
@@ -1175,18 +1224,30 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     }
 
     public func setButtonChromeScale(_ scale: CGFloat, transition: ContainedViewLayoutTransition) {
-        let transform = CGAffineTransform(scaleX: scale, y: scale)
-        updateButtonLayerHostedView(view: leftButtonContainer, transform: transform, transition: transition)
-        updateButtonLayerHostedView(view: rightButtonContainer, transform: transform, transition: transition)
-        updateButtonLayerHostedView(view: backButtonView, transform: transform, transition: transition)
-        updateButtonLayerHostedView(view: backArrowView, transform: transform, transition: transition)
-        updateButtonLayerHostedView(view: badgeView, transform: transform, transition: transition)
+        setButtonChromeScale(left: scale, right: scale, transition: transition)
+    }
+
+    public func setButtonChromeScale(left: CGFloat, right: CGFloat, transition: ContainedViewLayoutTransition) {
+        let leftTransform = CGAffineTransform(scaleX: left, y: left)
+        let rightTransform = CGAffineTransform(scaleX: right, y: right)
+        updateButtonLayerHostedView(view: leftButtonContainer, transform: leftTransform, transition: transition)
+        updateButtonLayerHostedView(view: rightButtonContainer, transform: rightTransform, transition: transition)
+        updateButtonLayerHostedView(view: backButtonView, transform: leftTransform, transition: transition)
+        updateButtonLayerHostedView(view: backArrowView, transform: leftTransform, transition: transition)
+        updateButtonLayerHostedView(view: badgeView, transform: leftTransform, transition: transition)
     }
 
     public func buttonChromeLayout() -> ButtonChromeLayout {
         return ButtonChromeLayout(
             leftFrame: buttonChromeFrame(container: leftButtonContainer, groups: glassButtonGroups(for: .left)),
             rightFrame: buttonChromeFrame(container: rightButtonContainer, groups: glassButtonGroups(for: .right))
+        )
+    }
+
+    internal func transitionMeasuredButtonChromeLayout() -> ButtonChromeLayout {
+        return ButtonChromeLayout(
+            leftFrame: buttonChromeFrame(container: leftButtonContainer, groups: glassButtonGroups(for: .left), ignoresContainerHidden: true),
+            rightFrame: buttonChromeFrame(container: rightButtonContainer, groups: glassButtonGroups(for: .right), ignoresContainerHidden: true)
         )
     }
 
@@ -1255,8 +1316,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         updateButtonLayerHostedView(view: badgeView, transform: transform, transition: transition)
     }
 
-    private func buttonChromeFrame(container: UIView, groups: [GlassControlGroup]) -> CGRect? {
-        guard !container.isHidden, container.bounds.width > 0.0, container.bounds.height > 0.0 else {
+    private func buttonChromeFrame(container: UIView, groups: [GlassControlGroup], ignoresContainerHidden: Bool = false) -> CGRect? {
+        guard (ignoresContainerHidden || !container.isHidden), container.bounds.width > 0.0, container.bounds.height > 0.0 else {
             return nil
         }
         if groups.contains(where: { isGlassButtonGroup($0, hostedIn: container) && !$0.items.isEmpty }) {
@@ -1701,12 +1762,13 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     }
 
     public func updateBackgroundAlpha(_ alpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        scrollEdgeAlpha = max(0.0, min(1.0, alpha))
         if presentationData.theme.style == .glass {
             transition.updateAlpha(view: backgroundView, alpha: 0.0)
             if let glassBackgroundView {
                 transition.updateAlpha(view: glassBackgroundView, alpha: 0.0)
             }
-            transition.updateAlpha(view: stripeView, alpha: 0.0)
+            transition.updateAlpha(view: stripeView, alpha: presentationData.theme.glassStyle == .strong ? scrollEdgeAlpha : 0.0)
             return
         }
         transition.updateAlpha(view: backgroundView, alpha: glassBackgroundView == nil ? alpha : 0.0)
@@ -1790,7 +1852,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         // runtime style). Without this, the glass renders with a light
         // lumaMin/lumaMax on dark-mode devices and the bar flashes white
         // during push/pop transitions when the glass re-composites.
-        let isEffectivelyDark = presentationData.theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark
+        let isEffectivelyDark = isEffectivelyDarkGlassChrome
         if backButtonView.isDark != isEffectivelyDark {
             backButtonView.isDark = isEffectivelyDark
         }
@@ -1817,7 +1879,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
         transition.updateFrame(view: stripeView, frame: CGRect(x: stripeOriginX, y: size.height - stripeHeight, width: size.width - stripeOriginX, height: stripeHeight))
         if presentationData.theme.style == .glass {
             transition.updateAlpha(view: backgroundView, alpha: 0.0)
-            transition.updateAlpha(view: stripeView, alpha: 0.0)
+            transition.updateAlpha(view: stripeView, alpha: presentationData.theme.glassStyle == .strong ? scrollEdgeAlpha : 0.0)
         }
 
         // Scroll-edge frost anchored to the BOTTOM of the nav bar. The fade
@@ -1844,21 +1906,15 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 // Mirror of the tab bar's downward bleed; covers the
                 // visible "просвет" between the nav bar's frost and the
                 // status bar / dynamic island area.
-                let topInset: CGFloat = 8.0
-                // 2pt of bleed past the navbar bottom — that's where the
-                // gradient mask reaches alpha=0. With `bottomBleed=0` the
-                // alpha=0 row sat exactly at navbar.bottom, and during a
-                // sheet resize the unfiltered backdrop sample at that row
-                // showed presenter dim through it — read as a gap. With
-                // 2pt bleed the alpha=0 row is just below navbar.bottom,
-                // and the row at navbar.bottom itself is already at a
-                // small but non-zero alpha (gradient is cosine), so the
-                // backdrop blur covers content there. 2pt is small enough
-                // that the bleed doesn't read as a visible stripe — the
-                // 8pt original did.
-                let bottomBleed: CGFloat = 4.0
-                let bandShift: CGFloat = 12.0
-                let topExtension = edgeEffectTopExtension
+                let usesRegularEdgeEffect = presentationData.theme.edgeEffectStyle == .regular
+                edgeEffect.clipsToBounds = true
+                let topInset: CGFloat = usesRegularEdgeEffect ? 8.0 : 0.0
+                // Regular glass must not draw any pixels below the navbar
+                // boundary. Even a tiny bottom bleed reads as a separator
+                // when a topBarAccessory is installed.
+                let bottomBleed: CGFloat = 0.0
+                let bandShift: CGFloat = usesRegularEdgeEffect ? 12.0 : 0.0
+                let topExtension = usesRegularEdgeEffect ? edgeEffectTopExtension : 0.0
                 let localEdgeEffectFrame = CGRect(
                     x: 0.0,
                     y: -(topInset + topExtension + bandShift),
@@ -1894,28 +1950,38 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     edgeEffectFrame = localEdgeEffectFrame
                 }
                 edgeEffect.frame = edgeEffectFrame
-                let fadeZone: CGFloat = min(48.0, size.height * 0.4)
-                // Force uniform blur path by passing the same radius for
-                // both ends. The variable-blur path (which kicks in when
-                // edge != fade) uses the gradient mask as a *per-pixel
-                // radius scale* — at the bottom of the fade zone, where
-                // alpha drops to near zero, backdrop blur radius drops to
-                // ~0 and the backdrop sample passes through unfiltered.
-                // Presenter dim shows through and reads as a gap between
-                // the navbar and the content. The uniform path uses the
-                // gradient mask as *opacity* on top of an already-blurred
-                // backdrop — at the bottom row backdrop is still blurred,
-                // only attenuated, so no presenter leaks through.
-                let uniformRadius = presentationData.theme.edgeEffectBlurRadiusAtEdge
+                // A short constant zone followed by a short fade creates a
+                // visible horizontal boundary inside tall navigation bars
+                // (especially with topBarAccessory). For regular navigation
+                // chrome the frost should dissolve across the whole hosted
+                // band, with no internal separator-like seam.
+                // The regular variable blur endpoint is laid out 1pt below
+                // the visible navbar edge, while `edgeEffect` clips to its
+                // frame. This keeps the visible bottom row slightly before
+                // the mask reaches zero and avoids a raw-backdrop seam.
+                let regularBottomOverscan: CGFloat = usesRegularEdgeEffect ? 1.0 : 0.0
+                let edgeEffectUpdateSize = CGSize(
+                    width: edgeEffectFrame.width,
+                    height: edgeEffectFrame.height + regularBottomOverscan
+                )
+                let fadeZone: CGFloat = usesRegularEdgeEffect ? edgeEffectUpdateSize.height : 0.0
+                let fadeCurveExponent: CGFloat = usesRegularEdgeEffect ? 2.0 : 1.0
+                let edgeBlurRadius = presentationData.theme.edgeEffectBlurRadiusAtEdge
+                let fadeBlurRadius: CGFloat = usesRegularEdgeEffect ? 0.0 : edgeBlurRadius
+                let edgeContentColor = presentationData.theme.edgeEffectColor ?? presentationData.theme.opaqueBackgroundColor
                 edgeEffect.update(
-                    content: presentationData.theme.edgeEffectColor ?? presentationData.theme.opaqueBackgroundColor,
+                    content: edgeContentColor,
                     blur: true,
                     alpha: presentationData.theme.edgeEffectAlpha,
-                    rect: CGRect(origin: .zero, size: edgeEffectFrame.size),
+                    rect: CGRect(origin: .zero, size: edgeEffectUpdateSize),
                     edge: .top,
-                    edgeSize: fadeZone,
-                    blurRadiusAtEdge: uniformRadius,
-                    blurRadiusAtFade: uniformRadius,
+                    edgeSize: usesRegularEdgeEffect ? fadeZone : 0.0,
+                    blurRadiusAtEdge: edgeBlurRadius,
+                    blurRadiusAtFade: fadeBlurRadius,
+                    solidBlur: !usesRegularEdgeEffect,
+                    fadeCurveExponent: fadeCurveExponent,
+                    minimumFadeAlpha: usesRegularEdgeEffect ? 0.0 : 0.04,
+                    prefersStaticVariableBlurMask: usesRegularEdgeEffect,
                     transition: .immediate
                 )
             }
@@ -2096,10 +2162,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             }
             if rightButtonsWidth > 0.0 {
                 let rightFrame = CGRect(x: width - rightInset - glassSideInset - rightButtonsWidth, y: glassY, width: rightButtonsWidth, height: glassButtonHeight)
-                let rightFrameTransition: ContainedViewLayoutTransition = glassTransition.isAnimated ? .immediate : buttonContainerTransition
-                updateButtonChromeFrame(view: rightButtonContainer, frame: rightFrame, transition: rightFrameTransition)
+                updateButtonChromeFrame(view: rightButtonContainer, frame: rightFrame, transition: buttonContainerTransition)
             }
-
             titleLeftInset = leftButtonsWidth > 0.0 ? leftInset + glassSideInset + leftButtonsWidth + 10.0 : leftInset
             titleRightInset = rightButtonsWidth > 0.0 ? rightInset + glassSideInset + rightButtonsWidth + 10.0 : rightInset
         } else {
@@ -2384,6 +2448,7 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     @discardableResult
     private func layoutBarButtonItems(in container: UIView, items: [UIBarButtonItem]?, alignment: ButtonAlignment, height: CGFloat, transition glassTransition: ContainedViewLayoutTransition = .immediate) -> CGFloat {
         let theme = presentationData.theme
+        let buttonForegroundColor = theme.buttonColor
         let itemGeometryTransition: ContainedViewLayoutTransition = buttonMorphTransitionOverride == nil ? glassTransition : .immediate
 
         if theme.style == .glass {
@@ -2451,7 +2516,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     offsetX += measured.width
                     if idx < expected.count - 1 { offsetX += spacing }
                 }
-                updateButtonGlassContainer(in: container, size: CGSize(width: offsetX, height: height), transition: itemGeometryTransition)
+                let glassContainerTransition = buttonMorphTransitionOverride ?? itemGeometryTransition
+                updateButtonGlassContainer(in: container, size: CGSize(width: offsetX, height: height), transition: glassContainerTransition)
                 return offsetX
             }
 
@@ -2557,8 +2623,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                         items: [],
                         background: .panel,
                         preferClearGlass: theme.glassStyle == .clear,
-                        foregroundColor: theme.buttonColor,
-                        isDark: theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark,
+                        foregroundColor: buttonForegroundColor,
+                        isDark: isEffectivelyDarkGlassChrome,
                         availableHeight: height,
                         minWidth: height,
                         transition: glassTransition
@@ -2589,6 +2655,10 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             while groups.count < builtGroups.count {
                 groups.append(GlassControlGroup())
             }
+            let pressedSizeIncrease = alignment == .right
+                ? ButtonPressFeedback.trailingPressedSizeIncrease
+                : ButtonPressFeedback.standardPressedSizeIncrease
+            groups.forEach { $0.pressedSizeIncrease = pressedSizeIncrease }
             if groups.count > builtGroups.count {
                 for staleGroup in groups.dropFirst(builtGroups.count) {
                     staleGroup.transitionContentAlignment = alignment == .right ? .trailing : .leading
@@ -2596,8 +2666,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                         items: [],
                         background: .panel,
                         preferClearGlass: theme.glassStyle == .clear,
-                        foregroundColor: theme.buttonColor,
-                        isDark: theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark,
+                        foregroundColor: buttonForegroundColor,
+                        isDark: isEffectivelyDarkGlassChrome,
                         availableHeight: height,
                         minWidth: height,
                         transition: glassTransition
@@ -2620,6 +2690,13 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 groupHostView.addSubview(group)
             }
             storeGlassButtonGroups(groups, alignment: alignment)
+            let animatesGroupGeometry = glassTransition.isAnimated && buttonMorphTransitionOverride != nil
+            var previousGroupFrames: [ObjectIdentifier: CGRect] = [:]
+            if animatesGroupGeometry {
+                for group in groups where group.bounds.width > 0.0 && group.bounds.height > 0.0 {
+                    previousGroupFrames[ObjectIdentifier(group)] = group.layer.presentation()?.frame ?? group.frame
+                }
+            }
 
             // Clean up stale non-group subviews from legacy/custom paths.
             let groupSet = Set(groups.map { ObjectIdentifier($0) })
@@ -2642,8 +2719,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                     items: builtGroup.items,
                     background: .panel,
                     preferClearGlass: theme.glassStyle == .clear,
-                    foregroundColor: theme.buttonColor,
-                    isDark: theme.overallDarkAppearance || traitCollection.userInterfaceStyle == .dark,
+                    foregroundColor: buttonForegroundColor,
+                    isDark: isEffectivelyDarkGlassChrome,
                     availableHeight: height,
                     minWidth: height,
                     transition: glassTransition
@@ -2656,15 +2733,22 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
             }
 
             var offsetX: CGFloat = 0.0
+            let groupGeometryTransition = animatesGroupGeometry ? glassTransition : itemGeometryTransition
             for (index, group) in groups.enumerated() {
                 let size = groupSizes[index]
-                itemGeometryTransition.updateFrame(view: group, frame: CGRect(x: offsetX, y: 0.0, width: size.width, height: size.height))
+                if let previousFrame = previousGroupFrames[ObjectIdentifier(group)] {
+                    UIView.performWithoutAnimation {
+                        group.frame = previousFrame
+                    }
+                }
+                groupGeometryTransition.updateFrame(view: group, frame: CGRect(x: offsetX, y: 0.0, width: size.width, height: size.height))
                 offsetX += size.width
                 if index < groups.count - 1 {
                     offsetX += spacing
                 }
             }
-            updateButtonGlassContainer(in: container, size: CGSize(width: totalWidth, height: height), transition: itemGeometryTransition)
+            let glassContainerTransition = buttonMorphTransitionOverride ?? itemGeometryTransition
+            updateButtonGlassContainer(in: container, size: CGSize(width: totalWidth, height: height), transition: glassContainerTransition)
 
             // After `group.update` rebuilds the cell buttons, wire the
             // menu trigger DIRECTLY onto each button that carries a
@@ -2738,7 +2822,8 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
                 )
             } else if theme.style == .glass {
                 let button = GlassBarButtonView(icon: item.image, title: item.title, state: .glass)
-                button.contentTintColor = theme.buttonColor
+                button.contentTintColor = buttonForegroundColor
+                button.isDarkAppearance = isEffectivelyDarkGlassChrome
                 if let action = item.action, let target = item.target {
                     button.action = { _ in
                         UIApplication.shared.sendAction(action, to: target, from: item, for: nil)
@@ -2936,7 +3021,16 @@ public final class NavigationBarImpl: UIView, NavigationBarView {
     }
 
     private func setupGlassBackground(theme: NavigationBarTheme) {
-        let glass = GlassBackgroundView(style: theme.glassStyle == .clear ? .clear : .regular)
+        let glassStyle: GlassBackgroundView.Style
+        switch theme.glassStyle {
+        case .default:
+            glassStyle = .regular
+        case .strong:
+            glassStyle = .prominent
+        case .clear:
+            glassStyle = .clear
+        }
+        let glass = GlassBackgroundView(style: glassStyle)
         insertSubview(glass, aboveSubview: backgroundView)
         self.glassBackgroundView = glass
         backgroundView.alpha = 0.0
@@ -3279,9 +3373,13 @@ final class NavigationBackButtonView: UIView {
 
         if usesGlassStyle {
             glassBackground.frame = bounds
+            let cornerRadius = bounds.height * 0.5
+            if #available(iOS 26.0, *) {
+                glassBackground.setNativeUniformCornerRadius(cornerRadius)
+            }
             glassBackground.update(
                 size: bounds.size,
-                cornerRadius: bounds.height * 0.5,
+                cornerRadius: cornerRadius,
                 isDark: isDark,
                 tintColor: .init(kind: .panel),
                 isInteractive: true,

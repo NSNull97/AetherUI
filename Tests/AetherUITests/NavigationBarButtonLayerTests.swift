@@ -424,6 +424,312 @@ final class NavigationBarButtonLayerTests: XCTestCase {
         XCTAssertTrue(animatedChromeViews.isEmpty, "Right button chrome should stay static during accessory-only crossfade")
     }
 
+    func testNavigationButtonGlassStrokeIsHostedByNativeEffectView() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = AetherAppearance.withRuntimeCurrent(.iOS27) {
+            makeBar(hostView: hostView, style: .glass)
+        }
+
+        let item = NavigationBarItem()
+        item.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: nil, action: nil),
+            UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+        ]
+        AetherAppearance.withRuntimeCurrent(.iOS27) {
+            bar.item = item
+            layout(bar)
+        }
+
+        guard let sourceGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self),
+              let glassContainer = sourceGroup.ancestor(ofType: GlassBackgroundContainerView.self),
+              let glassBackground = sourceGroup.descendant(ofType: GlassBackgroundView.self)
+        else {
+            XCTFail("Expected right glass stack to be hosted in a glass container")
+            return
+        }
+
+        XCTAssertTrue(glassContainer.isUsingNativeContainerEffect)
+        XCTAssertTrue(glassBackground.isSyntheticStrokeVisible)
+        XCTAssertTrue(glassBackground.isSyntheticStrokeHostedByNativeEffectView)
+    }
+
+    func testGlassRightButtonStackAnimatesWidthWhenExpandingFromOneToMultipleItems() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let trailingItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+
+        let sourceItem = NavigationBarItem()
+        sourceItem.rightBarButtonItems = [trailingItem]
+        bar.item = sourceItem
+        layout(bar)
+
+        guard let sourceGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self),
+              let chromeContainer = sourceGroup.ancestor(before: bar.debugButtonLayer),
+              let glassContainer = sourceGroup.ancestor(ofType: GlassBackgroundContainerView.self)
+        else {
+            XCTFail("Expected right glass stack to be hosted in the separated button layer")
+            return
+        }
+
+        let sourceWidth = sourceGroup.bounds.width
+        let sourceChromeWidth = chromeContainer.bounds.width
+        let leadingItem = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: nil, action: nil)
+        let targetItem = NavigationBarItem()
+        targetItem.rightBarButtonItems = [leadingItem, trailingItem]
+
+        let transition = morphTransition()
+        bar.withButtonMorphTransition(transition) {
+            bar.item = targetItem
+            layout(bar, transition: transition)
+        }
+
+        XCTAssertGreaterThan(sourceGroup.bounds.width, sourceWidth + 0.5)
+        XCTAssertGreaterThan(chromeContainer.bounds.width, sourceChromeWidth + 0.5)
+        XCTAssertEqual(chromeContainer.frame.maxX, 304.0, accuracy: 0.5)
+        XCTAssertEqual(sourceGroup.frame, CGRect(origin: .zero, size: sourceGroup.bounds.size))
+        XCTAssertEqual(glassContainer.bounds.width, chromeContainer.bounds.width, accuracy: 0.5)
+        XCTAssertEqual(glassContainer.bounds.height, chromeContainer.bounds.height, accuracy: 0.5)
+    }
+
+    func testNavigationButtonGlassStrokeAnimatesWithWidthMorph() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = AetherAppearance.withRuntimeCurrent(.iOS27) {
+            makeBar(hostView: hostView, style: .glass)
+        }
+        let trailingItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+
+        let sourceItem = NavigationBarItem()
+        sourceItem.rightBarButtonItems = [trailingItem]
+        AetherAppearance.withRuntimeCurrent(.iOS27) {
+            bar.item = sourceItem
+            layout(bar)
+        }
+
+        guard let sourceGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self),
+              let glassBackground = sourceGroup.descendant(ofType: GlassBackgroundView.self)
+        else {
+            XCTFail("Expected right glass stack to expose its glass background")
+            return
+        }
+        XCTAssertTrue(glassBackground.isSyntheticStrokeVisible)
+
+        let leadingItem = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: nil, action: nil)
+        let targetItem = NavigationBarItem()
+        targetItem.rightBarButtonItems = [leadingItem, trailingItem]
+
+        let transition = morphTransition()
+        AetherAppearance.withRuntimeCurrent(.iOS27) {
+            bar.withButtonMorphTransition(transition) {
+                bar.item = targetItem
+                layout(bar, transition: transition)
+            }
+        }
+
+        XCTAssertTrue(glassBackground.syntheticStrokeAnimationKeys.contains("path"))
+        XCTAssertTrue(glassBackground.syntheticStrokeAnimationKeys.contains("bounds"))
+    }
+
+    func testAutomaticBackGlassButtonKeepsElasticStretchRecognizer() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        bar.previousItem = .item(NavigationBarItem())
+        bar.item = NavigationBarItem()
+        layout(bar)
+
+        guard let sourceGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self) else {
+            XCTFail("Expected automatic back button to be hosted in a glass group")
+            return
+        }
+
+        XCTAssertTrue(bar.hasPureAutomaticBackButtonGroup)
+        XCTAssertTrue(sourceGroup.gestureRecognizers?.contains(where: { $0 is GlassHighlightGestureRecognizer }) ?? false)
+    }
+
+    func testRightNavigationGlassButtonUsesSofterPressScale() throws {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let item = NavigationBarItem()
+        item.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+        ]
+        bar.item = item
+        layout(bar)
+
+        let rightGroup = try XCTUnwrap(bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self))
+        XCTAssertEqual(rightGroup.pressedSizeIncrease, 8.0, accuracy: 0.001)
+    }
+
+    func testNavigationGlassGroupDoesNotMaskNativeStretchSurface() throws {
+        guard #available(iOS 26.0, *) else {
+            throw XCTSkip("Native glass cornerConfiguration is only available on iOS 26+")
+        }
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let item = NavigationBarItem()
+        item.leftBarButtonItems = [
+            UIBarButtonItem(title: "V4", style: .plain, target: nil, action: nil)
+        ]
+        bar.item = item
+        layout(bar)
+
+        let group = try XCTUnwrap(bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self))
+        let glassBackground = try XCTUnwrap(group.descendant(ofType: GlassBackgroundView.self))
+        guard let isMasked = glassBackground.isNativeGlassLayerMaskedForTesting else {
+            throw XCTSkip("Native glass is unavailable in this runtime")
+        }
+
+        XCTAssertTrue(glassBackground.hasNativeCornerConfigurationForTesting)
+        XCTAssertFalse(isMasked)
+    }
+
+    func testStandaloneGlassButtonDoesNotMaskNativeStretchSurface() throws {
+        guard #available(iOS 26.0, *) else {
+            throw XCTSkip("Native glass cornerConfiguration is only available on iOS 26+")
+        }
+
+        let button = GlassButton(title: "V4")
+        button.frame = CGRect(x: 0.0, y: 0.0, width: 72.0, height: 72.0)
+        button.layoutIfNeeded()
+
+        let glassBackground = try XCTUnwrap(button.descendant(ofType: GlassBackgroundView.self))
+        guard let isMasked = glassBackground.isNativeGlassLayerMaskedForTesting else {
+            throw XCTSkip("Native glass is unavailable in this runtime")
+        }
+
+        XCTAssertTrue(glassBackground.hasNativeCornerConfigurationForTesting)
+        XCTAssertFalse(isMasked)
+    }
+
+    func testGlassRightButtonStackAnimatesWidthWhenCollapsingFromMultipleToOneItem() {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let leadingItem = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), style: .plain, target: nil, action: nil)
+        let trailingItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+
+        let sourceItem = NavigationBarItem()
+        sourceItem.rightBarButtonItems = [leadingItem, trailingItem]
+        bar.item = sourceItem
+        layout(bar)
+
+        guard let sourceGroup = bar.debugButtonLayer.descendant(ofType: GlassControlGroup.self),
+              let chromeContainer = sourceGroup.ancestor(before: bar.debugButtonLayer),
+              let glassContainer = sourceGroup.ancestor(ofType: GlassBackgroundContainerView.self)
+        else {
+            XCTFail("Expected right glass stack to be hosted in the separated button layer")
+            return
+        }
+
+        let sourceWidth = sourceGroup.bounds.width
+        let sourceChromeWidth = chromeContainer.bounds.width
+        let targetItem = NavigationBarItem()
+        targetItem.rightBarButtonItems = [trailingItem]
+
+        let transition = morphTransition()
+        bar.withButtonMorphTransition(transition) {
+            bar.item = targetItem
+            layout(bar, transition: transition)
+        }
+
+        XCTAssertLessThan(sourceGroup.bounds.width, sourceWidth - 0.5)
+        XCTAssertLessThan(chromeContainer.bounds.width, sourceChromeWidth - 0.5)
+        XCTAssertEqual(chromeContainer.frame.maxX, 304.0, accuracy: 0.5)
+        XCTAssertEqual(sourceGroup.frame, CGRect(origin: .zero, size: sourceGroup.bounds.size))
+        XCTAssertEqual(glassContainer.bounds.width, chromeContainer.bounds.width, accuracy: 0.5)
+        XCTAssertEqual(glassContainer.bounds.height, chromeContainer.bounds.height, accuracy: 0.5)
+    }
+
+    func testTransitionMeasuredButtonChromeLayoutReadsChromeHiddenByTitleTransitionMode() throws {
+        NavigationBarImpl.defaultButtonHostingMode = .separatedLayer
+
+        let hostView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 320.0, height: 104.0))
+        let bar = makeBar(hostView: hostView, style: .glass)
+        let item = NavigationBarItem()
+        item.rightBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "ellipsis"), style: .plain, target: nil, action: nil)
+        ]
+        bar.item = item
+        layout(bar)
+
+        let visibleFrame = try XCTUnwrap(bar.transitionMeasuredButtonChromeLayout().rightFrame)
+        bar.setTitleTransitionMode(true)
+
+        XCTAssertNil(bar.buttonChromeLayout().rightFrame)
+        let hiddenMeasuredFrame = try XCTUnwrap(bar.transitionMeasuredButtonChromeLayout().rightFrame)
+        XCTAssertEqual(hiddenMeasuredFrame.width, visibleFrame.width, accuracy: 0.1)
+    }
+
+    func testInteractivePopButtonPreviewExpandsTowardWiderTargetByHalfAtFullProgress() throws {
+        let source = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: CGRect(x: 16.0, y: 10.0, width: 44.0, height: 44.0),
+            rightFrame: CGRect(x: 260.0, y: 10.0, width: 44.0, height: 44.0)
+        )
+        let target = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: CGRect(x: 16.0, y: 10.0, width: 100.0, height: 44.0),
+            rightFrame: CGRect(x: 204.0, y: 10.0, width: 100.0, height: 44.0)
+        )
+
+        let preview = source.interactivePopPreviewLayout(towards: target, progress: 1.0)
+        let leftFrame = try XCTUnwrap(preview.leftFrame)
+        let rightFrame = try XCTUnwrap(preview.rightFrame)
+
+        XCTAssertEqual(leftFrame.minX, 16.0, accuracy: 0.1)
+        XCTAssertEqual(leftFrame.width, 72.0, accuracy: 0.1)
+        XCTAssertEqual(rightFrame.maxX, 304.0, accuracy: 0.1)
+        XCTAssertEqual(rightFrame.width, 72.0, accuracy: 0.1)
+    }
+
+    func testInteractivePopButtonPreviewShrinksTowardNarrowerTargetByHalfAtFullProgress() throws {
+        let source = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: CGRect(x: 16.0, y: 10.0, width: 124.0, height: 44.0),
+            rightFrame: CGRect(x: 180.0, y: 10.0, width: 124.0, height: 44.0)
+        )
+        let target = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: CGRect(x: 16.0, y: 10.0, width: 44.0, height: 44.0),
+            rightFrame: CGRect(x: 260.0, y: 10.0, width: 44.0, height: 44.0)
+        )
+
+        let preview = source.interactivePopPreviewLayout(towards: target, progress: 1.0)
+        let leftFrame = try XCTUnwrap(preview.leftFrame)
+        let rightFrame = try XCTUnwrap(preview.rightFrame)
+
+        XCTAssertEqual(leftFrame.minX, 16.0, accuracy: 0.1)
+        XCTAssertEqual(leftFrame.width, 84.0, accuracy: 0.1)
+        XCTAssertEqual(rightFrame.maxX, 304.0, accuracy: 0.1)
+        XCTAssertEqual(rightFrame.width, 84.0, accuracy: 0.1)
+    }
+
+    func testInteractivePopMissingTargetScalesCurrentButtonDownToPointSeven() {
+        let source = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: CGRect(x: 16.0, y: 10.0, width: 44.0, height: 44.0),
+            rightFrame: CGRect(x: 260.0, y: 10.0, width: 44.0, height: 44.0)
+        )
+        let target = NavigationBarImpl.ButtonChromeLayout(
+            leftFrame: nil,
+            rightFrame: CGRect(x: 260.0, y: 10.0, width: 44.0, height: 44.0)
+        )
+
+        let preview = source.interactivePopPreviewLayout(towards: target, progress: 1.0)
+        let scales = source.interactivePopMissingTargetScales(towards: target, progress: 1.0)
+
+        XCTAssertEqual(preview.leftFrame, source.leftFrame)
+        XCTAssertEqual(scales.left, 0.7, accuracy: 0.001)
+        XCTAssertEqual(scales.right, 1.0, accuracy: 0.001)
+    }
+
     func testButtonLayerHitTestingReturnsButtonsAndPassesThroughEmptySpace() {
         let layer = AetherNavigationBarButtonLayer(frame: CGRect(x: 0.0, y: 0.0, width: 240.0, height: 60.0))
         let button = UIButton(type: .system)
@@ -484,6 +790,7 @@ final class NavigationBarButtonLayerTests: XCTestCase {
             context.fill(CGRect(origin: .zero, size: size))
         }
     }
+
 }
 
 private final class BarButtonActionTarget: NSObject {
@@ -581,5 +888,27 @@ private extension UIView {
             current = view.superview
         }
         return result
+    }
+
+    func ancestor<T: UIView>(ofType type: T.Type) -> T? {
+        var current = superview
+        while let view = current {
+            if let typed = view as? T {
+                return typed
+            }
+            current = view.superview
+        }
+        return nil
+    }
+
+    func ancestor(before stopView: UIView) -> UIView? {
+        var current: UIView? = self
+        while let view = current, let parent = view.superview {
+            if parent === stopView {
+                return view
+            }
+            current = parent
+        }
+        return nil
     }
 }

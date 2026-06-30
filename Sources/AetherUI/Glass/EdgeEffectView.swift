@@ -38,8 +38,37 @@ public final class EdgeEffectView: UIView {
         let solidBlur: Bool
         let fadeCurveExponent: CGFloat
         let minimumFadeAlpha: CGFloat
+        let prefersStaticVariableBlurMask: Bool
     }
     private var lastUpdateSignature: UpdateSignature?
+
+    internal var debugLastEdgeSize: CGFloat? {
+        lastUpdateSignature?.edgeSize
+    }
+
+    internal var debugLastSolidBlur: Bool? {
+        lastUpdateSignature?.solidBlur
+    }
+
+    internal var debugLastBlurRadiusAtEdge: CGFloat? {
+        lastUpdateSignature?.blurRadiusAtEdge
+    }
+
+    internal var debugLastBlurRadiusAtFade: CGFloat? {
+        lastUpdateSignature?.blurRadiusAtFade
+    }
+
+    internal var debugLastContentRGBA: UInt64? {
+        lastUpdateSignature?.contentRGBA
+    }
+
+    internal var debugLastFadeCurveExponent: CGFloat? {
+        lastUpdateSignature?.fadeCurveExponent
+    }
+
+    internal var debugLastPrefersStaticVariableBlurMask: Bool? {
+        lastUpdateSignature?.prefersStaticVariableBlurMask
+    }
 
     public override init(frame: CGRect) {
         self.contentView = UIView()
@@ -83,6 +112,7 @@ public final class EdgeEffectView: UIView {
         solidBlur: Bool = false,
         fadeCurveExponent: CGFloat = 1.0,
         minimumFadeAlpha: CGFloat = 0.04,
+        prefersStaticVariableBlurMask: Bool = false,
         transition: ContainedViewLayoutTransition
     ) {
         // Fast-path early return when layout is driven by a non-animated
@@ -100,7 +130,8 @@ public final class EdgeEffectView: UIView {
                 blurRadiusAtFade: blurRadiusAtFade,
                 solidBlur: solidBlur,
                 fadeCurveExponent: fadeCurveExponent,
-                minimumFadeAlpha: minimumFadeAlpha
+                minimumFadeAlpha: minimumFadeAlpha,
+                prefersStaticVariableBlurMask: prefersStaticVariableBlurMask
             )
             if signature == lastUpdateSignature {
                 return
@@ -189,11 +220,17 @@ public final class EdgeEffectView: UIView {
                 // `blurRadiusAtFade / blurRadiusAtEdge` at the transparent
                 // side, then scale `maxBlurRadius = blurRadiusAtEdge`.
                 let vBlur: VariableBlurView
-                if let current = maskedBlurView, current.maxBlurRadius == blurRadiusAtEdge {
+                if let current = maskedBlurView,
+                   current.maxBlurRadius == blurRadiusAtEdge,
+                   current.usesStaticMaskImage == prefersStaticVariableBlurMask
+                {
                     vBlur = current
                 } else {
                     maskedBlurView?.removeFromSuperview()
-                    let newView = VariableBlurView(maxBlurRadius: blurRadiusAtEdge)
+                    let newView = VariableBlurView(
+                        maxBlurRadius: blurRadiusAtEdge,
+                        usesStaticMaskImage: prefersStaticVariableBlurMask
+                    )
                     insertSubview(newView, at: 0)
                     maskedBlurView = newView
                     vBlur = newView
@@ -580,17 +617,24 @@ public final class VariableBlurEffect {
     private let layer: CALayer
     private let isTransparent: Bool
     private let maxBlurRadius: CGFloat
+    private let usesStaticMaskImage: Bool
 
     private var params: Params?
     private var gradientImage: UIImage?
     private let imageSubview: UIImageView?
 
-    public init(layer: CALayer, isTransparent: Bool = false, maxBlurRadius: CGFloat = 20.0) {
+    public init(
+        layer: CALayer,
+        isTransparent: Bool = false,
+        maxBlurRadius: CGFloat = 20.0,
+        usesStaticMaskImage: Bool = false
+    ) {
         self.layer = layer
         self.isTransparent = isTransparent
         self.maxBlurRadius = maxBlurRadius
+        self.usesStaticMaskImage = usesStaticMaskImage
 
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), !usesStaticMaskImage {
             let imageSubview = UIImageView()
             self.imageSubview = imageSubview
             imageSubview.layer.name = "mask_source"
@@ -623,7 +667,7 @@ public final class VariableBlurEffect {
             return
         }
 
-        let isGradientUpdated = gradient != self.params?.gradient
+        let isGradientUpdated = params != self.params
 
         if isGradientUpdated {
             if let inwardsExtension = params.placement.inwardsExtension {
@@ -733,9 +777,28 @@ public final class VariableBlurEffect {
             transition.setFrame(layer: self.layer, frame: CGRect(origin: .zero, size: size))
             transition.setFrame(view: imageSubview, frame: CGRect(origin: .zero, size: size))
         } else {
-            updateLegacyEffect()
             transition.setFrame(layer: self.layer, frame: CGRect(origin: .zero, size: size))
+            if usesStaticMaskImage {
+                updateStaticMaskEffect()
+            } else {
+                updateLegacyEffect()
+            }
         }
+    }
+
+    private func updateStaticMaskEffect() {
+        guard let maskedBlur = CALayer.aetherMaskedBlurFilter() else { return }
+        guard let gradientImage, let cgImage = gradientImage.cgImage else { return }
+
+        maskedBlur.setValue(self.maxBlurRadius, forKey: ObfuscatedSymbols.filterRadiusKey)
+        if self.isTransparent {
+            maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdgesTransparent)
+        } else {
+            maskedBlur.setValue(true, forKey: ObfuscatedSymbols.inputNormalizeEdges)
+        }
+        maskedBlur.setValue(cgImage, forKey: ObfuscatedSymbols.inputMaskImage)
+
+        self.layer.filters = [maskedBlur]
     }
 
     private func updateLegacyEffect() {
@@ -789,12 +852,14 @@ public final class VariableBlurEffect {
 
 public final class VariableBlurView: UIView {
     public let maxBlurRadius: CGFloat
+    fileprivate let usesStaticMaskImage: Bool
 
     private var effect: VariableBlurEffect?
     private var mainEffectLayer: CALayer?
 
-    public init(maxBlurRadius: CGFloat = 20.0) {
+    public init(maxBlurRadius: CGFloat = 20.0, usesStaticMaskImage: Bool = false) {
         self.maxBlurRadius = maxBlurRadius
+        self.usesStaticMaskImage = usesStaticMaskImage
 
         // Try to create a CABackdropLayer (private) for a real-backdrop blur.
         if let backdrop = VariableBlurView.createBackdropLayer() {
@@ -807,7 +872,12 @@ public final class VariableBlurView: UIView {
 
         if let layer = mainEffectLayer {
             self.layer.addSublayer(layer)
-            self.effect = VariableBlurEffect(layer: layer, isTransparent: false, maxBlurRadius: maxBlurRadius)
+            self.effect = VariableBlurEffect(
+                layer: layer,
+                isTransparent: false,
+                maxBlurRadius: maxBlurRadius,
+                usesStaticMaskImage: usesStaticMaskImage
+            )
         }
     }
 

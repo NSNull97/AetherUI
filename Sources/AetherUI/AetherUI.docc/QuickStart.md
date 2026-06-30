@@ -98,11 +98,7 @@ final class HomeController: AetherViewController {
     private let label = UILabel()
 
     init() {
-        // Передача presentationData создаёт nav bar.
-        // nil означает «контроллер без nav bar» (для fullscreen-экранов).
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(
-            theme: NavigationBarTheme.liquidGlass()
-        ))
+        super.init()
         navigationItem.title = "Главная"
     }
 
@@ -135,8 +131,8 @@ final class HomeController: AetherViewController {
 
 Ключевые моменты:
 
-- `super.init(navigationBarPresentationData: ...)` создаёт ``NavigationBarView``
-  и связывает его с контроллером. Передача `nil` создаёт контроллер без бара.
+- `super.init()` использует app-level appearance. Fullscreen-экраны могут
+  отключить бар через ``AetherViewController/displayNavigationBar``.
 - Стандартный `UINavigationItem` (`title`, `rightBarButtonItem` и т.д.)
   поддерживается напрямую — AetherUI отслеживает его изменения и
   перестраивает содержимое бара.
@@ -156,10 +152,7 @@ final class HomeController: AetherViewController {
 - Заголовок и кнопки переходят синхронно с баром.
 
 ```swift
-let nav = AetherNavigationController(
-    mode: .single,                          // или .split для iPad
-    theme: NavigationControllerTheme.liquidGlass()
-)
+let nav = AetherNavigationController(mode: .single)
 nav.setViewControllers([HomeController()], animated: false)
 ```
 
@@ -174,9 +167,7 @@ final class HomeController: AetherViewController {
 
 final class DetailController: AetherViewController {
     init() {
-        super.init(navigationBarPresentationData:
-            NavigationBarPresentationData(theme: .liquidGlass())
-        )
+        super.init()
         navigationItem.title = "Детали"
 
         // Стандартный UIBarButtonItem поддерживается напрямую.
@@ -204,7 +195,7 @@ final class DetailController: AetherViewController {
 func makeRootTabBarController() -> AetherTabBarController {
 
     func makeTab(_ root: ViewController, item: UITabBarItem) -> AetherNavigationController {
-        let nav = AetherNavigationController(mode: .single, theme: .liquidGlass())
+        let nav = AetherNavigationController(mode: .single)
         nav.setViewControllers([root], animated: false)
         nav.tabBarItem = item
         return nav
@@ -222,13 +213,7 @@ func makeRootTabBarController() -> AetherTabBarController {
         tag: 1
     ))
 
-    let tabs = AetherTabBarController(
-        tabBarTheme: TabBarView.Theme(
-            tabBarSelectedIconColor: .systemBlue,
-            tabBarSelectedTextColor: .systemBlue,
-            style: .liquidGlass
-        )
-    )
+    let tabs = AetherTabBarController()
     tabs.setControllers([chats, settings], selectedIndex: 0)
 
     return tabs
@@ -247,10 +232,10 @@ func makeRootTabBarController() -> AetherTabBarController {
 поле без автоматического focus:
 
 ```swift
-tabs.searchShowcase = TabBarView.SearchShowcase(
-    icon: UIImage(systemName: "magnifyingglass")!,
-    action: { [weak tabs] in tabs?.activateSearch() }
-)
+let search = UIViewController()
+search.tabBarItem = SearchTabItem(image: UIImage(systemName: "magnifyingglass")!)
+
+tabs.setControllers([chats, settings, search], selectedIndex: 0)
 ```
 
 Подробнее — <doc:Search>.

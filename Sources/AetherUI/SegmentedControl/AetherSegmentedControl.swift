@@ -206,6 +206,7 @@ public final class AetherSegmentedControl: UIView {
         super.init(frame: .zero)
 
         clipsToBounds = false  // lens shadow / lift overflow needs to bleed
+        liquidLensView.allowsContentInteraction = true
 
         normalContentView.clipsToBounds = true
         normalContentView.layer.cornerCurve = .continuous
@@ -223,8 +224,8 @@ public final class AetherSegmentedControl: UIView {
             scrollView.contentInsetAdjustmentBehavior = .never
         }
         addSubview(liquidLensView)
-        addSubview(scrollView)
         liquidLensView.contentView.addSubview(normalContentView)
+        liquidLensView.contentView.addSubview(scrollView)
         liquidLensView.selectedContentView.addSubview(selectedContentHostView)
         scrollView.addSubview(contentHostView)
 

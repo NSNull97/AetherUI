@@ -15,17 +15,20 @@ public final class TabBarView: UIView {
             public let alpha: CGFloat
             public let blurRadiusAtEdge: CGFloat
             public let blurRadiusAtFade: CGFloat
+            public let solidBlur: Bool
             public let tintColor: UIColor?
 
             public init(
                 alpha: CGFloat = 0.75,
                 blurRadiusAtEdge: CGFloat = 2.0,
                 blurRadiusAtFade: CGFloat = 0.0,
+                solidBlur: Bool = false,
                 tintColor: UIColor? = nil
             ) {
                 self.alpha = alpha
                 self.blurRadiusAtEdge = blurRadiusAtEdge
                 self.blurRadiusAtFade = blurRadiusAtFade
+                self.solidBlur = solidBlur
                 self.tintColor = tintColor
             }
         }
@@ -79,6 +82,8 @@ public final class TabBarView: UIView {
         public let edgeEffectAlpha: CGFloat
         public let edgeEffectBlurRadiusAtEdge: CGFloat
         public let edgeEffectBlurRadiusAtFade: CGFloat
+        public let edgeEffectSolidBlur: Bool
+        public let glassEffectStyle: SystemGlassEffectStyle
         public let edgeEffectTintColor: UIColor?
 
         public init(
@@ -105,6 +110,8 @@ public final class TabBarView: UIView {
             edgeEffectAlpha: CGFloat = 0.75,
             edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
             edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+            edgeEffectSolidBlur: Bool = false,
+            glassEffectStyle: SystemGlassEffectStyle = .regular,
             edgeEffectTintColor: UIColor? = nil
         ) {
             self.tabBarBackgroundColor = tabBarAppearance?.backgroundColor ?? tabBarBackgroundColor
@@ -130,11 +137,15 @@ public final class TabBarView: UIView {
                 self.edgeEffectAlpha = tabBarAppearance.edgeEffect?.alpha ?? 0.0
                 self.edgeEffectBlurRadiusAtEdge = tabBarAppearance.edgeEffect?.blurRadiusAtEdge ?? edgeEffectBlurRadiusAtEdge
                 self.edgeEffectBlurRadiusAtFade = tabBarAppearance.edgeEffect?.blurRadiusAtFade ?? edgeEffectBlurRadiusAtFade
+                self.edgeEffectSolidBlur = tabBarAppearance.edgeEffect?.solidBlur ?? edgeEffectSolidBlur
+                self.glassEffectStyle = glassEffectStyle
                 self.edgeEffectTintColor = tabBarAppearance.edgeEffect?.tintColor
             } else {
                 self.edgeEffectAlpha = edgeEffectAlpha
                 self.edgeEffectBlurRadiusAtEdge = edgeEffectBlurRadiusAtEdge
                 self.edgeEffectBlurRadiusAtFade = edgeEffectBlurRadiusAtFade
+                self.edgeEffectSolidBlur = edgeEffectSolidBlur
+                self.glassEffectStyle = glassEffectStyle
                 self.edgeEffectTintColor = edgeEffectTintColor
             }
         }
@@ -144,26 +155,13 @@ public final class TabBarView: UIView {
 
     // MARK: - Types
 
-    /// Companion "search showcase" capsule shown next to the main tab pill,
-    /// mirroring iOS 26's native `UISearchTab`. On iOS 26+ both capsules share
-    /// a `UIGlassContainerEffect` via `GlassBackgroundContainerView` so they
-    /// merge visually when close.
-    public struct SearchShowcase {
-        public let icon: UIImage?
-        public let action: () -> Void
-        public init(icon: UIImage? = UIImage(systemName: "magnifyingglass"), action: @escaping () -> Void) {
-            self.icon = icon
-            self.action = action
-        }
-    }
-
     private let backgroundView: NavigationBackgroundView
     private let separatorView: UIView
-    /// Container that hosts the lens + optional search showcase so they merge
-    /// into a single `UIGlassContainerEffect` on iOS 26+.
+    /// Container that hosts the tab pill chrome.
     private let tabBarGlassContainer: GlassBackgroundContainerView
     private let liquidLensView: LiquidLensView
-    private var searchShowcaseView: GlassBarButtonView?
+    private var searchItemView: GlassBarButtonView?
+    private var searchItem: SearchTabItem?
     private var itemViews: [TabBarItemView] = []
     private var selectedItemViews: [TabBarItemView] = []
 
@@ -185,29 +183,18 @@ public final class TabBarView: UIView {
         }
     }
 
-    /// Effective bottom offset from the tab bar's bottom edge to the
-    /// pill. Devices with a home indicator / safe area already push the
-    /// floating pill up from the hardware bezel, so `theme.bottomInset`
-    /// (25pt) sits nicely above the indicator. Older phones with
-    /// `safeAreaInsets.bottom == 0` have no such buffer — the 25pt
-    /// looks like wasted space, so we collapse it to 16pt matching
-    /// stock iOS floating-tabbar spacing on non-home-indicator devices.
+    /// Effective bottom offset from the tab bar's bottom edge to the pill.
+    /// The floating tab bar keeps a fixed visual gap from the screen bottom
+    /// so it remains consistent across home-indicator and non-indicator
+    /// devices.
     private var effectiveBottomInset: CGFloat {
-        let raw = window?.safeAreaInsets.bottom ?? superview?.safeAreaInsets.bottom ?? safeAreaInsets.bottom
-        return raw > 0.01 ? theme.bottomInset : 16.0
+        return theme.bottomInset
     }
 
-    public var searchShowcase: SearchShowcase? {
-        didSet { rebuildSearchShowcase() }
-    }
-
-    public var searchTabBarItem: SearchShowcase? {
-        get {
-            return searchShowcase
-        }
-        set {
-            searchShowcase = newValue
-        }
+    func setSearchItem(_ item: SearchTabItem?) {
+        guard searchItem !== item else { return }
+        searchItem = item
+        rebuildSearchItemView()
     }
 
     // MARK: - Minimize Mode (iOS 26 `tabBarMinimizeBehavior`)
@@ -219,7 +206,7 @@ public final class TabBarView: UIView {
 
     /// `true` while the tab bar is collapsed into the iOS 26 minimized
     /// state — the pill shrinks to a 48×48 circle on the leading edge
-    /// (showing the active tab's icon), the search showcase becomes a
+    /// (showing the active tab's icon), the search tab item becomes a
     /// matching 48×48 circle on the trailing edge, and any
     /// `bottomBarAccessory` reflows into the gap between them.
     ///
@@ -251,7 +238,7 @@ public final class TabBarView: UIView {
 
     /// Toggle the minimized state with an animated morph.
     ///
-    /// The morph is layout-driven: pill / showcase / lens / icon all
+    /// The morph is layout-driven: pill / search item / lens / icon all
     /// re-frame through the same `transition` so the glass surface
     /// deforms continuously (iOS 26's "liquid" feel) instead of
     /// cross-fading two distinct shapes.
@@ -369,8 +356,8 @@ public final class TabBarView: UIView {
             return CGRect(x: sideInset, y: pillY, width: pillSize, height: pillSize)
         }
         let availableWidth = max(0.0, size.width - sideInset * 2.0)
-        let showcaseFootprint: CGFloat = (searchShowcaseView != nil) ? (theme.pillHeight + theme.showcaseSpacing) : 0
-        let pillWidth = max(0.0, availableWidth - showcaseFootprint)
+        let searchFootprint: CGFloat = (searchItemView != nil) ? (theme.pillHeight + theme.showcaseSpacing) : 0
+        let pillWidth = max(0.0, availableWidth - searchFootprint)
         let pillY = size.height - bottomInset - theme.pillHeight
         return CGRect(x: sideInset, y: pillY, width: pillWidth, height: theme.pillHeight)
     }
@@ -456,20 +443,20 @@ public final class TabBarView: UIView {
                 self.searchCloseButton?.transform = .identity
                 self.tabBarGlassContainer.alpha = 1.0
                 self.tabBarGlassContainer.transform = .identity
-                // Showcase circle (the standalone "открыть поиск" button)
+                // Search circle (the standalone "открыть поиск" button)
                 // morphs into the expanded capsule, so hide the original
-                // showcase while search is active — otherwise it stays
+                // item while search is active — otherwise it stays
                 // visible next to the expanded search field.
-                self.searchShowcaseView?.alpha = 0.0
-                self.searchShowcaseView?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+                self.searchItemView?.alpha = 0.0
+                self.searchItemView?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 1.0
             }
         } else {
             positionSearchViewsExpanded()
             tabBarGlassContainer.alpha = 1.0
             tabBarGlassContainer.transform = .identity
-            searchShowcaseView?.alpha = 0.0
-            searchShowcaseView?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+            searchItemView?.alpha = 0.0
+            searchItemView?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
             searchDimView?.alpha = 1.0
         }
     }
@@ -498,19 +485,19 @@ public final class TabBarView: UIView {
                 self.searchCloseButton?.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
                 self.searchDimView?.alpha = 0.0
 
-                // Restore tab bar + showcase circle (hidden during search).
+                // Restore tab bar + search circle (hidden during search).
                 self.tabBarGlassContainer.alpha = 1.0
                 self.tabBarGlassContainer.transform = .identity
-                self.searchShowcaseView?.alpha = 1.0
-                self.searchShowcaseView?.transform = .identity
+                self.searchItemView?.alpha = 1.0
+                self.searchItemView?.transform = .identity
             } completion: { _ in
                 self.teardownSearchViews()
             }
         } else {
             tabBarGlassContainer.alpha = 1.0
             tabBarGlassContainer.transform = .identity
-            searchShowcaseView?.alpha = 1.0
-            searchShowcaseView?.transform = .identity
+            searchItemView?.alpha = 1.0
+            searchItemView?.transform = .identity
             teardownSearchViews()
         }
     }
@@ -588,13 +575,13 @@ public final class TabBarView: UIView {
     // -- Positioning
 
     /// Reference frames in TabBarView coordinates.
-    private var searchShowcaseFrame: CGRect {
-        guard let showcase = searchShowcaseView else {
+    private var searchItemFrame: CGRect {
+        guard let searchButton = searchItemView else {
             return CGRect(x: bounds.width - theme.sideInset - theme.pillHeight,
                           y: bounds.height - effectiveBottomInset - theme.pillHeight,
                           width: theme.pillHeight, height: theme.pillHeight)
         }
-        return tabBarGlassContainer.convert(showcase.frame, to: self)
+        return searchButton.frame
     }
 
     private var activeTabSearchAnchorFrame: CGRect {
@@ -603,15 +590,15 @@ public final class TabBarView: UIView {
 
     private static let searchModeHeight: CGFloat = 42.0
 
-    /// Start: capsule at showcase origin.
+    /// Start: capsule at search item origin.
     private func positionSearchViewsAtOrigin() {
         let h = Self.searchModeHeight
-        let showcaseF = searchShowcaseFrame
+        let itemFrame = searchItemFrame
 
         updateSearchDimFrame()
 
-        // Capsule starts at search showcase's position (small circle)
-        let capsuleFrame = CGRect(x: showcaseF.midX - h / 2, y: showcaseF.midY - h / 2, width: h, height: h)
+        // Capsule starts at the search item's position (small circle)
+        let capsuleFrame = CGRect(x: itemFrame.midX - h / 2, y: itemFrame.midY - h / 2, width: h, height: h)
         searchCapsule?.frame = capsuleFrame
         searchCapsule?.update(size: capsuleFrame.size, cornerRadius: h / 2, isDark: isEffectivelyDark,
                               tintColor: .init(kind: .panel), isInteractive: false, isVisible: true, transition: .immediate)
@@ -676,23 +663,35 @@ public final class TabBarView: UIView {
 
     private func updateSearchDimFrame() {
         guard let dim = searchDimView else { return }
-        // Extend 40pt below bounds to cover the gap above the keyboard corners
-        let overflow: CGFloat = 40.0
+        // Regular edge effect keeps the historical bleed below bounds to cover
+        // keyboard-corner gaps. Strong edge effect is a bounded iOS27 surface.
+        let overflow: CGFloat = theme.glassEffectStyle == .regular ? 40.0 : 0.0
         let extFrame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height + overflow)
         dim.frame = extFrame
-        dim.clipsToBounds = false
+        dim.clipsToBounds = theme.glassEffectStyle != .regular
+        let hasVisibleEdgeEffect = self.hasVisibleEdgeEffect
+        dim.isHidden = !hasVisibleEdgeEffect
         let fadeHeight: CGFloat = min(48.0, bounds.height * 0.4)
+        let usesProgressiveBlur = theme.glassEffectStyle == .regular
         dim.update(
-            content: theme.edgeEffectTintColor ?? theme.tabBarBackgroundColor,
-            blur: true,
+            content: hasVisibleEdgeEffect ? (theme.edgeEffectTintColor ?? theme.tabBarBackgroundColor) : .clear,
+            blur: hasVisibleEdgeEffect,
             alpha: theme.edgeEffectAlpha,
             rect: CGRect(origin: .zero, size: extFrame.size),
             edge: .bottom,
-            edgeSize: fadeHeight,
+            edgeSize: usesProgressiveBlur ? fadeHeight : 0.0,
             blurRadiusAtEdge: theme.edgeEffectBlurRadiusAtEdge,
-            blurRadiusAtFade: theme.edgeEffectBlurRadiusAtFade,
+            blurRadiusAtFade: usesProgressiveBlur ? 0.0 : theme.edgeEffectBlurRadiusAtEdge,
+            solidBlur: !usesProgressiveBlur,
+            minimumFadeAlpha: usesProgressiveBlur ? 0.0 : 0.04,
             transition: .immediate
         )
+    }
+
+    private var hasVisibleEdgeEffect: Bool {
+        theme.edgeEffectAlpha > 0.001
+            || theme.edgeEffectBlurRadiusAtEdge > 0.001
+            || theme.edgeEffectBlurRadiusAtFade > 0.001
     }
 
     @objc private func searchTextDidChange() {
@@ -756,14 +755,15 @@ public final class TabBarView: UIView {
         edgeEffectView.isUserInteractionEnabled = false
         insertSubview(edgeEffectView, aboveSubview: backgroundView)
 
-        // Put the lens (and future search showcase) inside the shared container
-        // so iOS 26's `UIGlassContainerEffect` can merge them when close.
+        // Put the lens inside the shared container so the tab pill gets the
+        // native iOS glass treatment as a single surface.
         addSubview(tabBarGlassContainer)
         tabBarGlassContainer.contentView.addSubview(liquidLensView)
 
         let lensTap = UITapGestureRecognizer(target: self, action: #selector(lensTapped(_:)))
         lensTap.delegate = self
         liquidLensView.addGestureRecognizer(lensTap)
+        liquidLensView.glassStyle = theme.glassEffectStyle == .strong ? .prominent : .regular
 
         // Drag-to-select: lens follows the finger. Matches the native iOS 26
         // TabBarController pan interaction.
@@ -816,6 +816,7 @@ public final class TabBarView: UIView {
         self.theme = theme
         backgroundView.updateColor(color: theme.tabBarBackgroundColor, enableBlur: theme.enableBlur, transition: .immediate)
         separatorView.backgroundColor = theme.tabBarSeparatorColor
+        liquidLensView.glassStyle = theme.glassEffectStyle == .strong ? .prominent : .regular
         setGlassStyle(enabled: theme.enableBlur)
         rebuildItemViews()
         updateSelection(animated: false)
@@ -885,7 +886,7 @@ public final class TabBarView: UIView {
         // the frost. That means the edge-effect view's frame reaches
         // beyond our own bounds — `clipsToBounds` stays false so the
         // overflow renders.
-        if theme.style == .liquidGlass {
+        if theme.style == .liquidGlass, hasVisibleEdgeEffect {
             edgeEffectView.isHidden = false
             // Edge-effect frost band:
             //   • Expanded — covers the full tab bar height plus any
@@ -910,7 +911,9 @@ public final class TabBarView: UIView {
             // bottom edge moves DOWN by `2 * bandShift`. Net effect: the
             // band shifts down AND grows, exactly matching the user's
             // ask of "опустить вниз + увеличить пропорционально высоту".
-            let bandShift: CGFloat = 12.0
+            let allowsEdgeBleed = theme.glassEffectStyle == .regular
+            edgeEffectView.clipsToBounds = !allowsEdgeBleed
+            let bandShift: CGFloat = allowsEdgeBleed ? 12.0 : 0.0
             if isMinimized {
                 let pillSize = Self.minimizedButtonSize
                 let pillTop = bounds.height - effectiveBottomInset - pillSize
@@ -924,7 +927,7 @@ public final class TabBarView: UIView {
                 )
                 fadeHeight = min(36.0, edgeFrame.height * 0.45)
             } else {
-                let reservedAbove = max(0, bottomAccessoryReservedHeight)
+                let reservedAbove = allowsEdgeBleed ? max(0, bottomAccessoryReservedHeight) : 0.0
                 edgeFrame = CGRect(
                     x: 0.0,
                     y: -reservedAbove + bandShift,
@@ -940,13 +943,26 @@ public final class TabBarView: UIView {
                 alpha: theme.edgeEffectAlpha,
                 rect: CGRect(origin: .zero, size: edgeFrame.size),
                 edge: .bottom,
-                edgeSize: fadeHeight,
+                edgeSize: allowsEdgeBleed ? fadeHeight : 0.0,
                 blurRadiusAtEdge: theme.edgeEffectBlurRadiusAtEdge,
-                blurRadiusAtFade: theme.edgeEffectBlurRadiusAtFade,
+                blurRadiusAtFade: allowsEdgeBleed ? 0.0 : theme.edgeEffectBlurRadiusAtEdge,
+                solidBlur: !allowsEdgeBleed,
+                minimumFadeAlpha: allowsEdgeBleed ? 0.0 : 0.04,
                 transition: .immediate
             )
         } else {
             edgeEffectView.isHidden = true
+            edgeEffectView.update(
+                content: .clear,
+                blur: false,
+                alpha: 0.0,
+                rect: CGRect(origin: .zero, size: edgeEffectView.bounds.size),
+                edge: .bottom,
+                edgeSize: 0.0,
+                blurRadiusAtEdge: 0.0,
+                blurRadiusAtFade: 0.0,
+                transition: .immediate
+            )
         }
 
         layoutGlassBackground()
@@ -1008,18 +1024,18 @@ public final class TabBarView: UIView {
         }
     }
 
-    private func rebuildSearchShowcase() {
-        searchShowcaseView?.removeFromSuperview()
-        searchShowcaseView = nil
+    private func rebuildSearchItemView() {
+        searchItemView?.removeFromSuperview()
+        searchItemView = nil
 
-        guard let config = searchShowcase else {
+        guard let item = searchItem else {
             setNeedsLayout()
             return
         }
 
-        let button = GlassBarButtonView(icon: config.icon, title: nil, state: .glass)
+        let button = GlassBarButtonView(icon: item.image ?? item.selectedImage, title: nil, state: .glass)
         button.contentTintColor = theme.tabBarIconColor
-        button.action = { _ in config.action() }
+        button.action = { [weak item] _ in item?.action?() }
         // Previously sat inside `tabBarGlassContainer.contentView` so
         // both the tab pill and the search circle could merge via the
         // shared `UIGlassContainerEffect` on iOS 26+. That merge made
@@ -1031,7 +1047,7 @@ public final class TabBarView: UIView {
         // stretches only search. Tradeoff: loses the iOS 26 glass
         // merge between pill and search circle.
         addSubview(button)
-        searchShowcaseView = button
+        searchItemView = button
         setNeedsLayout()
     }
 
@@ -1053,7 +1069,7 @@ public final class TabBarView: UIView {
         let bottomInset = effectiveBottomInset
 
         // Minimized layout: pill collapses to a 48×48 active-tab circle on
-        // the leading edge, search showcase mirrors it on the trailing
+        // the leading edge, search tab item mirrors it on the trailing
         // edge, and the band between them is reserved for the
         // `bottomBarAccessory` (which the controller reflows there).
         if isMinimized {
@@ -1067,7 +1083,7 @@ public final class TabBarView: UIView {
             // feedback lines up with the circle. `isCollapsed: true`
             // drops the lens's resting tint layer — without this the
             // active-tab circle reads as a heavier glass than the
-            // search showcase / accessory pill that sit beside it.
+            // search tab item / accessory pill that sit beside it.
             activeTransition.updateFrame(view: liquidLensView, frame: CGRect(origin: .zero, size: containerFrame.size))
             liquidLensView.update(
                 size: containerFrame.size,
@@ -1094,7 +1110,7 @@ public final class TabBarView: UIView {
             // they're invisible while the lens alpha is 0. No transition
             // needed — they're not visible during the morph.
             let itemHeight = theme.pillHeight
-            let pillWidthForItems = max(0.0, bounds.width - sideInset * 2.0 - (searchShowcaseView != nil ? Self.minimizedButtonSize + showcaseSpacing : 0))
+            let pillWidthForItems = max(0.0, bounds.width - sideInset * 2.0 - (searchItemView != nil ? Self.minimizedButtonSize + showcaseSpacing : 0))
             let tabAreaWidth = pillWidthForItems - innerPadding * 2.0
             let itemWidth = max(1.0, tabAreaWidth / CGFloat(count))
             for (index, itemView) in itemViews.enumerated() {
@@ -1104,15 +1120,15 @@ public final class TabBarView: UIView {
                 }
             }
 
-            // Search showcase shrunk to 48×48 on the trailing edge.
-            if let showcase = searchShowcaseView {
-                let showcaseFrame = CGRect(
+            // Search tab item shrunk to 48×48 on the trailing edge.
+            if let searchButton = searchItemView {
+                let searchFrame = CGRect(
                     x: bounds.width - sideInset - pillSize,
                     y: pillY,
                     width: pillSize,
                     height: pillSize
                 )
-                activeTransition.updateFrame(view: showcase, frame: showcaseFrame)
+                activeTransition.updateFrame(view: searchButton, frame: searchFrame)
             }
 
             return
@@ -1123,21 +1139,20 @@ public final class TabBarView: UIView {
         let availableWidth = max(0.0, bounds.width - sideInset * 2.0)
 
         // Search is a separate circle to the right of the pill (like Apple Music).
-        // Both share the same glass container so they merge on iOS 26+.
-        let showcaseSize: CGFloat = searchShowcaseView != nil ? contentHeight : 0.0
-        let showcaseFootprint = showcaseSize > 0.0 ? showcaseSize + showcaseSpacing : 0.0
+        let searchSize: CGFloat = searchItemView != nil ? contentHeight : 0.0
+        let searchFootprint = searchSize > 0.0 ? searchSize + showcaseSpacing : 0.0
 
         // Pill fills remaining width after the search circle.
-        let pillWidth = max(0.0, availableWidth - showcaseFootprint)
+        let pillWidth = max(0.0, availableWidth - searchFootprint)
         let lensSize = CGSize(width: pillWidth, height: contentHeight)
 
         let pillX = sideInset
-        let showcaseX = bounds.width - sideInset - showcaseSize
+        let searchX = bounds.width - sideInset - searchSize
         let pillY = bounds.height - bottomInset - contentHeight
 
         // Glass container wraps only the pill now — the search circle
         // lives as a direct subview of the TabBarView so its elastic
-        // press feedback can run independently (see `rebuildSearchShowcase`).
+        // press feedback can run independently (see `rebuildSearchItemView`).
         let containerFrame = CGRect(x: pillX, y: pillY, width: pillWidth, height: contentHeight)
         activeTransition.updateFrame(view: tabBarGlassContainer, frame: containerFrame)
         tabBarGlassContainer.update(size: containerFrame.size, isDark: isEffectivelyDark, transition: activeTransition)
@@ -1154,8 +1169,8 @@ public final class TabBarView: UIView {
         activeTransition.updateFrame(view: liquidLensView, frame: CGRect(origin: .zero, size: lensSize))
 
         // Search circle positioned in TabBarView coords (sibling of container).
-        if let showcase = searchShowcaseView {
-            activeTransition.updateFrame(view: showcase, frame: CGRect(x: showcaseX, y: pillY, width: showcaseSize, height: showcaseSize))
+        if let searchButton = searchItemView {
+            activeTransition.updateFrame(view: searchButton, frame: CGRect(x: searchX, y: pillY, width: searchSize, height: searchSize))
         }
 
         // Tab items fill the pill width with inner side padding.

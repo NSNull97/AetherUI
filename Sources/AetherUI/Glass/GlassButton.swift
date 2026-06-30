@@ -210,6 +210,9 @@ public final class GlassButton: UIView {
         let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
 
         glassBackground.frame = bounds
+        if #available(iOS 26.0, *) {
+            glassBackground.setNativeUniformCornerRadius(resolvedCorner)
+        }
         glassBackground.update(
             size: bounds.size,
             cornerRadius: resolvedCorner,
@@ -233,9 +236,12 @@ public final class GlassButton: UIView {
     ) -> Self {
         self.tint = tintColor
         self.cornerRadius = cornerRadius
-        
+
         let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
 
+        if #available(iOS 26.0, *) {
+            glassBackground.setNativeUniformCornerRadius(cornerRadius)
+        }
         glassBackground.update(
             size: bounds.size,
             cornerRadius: cornerRadius,

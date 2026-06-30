@@ -319,6 +319,8 @@ lockedOrientation = .portrait
 | ``AetherViewController/setTopBarAccessory(_:animated:)`` | method | Анимированная установка/удаление top accessory через внутренний blur-crossfade. |
 | ``AetherViewController/searchController`` | `AetherSearchController?` | Поисковый pill в nav bar. |
 | ``AetherViewController/floatingToolbar`` | `AetherFloatingToolbarView?` | Плавающий toolbar в нижней части экрана. |
+| ``AetherViewController/inputBarAccessoryView`` | `UIView?` | Bottom input accessory над клавиатурой, tab-bar chrome или нижним экранным inset. |
+| ``AetherViewController/inputBarAccessoryBottomInset`` | `CGFloat` | Visual gap для standalone input accessory без клавиатуры и tab-bar chrome. Default: 28pt. |
 
 ### Контент-стейт
 

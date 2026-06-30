@@ -7,9 +7,11 @@ import UIKit
 /// pipeline (refraction, specular, interactive shimmer). On older iOS /
 /// compatibility mode it falls back to `UIBlurEffect` with the matching
 /// system-material style.
-public enum SystemGlassEffectStyle {
+public enum SystemGlassEffectStyle: Equatable, Sendable {
     /// Dialog/card surface. Regular opacity.
     case regular
+    /// Denser chrome surface used by the iOS 27 appearance preset.
+    case strong
     /// Clear overlay — use for tooltips / pills where we want max
     /// transparency and rely on shadow for edge definition.
     case clear
@@ -27,6 +29,7 @@ public enum SystemGlassEffect {
             let effect: UIGlassEffect
             switch style {
             case .regular: effect = UIGlassEffect(style: .regular)
+            case .strong:  effect = UIGlassEffect(style: .regular)
             case .clear:   effect = UIGlassEffect(style: .clear)
             }
             effect.isInteractive = true
@@ -43,6 +46,8 @@ public enum SystemGlassEffect {
             // but is roughly half the optical density, so the content
             // beneath now reads through the surface.
             blurStyle = isDark ? .systemThinMaterialDark : .systemThinMaterialLight
+        case .strong:
+            blurStyle = isDark ? .systemMaterialDark : .systemMaterialLight
         case .clear:
             blurStyle = isDark ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight
         }

@@ -75,7 +75,7 @@ public extension AetherSearchControllerDelegate {
 /// ## Tab Bar Integration
 ///
 /// When the owning `ViewController` is inside a `AetherTabBarController`,
-/// the tab bar's search showcase button can trigger activation:
+/// the tab bar's search item button can trigger activation:
 ///
 /// ```swift
 /// override func tabBarActivateSearch() {
@@ -407,29 +407,38 @@ public final class AetherSearchController: NSObject, UITextFieldDelegate {
             let edgeH: CGFloat = 48.0
             let edgeFrame = CGRect(x: 0, y: y - edgeH + 72, width: view.bounds.width, height: 72)
             edge.frame = edgeFrame
-            // Pull theme parameters from the host VC's nav bar so the
-            // bottom-pill frost matches the chrome on top — same fill
-            // colour, alpha, blur radii. Falls back to the previous
-            // hardcoded values when no nav bar is installed (rare —
-            // search controllers run on screens that have one).
-            let navTheme = viewController?.navigationBarView?.presentationData.theme
-            let content: UIColor = navTheme?.edgeEffectColor
-                ?? navTheme?.opaqueBackgroundColor
-                ?? .systemBackground
-            let alpha: CGFloat = navTheme?.edgeEffectAlpha ?? 0.65
-            let radiusEdge: CGFloat = navTheme?.edgeEffectBlurRadiusAtEdge ?? 3.0
-            let radiusFade: CGFloat = navTheme?.edgeEffectBlurRadiusAtFade ?? 3.0
+            let searchAppearance = viewController?.resolvedSearchAppearance(
+                surface: .bottomSearch,
+                placement: .standaloneBottom
+            ) ?? AetherSearchAppearanceResolver.resolve(
+                context: AetherAppearanceResolutionContext(
+                    appearance: AetherAppearance.runtimeCurrent,
+                    surface: .bottomSearch,
+                    placement: .standaloneBottom,
+                    traitCollection: view.traitCollection
+                )
+            )
+            let edgeAppearance = searchAppearance.edgeEffect
+            let hasVisibleEdgeEffect = edgeAppearance.alpha > 0.001
+                || edgeAppearance.blurRadiusAtEdge > 0.001
+                || edgeAppearance.blurRadiusAtFade > 0.001
+            let content: UIColor = edgeAppearance.tintColor ?? .systemBackground
+            edge.clipsToBounds = edgeAppearance.style != .regular
+            let usesProgressiveBlur = edgeAppearance.style == .regular
             edge.update(
-                content: content,
-                blur: true,
-                alpha: alpha,
+                content: hasVisibleEdgeEffect ? content : .clear,
+                blur: hasVisibleEdgeEffect,
+                alpha: edgeAppearance.alpha,
                 rect: CGRect(origin: .zero, size: edgeFrame.size),
                 edge: .bottom,
-                edgeSize: edgeH,
-                blurRadiusAtEdge: radiusEdge,
-                blurRadiusAtFade: radiusFade,
+                edgeSize: usesProgressiveBlur ? edgeH : 0.0,
+                blurRadiusAtEdge: edgeAppearance.blurRadiusAtEdge,
+                blurRadiusAtFade: usesProgressiveBlur ? 0.0 : edgeAppearance.blurRadiusAtEdge,
+                solidBlur: !usesProgressiveBlur,
+                minimumFadeAlpha: usesProgressiveBlur ? 0.0 : 0.04,
                 transition: .immediate
             )
+            edge.isHidden = !hasVisibleEdgeEffect
         }
 
         let frame = CGRect(x: side, y: y, width: view.bounds.width - side * 2, height: h)
@@ -520,9 +529,38 @@ public final class AetherSearchController: NSObject, UITextFieldDelegate {
             let edgeH: CGFloat = 48.0
             let edgeFrame = CGRect(x: 0, y: baseY - edgeH, width: view.bounds.width, height: view.bounds.height - baseY + edgeH)
             edge.frame = edgeFrame
-            edge.update(content: .systemBackground, blur: true, alpha: 0.65,
-                        rect: CGRect(origin: .zero, size: edgeFrame.size),
-                        edge: .bottom, edgeSize: edgeH, blurRadiusAtEdge: 3.0, blurRadiusAtFade: 3.0, transition: .immediate)
+            let searchAppearance = viewController?.resolvedSearchAppearance(
+                surface: .bottomSearch,
+                placement: .standaloneBottom
+            ) ?? AetherSearchAppearanceResolver.resolve(
+                context: AetherAppearanceResolutionContext(
+                    appearance: AetherAppearance.runtimeCurrent,
+                    surface: .bottomSearch,
+                    placement: .standaloneBottom,
+                    traitCollection: view.traitCollection
+                )
+            )
+            let edgeAppearance = searchAppearance.edgeEffect
+            let hasVisibleEdgeEffect = edgeAppearance.alpha > 0.001
+                || edgeAppearance.blurRadiusAtEdge > 0.001
+                || edgeAppearance.blurRadiusAtFade > 0.001
+            let content = edgeAppearance.tintColor ?? .systemBackground
+            edge.clipsToBounds = edgeAppearance.style != .regular
+            let usesProgressiveBlur = edgeAppearance.style == .regular
+            edge.update(
+                content: hasVisibleEdgeEffect ? content : .clear,
+                blur: hasVisibleEdgeEffect,
+                alpha: edgeAppearance.alpha,
+                rect: CGRect(origin: .zero, size: edgeFrame.size),
+                edge: .bottom,
+                edgeSize: usesProgressiveBlur ? edgeH : 0.0,
+                blurRadiusAtEdge: edgeAppearance.blurRadiusAtEdge,
+                blurRadiusAtFade: usesProgressiveBlur ? 0.0 : edgeAppearance.blurRadiusAtEdge,
+                solidBlur: !usesProgressiveBlur,
+                minimumFadeAlpha: usesProgressiveBlur ? 0.0 : 0.04,
+                transition: .immediate
+            )
+            edge.isHidden = !hasVisibleEdgeEffect
         }
     }
 

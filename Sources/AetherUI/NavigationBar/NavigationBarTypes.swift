@@ -7,8 +7,9 @@ public enum NavigationBarStyle {
     case glass
 }
 
-public enum NavigationBarGlassStyle {
+public enum NavigationBarGlassStyle: Equatable {
     case `default`
+    case strong
     case clear
 }
 
@@ -38,6 +39,7 @@ public final class NavigationBarTheme {
     public let edgeEffectAlpha: CGFloat
     public let edgeEffectBlurRadiusAtEdge: CGFloat
     public let edgeEffectBlurRadiusAtFade: CGFloat
+    public let edgeEffectSolidBlur: Bool
     public let edgeEffectStyle: SystemGlassEffectStyle
 
     // Layout
@@ -58,11 +60,12 @@ public final class NavigationBarTheme {
         edgeEffectColor: UIColor? = nil,
         accentButtonColor: UIColor = .systemBlue,
         accentForegroundColor: UIColor = .white,
-        style: NavigationBarStyle = .legacy,
+        style: NavigationBarStyle = .glass,
         glassStyle: NavigationBarGlassStyle = .default,
         edgeEffectAlpha: CGFloat = 0.75,
         edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
         edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectSolidBlur: Bool = false,
         edgeEffectStyle: SystemGlassEffectStyle = .regular,
         defaultContentHeight: CGFloat = 60.0
     ) {
@@ -85,16 +88,17 @@ public final class NavigationBarTheme {
         self.edgeEffectAlpha = edgeEffectAlpha
         self.edgeEffectBlurRadiusAtEdge = edgeEffectBlurRadiusAtEdge
         self.edgeEffectBlurRadiusAtFade = edgeEffectBlurRadiusAtFade
+        self.edgeEffectSolidBlur = edgeEffectSolidBlur
         self.edgeEffectStyle = edgeEffectStyle
         self.defaultContentHeight = defaultContentHeight
     }
 
     public func withUpdatedBackgroundColor(_ color: UIColor) -> NavigationBarTheme {
-        return NavigationBarTheme(overallDarkAppearance: overallDarkAppearance, buttonColor: buttonColor, disabledButtonColor: disabledButtonColor, primaryTextColor: primaryTextColor, backgroundColor: color, opaqueBackgroundColor: opaqueBackgroundColor, enableBackgroundBlur: false, separatorColor: separatorColor, badgeBackgroundColor: badgeBackgroundColor, badgeStrokeColor: badgeStrokeColor, badgeTextColor: badgeTextColor, edgeEffectColor: edgeEffectColor, accentButtonColor: accentButtonColor, accentForegroundColor: accentForegroundColor, style: style, glassStyle: glassStyle, edgeEffectAlpha: edgeEffectAlpha, edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge, edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade, edgeEffectStyle: edgeEffectStyle, defaultContentHeight: defaultContentHeight)
+        return NavigationBarTheme(overallDarkAppearance: overallDarkAppearance, buttonColor: buttonColor, disabledButtonColor: disabledButtonColor, primaryTextColor: primaryTextColor, backgroundColor: color, opaqueBackgroundColor: opaqueBackgroundColor, enableBackgroundBlur: false, separatorColor: separatorColor, badgeBackgroundColor: badgeBackgroundColor, badgeStrokeColor: badgeStrokeColor, badgeTextColor: badgeTextColor, edgeEffectColor: edgeEffectColor, accentButtonColor: accentButtonColor, accentForegroundColor: accentForegroundColor, style: style, glassStyle: glassStyle, edgeEffectAlpha: edgeEffectAlpha, edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge, edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade, edgeEffectSolidBlur: edgeEffectSolidBlur, edgeEffectStyle: edgeEffectStyle, defaultContentHeight: defaultContentHeight)
     }
 
     public func withUpdatedSeparatorColor(_ color: UIColor) -> NavigationBarTheme {
-        return NavigationBarTheme(overallDarkAppearance: overallDarkAppearance, buttonColor: buttonColor, disabledButtonColor: disabledButtonColor, primaryTextColor: primaryTextColor, backgroundColor: backgroundColor, opaqueBackgroundColor: opaqueBackgroundColor, enableBackgroundBlur: enableBackgroundBlur, separatorColor: color, badgeBackgroundColor: badgeBackgroundColor, badgeStrokeColor: badgeStrokeColor, badgeTextColor: badgeTextColor, edgeEffectColor: edgeEffectColor, accentButtonColor: accentButtonColor, accentForegroundColor: accentForegroundColor, style: style, glassStyle: glassStyle, edgeEffectAlpha: edgeEffectAlpha, edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge, edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade, edgeEffectStyle: edgeEffectStyle, defaultContentHeight: defaultContentHeight)
+        return NavigationBarTheme(overallDarkAppearance: overallDarkAppearance, buttonColor: buttonColor, disabledButtonColor: disabledButtonColor, primaryTextColor: primaryTextColor, backgroundColor: backgroundColor, opaqueBackgroundColor: opaqueBackgroundColor, enableBackgroundBlur: enableBackgroundBlur, separatorColor: color, badgeBackgroundColor: badgeBackgroundColor, badgeStrokeColor: badgeStrokeColor, badgeTextColor: badgeTextColor, edgeEffectColor: edgeEffectColor, accentButtonColor: accentButtonColor, accentForegroundColor: accentForegroundColor, style: style, glassStyle: glassStyle, edgeEffectAlpha: edgeEffectAlpha, edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge, edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade, edgeEffectSolidBlur: edgeEffectSolidBlur, edgeEffectStyle: edgeEffectStyle, defaultContentHeight: defaultContentHeight)
     }
 
     public static func liquidGlass(
@@ -108,6 +112,7 @@ public final class NavigationBarTheme {
         edgeEffectAlpha: CGFloat = 0.75,
         edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
         edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectSolidBlur: Bool = false,
         edgeEffectStyle: SystemGlassEffectStyle = .regular
     ) -> NavigationBarTheme {
         return NavigationBarTheme(
@@ -130,6 +135,7 @@ public final class NavigationBarTheme {
             edgeEffectAlpha: edgeEffectAlpha,
             edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge,
             edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade,
+            edgeEffectSolidBlur: edgeEffectSolidBlur,
             edgeEffectStyle: edgeEffectStyle
         )
     }
@@ -145,6 +151,7 @@ public final class NavigationBarTheme {
         edgeEffectAlpha: CGFloat = 0.75,
         edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
         edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectSolidBlur: Bool = false,
         edgeEffectStyle: SystemGlassEffectStyle = .regular
     ) -> NavigationBarTheme {
         return liquidGlass(
@@ -158,6 +165,7 @@ public final class NavigationBarTheme {
             edgeEffectAlpha: edgeEffectAlpha,
             edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge,
             edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade,
+            edgeEffectSolidBlur: edgeEffectSolidBlur,
             edgeEffectStyle: edgeEffectStyle
         )
     }
@@ -173,6 +181,7 @@ public final class NavigationBarTheme {
         edgeEffectAlpha: CGFloat = 0.75,
         edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
         edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectSolidBlur: Bool = false,
         edgeEffectStyle: SystemGlassEffectStyle = .regular
     ) -> NavigationBarTheme {
         return liquidGlass(
@@ -186,6 +195,7 @@ public final class NavigationBarTheme {
             edgeEffectAlpha: edgeEffectAlpha,
             edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge,
             edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade,
+            edgeEffectSolidBlur: edgeEffectSolidBlur,
             edgeEffectStyle: edgeEffectStyle
         )
     }
@@ -201,6 +211,7 @@ public final class NavigationBarTheme {
         edgeEffectAlpha: CGFloat = 0.75,
         edgeEffectBlurRadiusAtEdge: CGFloat = 2.0,
         edgeEffectBlurRadiusAtFade: CGFloat = 0.0,
+        edgeEffectSolidBlur: Bool = false,
         edgeEffectStyle: SystemGlassEffectStyle = .regular
     ) -> NavigationBarTheme {
         return liquidGlass(
@@ -214,6 +225,7 @@ public final class NavigationBarTheme {
             edgeEffectAlpha: edgeEffectAlpha,
             edgeEffectBlurRadiusAtEdge: edgeEffectBlurRadiusAtEdge,
             edgeEffectBlurRadiusAtFade: edgeEffectBlurRadiusAtFade,
+            edgeEffectSolidBlur: edgeEffectSolidBlur,
             edgeEffectStyle: edgeEffectStyle
         )
     }
