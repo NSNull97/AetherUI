@@ -407,6 +407,38 @@ private final class ChatRowItem: AetherListItem {
     var approximateHeight: CGFloat { height }
     var estimatedHeight: CGFloat { height }
     var selectable: Bool { true }
+    var swipeActions: AetherListSwipeActions {
+        AetherListSwipeActions(
+            left: [
+                AetherListSwipeAction(
+                    key: "unread",
+                    title: "Unread",
+                    icon: Self.swipeIcon("bubble.left.fill"),
+                    backgroundColor: .systemBlue
+                )
+            ],
+            right: [
+                AetherListSwipeAction(
+                    key: "mute",
+                    title: "Mute",
+                    icon: Self.swipeIcon("speaker.slash.fill"),
+                    backgroundColor: .systemOrange
+                ),
+                AetherListSwipeAction(
+                    key: "delete",
+                    title: "Delete",
+                    icon: Self.swipeIcon("trash.fill"),
+                    backgroundColor: .systemRed
+                ),
+                AetherListSwipeAction(
+                    key: "archive",
+                    title: "Archive",
+                    icon: Self.swipeIcon("archivebox.fill"),
+                    backgroundColor: .systemGray
+                )
+            ]
+        )
+    }
 
     func createNode(
         params: AetherListItemLayoutParams,
@@ -449,6 +481,17 @@ private final class ChatRowItem: AetherListItem {
             }
             responder = current.next
         }
+    }
+
+    func swipeActionSelected(_ action: AetherListSwipeAction, listView: AetherListView, isFullSwipe: Bool) {
+        AetherToastController(content: .text("\(action.title): \(name)")).present()
+    }
+
+    private static func swipeIcon(_ systemName: String) -> AetherListSwipeAction.Icon {
+        guard let image = UIImage(systemName: systemName) else {
+            return .none
+        }
+        return .image(image)
     }
 }
 
@@ -569,6 +612,7 @@ private final class ChatRowNode: AetherListItemNode {
 
 private final class ChatDetailController: AetherViewController {
     private let chat: ChatRowItem
+    private let chatBackgroundView = ChatBackgroundView(settings: .telegramClassic)
     /// AetherListView replaces the old UITableView — every message
     /// is now a `MessageItem` / `MessageNode` pair, so deletion can
     /// pipe through the regular transaction API and inherit the
@@ -590,6 +634,7 @@ private final class ChatDetailController: AetherViewController {
         "Привет!", "Как дела?", "Всё ок, ты как?",
         "Слушай, видел новый билд?", "Запустил только что — огонь",
         "Особенно эффект удаления 🔥", "Прям как в Telegram",
+        "Документация тут: https://telegram.org/blog/backgrounds-2-0",
 //        "А скрытие таббара работает?", "Да, тут видишь",
 //        "Окей, тестим дальше", "Пора обедать", "Согласен 😋",
 //        "Что там по проекту?", "Завтра релиз", "Понял, готовлюсь",
@@ -631,10 +676,12 @@ private final class ChatDetailController: AetherViewController {
         super.viewDidLoad()
         navigationItem.title = chat.name
         view.backgroundColor = .systemBackground
+        view.addSubview(chatBackgroundView)
 
         listView = AetherListView()
         listView.frame = view.bounds
         listView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        listView.backgroundColor = .clear
         listView.stackFromBottom = true
         // iOS 26 keyboard is out-of-process — only UIKit's
         // `.interactive` dismiss can physically drag it. The window
@@ -717,6 +764,7 @@ private final class ChatDetailController: AetherViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        chatBackgroundView.frame = view.bounds
         // Sync list-bottom inset to the input bar's actual frame —
         // when the keyboard is dragged interactively the keyboard
         // layout guide pushes auto-layout, which fires this method
@@ -731,7 +779,7 @@ private final class ChatDetailController: AetherViewController {
 
     private func makeInputBar() -> UIView {
         let bar = UIView()
-        bar.backgroundColor = .secondarySystemBackground
+        bar.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.94)
 
         let separator = UIView()
         separator.backgroundColor = .separator
@@ -922,14 +970,31 @@ private final class MessageItem: AetherListItem {
     private static let labelHorizontalInset: CGFloat = 12
     private static let labelVerticalInset: CGFloat = 8
 
+    fileprivate func attributedText(textColor: UIColor, linkColor: UIColor) -> NSAttributedString {
+        let base = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: Self.labelFont,
+                .foregroundColor: textColor
+            ]
+        )
+        return TextNode.detectLinks(
+            in: base,
+            linkAttributes: [
+                .foregroundColor: linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ]
+        )
+    }
+
     fileprivate func computeLayout(width: CGFloat) -> AetherListItemNodeLayout {
         // Bubble caps at 75% of the screen — same proportion the
         // old UITableView cell used.
         let availableLabelWidth = max(0, width * 0.75 - Self.labelHorizontalInset * 2)
-        let labelHeight = ceil((text as NSString).boundingRect(
+        let attributedText = self.attributedText(textColor: .label, linkColor: .systemBlue)
+        let labelHeight = ceil(attributedText.boundingRect(
             with: CGSize(width: availableLabelWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: Self.labelFont],
             context: nil
         ).height)
         let bubbleHeight = labelHeight + Self.labelVerticalInset * 2
@@ -963,9 +1028,9 @@ private final class MessageItem: AetherListItem {
     }
 }
 
-private final class MessageNode: AetherListItemNode {
+private final class MessageNode: AetherListItemNode, UIGestureRecognizerDelegate {
     private let bubble = UIView()
-    private let label = UILabel()
+    private let textNode = TextNode()
     private weak var currentItem: MessageItem?
 
     /// Anchor for the context menu's preview — exposed publicly
@@ -990,24 +1055,38 @@ private final class MessageNode: AetherListItemNode {
 
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPress.minimumPressDuration = 0.3
+        longPress.delegate = self
         bubble.addGestureRecognizer(longPress)
 
-        label.font = .systemFont(ofSize: 15)
-        label.numberOfLines = 0
-        bubble.addSubview(label)
+        textNode.maximumNumberOfLines = 0
+        textNode.linkHighlightColor = UIColor.systemBlue.withAlphaComponent(0.20)
+        textNode.linkTapAction = { value, _ in
+            if let url = value as? URL {
+                UIApplication.shared.open(url)
+            }
+        }
+        textNode.linkLongTapAction = { value, _ in
+            if let url = value as? URL {
+                UIPasteboard.general.string = url.absoluteString
+                AetherToastController(content: .text("Ссылка скопирована")).present()
+            }
+        }
+        bubble.addSubview(textNode)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func configure(item: MessageItem) {
         currentItem = item
-        label.text = item.text
         if item.isIncoming {
-            bubble.backgroundColor = .secondarySystemBackground
-            label.textColor = .label
+            bubble.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.88)
+            textNode.attributedText = item.attributedText(textColor: .label, linkColor: .systemBlue)
         } else {
             bubble.backgroundColor = item.accent
-            label.textColor = .white
+            textNode.attributedText = item.attributedText(
+                textColor: .white,
+                linkColor: UIColor.white.withAlphaComponent(0.92)
+            )
         }
         bubble.alpha = 1
         setNeedsLayout()
@@ -1022,13 +1101,13 @@ private final class MessageNode: AetherListItemNode {
         let labelPadV: CGFloat = 8
         let maxBubbleWidth = bounds.width * 0.75
         let labelMaxWidth = max(0, maxBubbleWidth - labelPadH * 2)
-        let labelSize = label.sizeThatFits(CGSize(width: labelMaxWidth, height: .greatestFiniteMagnitude))
+        let labelSize = textNode.sizeThatFits(CGSize(width: labelMaxWidth, height: .greatestFiniteMagnitude))
         let bubbleWidth = labelSize.width + labelPadH * 2
         let bubbleHeight = ceil(labelSize.height) + labelPadV * 2
         let bubbleX: CGFloat = item.isIncoming ? bubblePadH : bounds.width - bubblePadH - bubbleWidth
         let bubbleY = cellPad
         bubble.frame = CGRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
-        label.frame = CGRect(x: labelPadH, y: labelPadV, width: bubbleWidth - labelPadH * 2, height: bubbleHeight - labelPadV * 2)
+        textNode.frame = CGRect(x: labelPadH, y: labelPadV, width: bubbleWidth - labelPadH * 2, height: bubbleHeight - labelPadV * 2)
     }
 
     @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
@@ -1042,5 +1121,15 @@ private final class MessageNode: AetherListItemNode {
             }
             responder = current.next
         }
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        let location = gestureRecognizer.location(in: textNode)
+        guard textNode.bounds.contains(location),
+              let (_, attributes) = textNode.attributesAtPoint(location),
+              attributes[.link] != nil || attributes[.textNodeLink] != nil else {
+            return true
+        }
+        return false
     }
 }

@@ -161,6 +161,20 @@ public class GlassBackgroundView: UIView {
         case roundedRect(cornerRadius: CGFloat)
     }
 
+    private enum CornerRadiusSource: Equatable {
+        case fixed(CGFloat)
+        case capsule
+
+        func resolved(for size: CGSize) -> CGFloat {
+            switch self {
+            case let .fixed(radius):
+                return radius
+            case .capsule:
+                return size.height / 2.0
+            }
+        }
+    }
+
     public struct GlassParams: Equatable {
         public let cornerRadius: CGFloat
         public let keepRoundedCorners: Bool
@@ -228,17 +242,7 @@ public class GlassBackgroundView: UIView {
             return
         }
         self.style = style
-        if let memo = lastUpdateMemo {
-            update(
-                size: memo.size,
-                cornerRadius: memo.cornerRadius,
-                isDark: resolvedIsDark,
-                tintColor: memo.tintColor,
-                isInteractive: memo.isInteractive,
-                isVisible: memo.isVisible,
-                transition: .immediate
-            )
-        } else {
+        if !reapplyLastUpdate() {
             setNeedsLayout()
         }
     }
@@ -271,21 +275,9 @@ public class GlassBackgroundView: UIView {
     public var isDarkOverride: Bool? {
         didSet {
             if isDarkOverride == oldValue { return }
-            // Re-apply immediately so an explicit override takes effect
-            // without waiting for the next layout pass or trait change.
-            guard let memo = lastUpdateMemo else {
+            if !reapplyLastUpdate() {
                 setNeedsLayout()
-                return
             }
-            update(
-                size: memo.size,
-                cornerRadius: memo.cornerRadius,
-                isDark: resolvedIsDark,
-                tintColor: memo.tintColor,
-                isInteractive: memo.isInteractive,
-                isVisible: memo.isVisible,
-                transition: .immediate
-            )
         }
     }
 
@@ -300,12 +292,18 @@ public class GlassBackgroundView: UIView {
     /// `update(...)`; the latter also writes this through so subsequent
     /// layout passes respect the explicit value.
     public var glassCornerRadius: CGFloat? {
-        didSet { setNeedsLayout() }
+        didSet {
+            guard glassCornerRadius != oldValue else { return }
+            invalidateLayoutConfiguration()
+        }
     }
 
     /// Tint color used by `layoutSubviews`-driven auto-update.
     public var glassTintColor: TintColor = .init(kind: .panel) {
-        didSet { setNeedsLayout() }
+        didSet {
+            guard glassTintColor != oldValue else { return }
+            invalidateLayoutConfiguration()
+        }
     }
 
     /// Interactive glass flag used by `layoutSubviews`-driven auto-update.
@@ -315,7 +313,10 @@ public class GlassBackgroundView: UIView {
     /// `glassIsInteractive = false` after init to opt a specific surface
     /// out of the deformation.
     public var glassIsInteractive: Bool = true {
-        didSet { setNeedsLayout() }
+        didSet {
+            guard glassIsInteractive != oldValue else { return }
+            invalidateLayoutConfiguration()
+        }
     }
 
     /// Optional stroke override for the glass outline.
@@ -387,12 +388,25 @@ public class GlassBackgroundView: UIView {
     /// `traitCollectionDidChange` and `layoutSubviews` to rebuild params.
     private struct UpdateMemo {
         let size: CGSize
-        let cornerRadius: CGFloat
+        let cornerRadiusSource: CornerRadiusSource
+        let tintColor: TintColor
+        let isInteractive: Bool
+        let isVisible: Bool
+        let layoutConfigurationRevision: Int
+
+        var cornerRadius: CGFloat {
+            cornerRadiusSource.resolved(for: size)
+        }
+    }
+    private var lastUpdateMemo: UpdateMemo?
+    private var layoutConfigurationRevision: Int = 0
+
+    private struct LayoutConfiguration {
+        let cornerRadiusSource: CornerRadiusSource
         let tintColor: TintColor
         let isInteractive: Bool
         let isVisible: Bool
     }
-    private var lastUpdateMemo: UpdateMemo?
 
     // Legacy back-compat: expose GlassParams for callers that read it.
     public var glassParams: GlassParams? {
@@ -401,6 +415,50 @@ public class GlassBackgroundView: UIView {
         case let .roundedRect(cornerRadius):
             return GlassParams(cornerRadius: cornerRadius, keepRoundedCorners: true)
         }
+    }
+
+    private var allowsBackgroundHitTesting: Bool {
+        params.map { $0.isInteractive && $0.isVisible } ?? glassIsInteractive
+    }
+
+    private func invalidateLayoutConfiguration() {
+        layoutConfigurationRevision += 1
+        setNeedsLayout()
+    }
+
+    @discardableResult
+    private func reapplyLastUpdate(transition: ContainedViewLayoutTransition = .immediate) -> Bool {
+        guard let memo = lastUpdateMemo else {
+            return false
+        }
+        applyUpdate(
+            size: memo.size,
+            cornerRadiusSource: memo.cornerRadiusSource,
+            isDark: resolvedIsDark,
+            tintColor: memo.tintColor,
+            isInteractive: memo.isInteractive,
+            isVisible: memo.isVisible,
+            transition: transition
+        )
+        return true
+    }
+
+    private func layoutConfiguration(for size: CGSize) -> LayoutConfiguration {
+        if let memo = lastUpdateMemo, memo.layoutConfigurationRevision == layoutConfigurationRevision {
+            return LayoutConfiguration(
+                cornerRadiusSource: memo.cornerRadiusSource,
+                tintColor: memo.tintColor,
+                isInteractive: memo.isInteractive,
+                isVisible: memo.isVisible
+            )
+        }
+
+        return LayoutConfiguration(
+            cornerRadiusSource: glassCornerRadius.map(CornerRadiusSource.fixed) ?? .capsule,
+            tintColor: glassTintColor,
+            isInteractive: glassIsInteractive,
+            isVisible: lastUpdateMemo?.isVisible ?? true
+        )
     }
 
     // MARK: Init
@@ -527,7 +585,7 @@ public class GlassBackgroundView: UIView {
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
 
-        guard tracksTraitCollection, let memo = lastUpdateMemo else { return }
+        guard tracksTraitCollection, lastUpdateMemo != nil else { return }
         // Skip when `isDarkOverride` is pinned — trait changes don't matter
         // then, the override is the source of truth.
         if isDarkOverride != nil { return }
@@ -535,15 +593,7 @@ public class GlassBackgroundView: UIView {
         // avoids unnecessary redraws on e.g. content size category changes.
         let previousStyle = previousTraitCollection?.userInterfaceStyle
         if previousStyle == traitCollection.userInterfaceStyle { return }
-        update(
-            size: memo.size,
-            cornerRadius: memo.cornerRadius,
-            isDark: resolvedIsDark,
-            tintColor: memo.tintColor,
-            isInteractive: memo.isInteractive,
-            isVisible: memo.isVisible,
-            transition: .immediate
-        )
+        reapplyLastUpdate()
     }
 
     // MARK: Hit testing
@@ -568,7 +618,7 @@ public class GlassBackgroundView: UIView {
             // search-bar tap, a segment-control scrub) still fire as
             // expected — recognizers walk the ancestor chain regardless
             // of which descendant the hit-test returned.
-            if glassIsInteractive, self.point(inside: point, with: event) {
+            if allowsBackgroundHitTesting, self.point(inside: point, with: event) {
                 return nativeView
             }
             return nil
@@ -588,17 +638,14 @@ public class GlassBackgroundView: UIView {
         // on each layout pass.
         let size = bounds.size
         if size.width > 0, size.height > 0 {
-            let corner = glassCornerRadius ?? lastUpdateMemo?.cornerRadius ?? (size.height / 2.0)
-            let tint = lastUpdateMemo?.tintColor != glassTintColor ? glassTintColor : lastUpdateMemo?.tintColor ?? glassTintColor
-            let interactive = lastUpdateMemo?.isInteractive != glassIsInteractive ? glassIsInteractive : lastUpdateMemo?.isInteractive ?? glassIsInteractive
-            let visible = lastUpdateMemo?.isVisible ?? true
-            update(
+            let configuration = layoutConfiguration(for: size)
+            applyUpdate(
                 size: size,
-                cornerRadius: corner,
+                cornerRadiusSource: configuration.cornerRadiusSource,
                 isDark: resolvedIsDark,
-                tintColor: tint,
-                isInteractive: interactive,
-                isVisible: visible,
+                tintColor: configuration.tintColor,
+                isInteractive: configuration.isInteractive,
+                isVisible: configuration.isVisible,
                 transition: .immediate
             )
         }
@@ -625,9 +672,9 @@ public class GlassBackgroundView: UIView {
         // front and then drive the size/corner via this short form, so
         // hard-coding `false` would silently override their intent on every
         // layout pass.
-        update(
+        applyUpdate(
             size: size,
-            cornerRadius: cornerRadius,
+            cornerRadiusSource: .fixed(cornerRadius),
             isDark: resolvedIsDark,
             tintColor: .init(kind: .panel),
             isInteractive: glassIsInteractive,
@@ -645,14 +692,36 @@ public class GlassBackgroundView: UIView {
         isVisible: Bool = true,
         transition: ContainedViewLayoutTransition
     ) {
+        applyUpdate(
+            size: size,
+            cornerRadiusSource: .fixed(cornerRadius),
+            isDark: isDark,
+            tintColor: tintColor,
+            isInteractive: isInteractive,
+            isVisible: isVisible,
+            transition: transition
+        )
+    }
+
+    private func applyUpdate(
+        size: CGSize,
+        cornerRadiusSource: CornerRadiusSource,
+        isDark: Bool,
+        tintColor: TintColor,
+        isInteractive: Bool,
+        isVisible: Bool,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let cornerRadius = cornerRadiusSource.resolved(for: size)
         // Remember everything except `isDark` so `traitCollectionDidChange`
         // can rebuild the params with a fresh trait-derived isDark.
         self.lastUpdateMemo = UpdateMemo(
             size: size,
-            cornerRadius: cornerRadius,
+            cornerRadiusSource: cornerRadiusSource,
             tintColor: tintColor,
             isInteractive: isInteractive,
-            isVisible: isVisible
+            isVisible: isVisible,
+            layoutConfigurationRevision: layoutConfigurationRevision
         )
         let shape: Shape = .roundedRect(cornerRadius: cornerRadius)
 
@@ -834,73 +903,14 @@ public class GlassBackgroundView: UIView {
                 // with tint / interactive flag. `nativeView` is only allocated
                 // on this path (legacy takes over when liquid design is off),
                 // so no inner OS-gate is needed below.
-                var glassEffect: UIGlassEffect?
-
-                if isVisible {
-                    let value: UIGlassEffect
-                    switch tintColor.kind {
-                    case .panel:
-                        value = UIGlassEffect(style: .regular)
-                        // Slightly weaker tint so UIGlassEffect's own
-                        // material specular stays the dominant effect
-                        // and the surface doesn't look painted-on.
-                        value.tintColor = isDark
-                            ? UIColor(white: 1.0, alpha: style == .prominent ? 0.04 : 0.015)
-                            : UIColor(white: 1.0, alpha: style == .prominent ? 0.12 : 0.06)
-                    case let .custom(style, color):
-                        switch style {
-                        case .default:
-                            value = UIGlassEffect(style: .regular)
-                            value.tintColor = color
-                        case .clear:
-                            value = UIGlassEffect(style: .clear)
-                            value.tintColor = color
-                        }
-                    case .clear:
-                        value = UIGlassEffect(style: .clear)
-                        value.tintColor = isDark ? UIColor(white: 0.0, alpha: 0.18) : nil
-                    }
-                    value.isInteractive = params.isInteractive
-                    glassEffect = value
-                }
-
-                if glassEffect == nil {
-                    if nativeView.effect is UIGlassEffect {
-                        if #available(iOS 26.1, *) {
-                            if transition.isAnimated {
-                                transition.animateView({ nativeView.effect = nil })
-                            } else {
-                                nativeView.effect = nil
-                            }
-                        } else {
-                            if transition.isAnimated {
-                                transition.animateView({ nativeView.effect = UIVisualEffect() })
-                            } else {
-                                nativeView.effect = UIVisualEffect()
-                            }
-                        }
-                    }
-                } else if let desired = glassEffect {
-                    if transition.isAnimated {
-                        if let current = nativeView.effect as? UIGlassEffect,
-                           current.tintColor == desired.tintColor,
-                           current.isInteractive == desired.isInteractive {
-                            // No change to animate.
-                        } else {
-                            transition.animateView({ nativeView.effect = desired })
-                        }
-                    } else {
-                        nativeView.effect = desired
-                    }
-                }
-
-                if isDark {
-                    nativeParamsView.lumaMin = 0.0
-                    nativeParamsView.lumaMax = 0.15
-                } else {
-                    nativeParamsView.lumaMin = 0.8
-                    nativeParamsView.lumaMax = 0.801
-                }
+                let glassEffect = makeNativeGlassEffect(
+                    isDark: isDark,
+                    tintColor: tintColor,
+                    isInteractive: params.isInteractive,
+                    isVisible: isVisible
+                )
+                applyNativeGlassEffect(glassEffect, to: nativeView, transition: transition)
+                applyNativeLuma(isDark: isDark, to: nativeParamsView)
             }
         }
 
@@ -921,6 +931,92 @@ public class GlassBackgroundView: UIView {
         }
 
         transition.setFrame(view: contentContainer, frame: CGRect(origin: .zero, size: size))
+    }
+
+    @available(iOS 26.0, *)
+    private func makeNativeGlassEffect(
+        isDark: Bool,
+        tintColor: TintColor,
+        isInteractive: Bool,
+        isVisible: Bool
+    ) -> UIGlassEffect? {
+        guard isVisible else {
+            return nil
+        }
+
+        let effect: UIGlassEffect
+        switch tintColor.kind {
+        case .panel:
+            effect = UIGlassEffect(style: .regular)
+            // Slightly weaker tint so UIGlassEffect's own material specular
+            // stays dominant and the surface does not look painted on.
+            effect.tintColor = isDark
+                ? UIColor(white: 1.0, alpha: style == .prominent ? 0.04 : 0.015)
+                : UIColor(white: 1.0, alpha: style == .prominent ? 0.12 : 0.06)
+
+        case .clear:
+            effect = UIGlassEffect(style: .clear)
+            effect.tintColor = isDark ? UIColor(white: 0.0, alpha: 0.18) : nil
+
+        case let .custom(customStyle, color):
+            switch customStyle {
+            case .default:
+                effect = UIGlassEffect(style: .regular)
+            case .clear:
+                effect = UIGlassEffect(style: .clear)
+            }
+            effect.tintColor = color
+        }
+
+        effect.isInteractive = isInteractive
+        return effect
+    }
+
+    @available(iOS 26.0, *)
+    private func applyNativeGlassEffect(
+        _ desiredEffect: UIGlassEffect?,
+        to nativeView: UIVisualEffectView,
+        transition: ContainedViewLayoutTransition
+    ) {
+        guard let desiredEffect else {
+            guard nativeView.effect is UIGlassEffect else {
+                return
+            }
+            let clearedEffect: UIVisualEffect?
+            if #available(iOS 26.1, *) {
+                clearedEffect = nil
+            } else {
+                clearedEffect = UIVisualEffect()
+            }
+            if transition.isAnimated {
+                transition.animateView { nativeView.effect = clearedEffect }
+            } else {
+                nativeView.effect = clearedEffect
+            }
+            return
+        }
+
+        if let current = nativeView.effect as? UIGlassEffect,
+           current.tintColor == desiredEffect.tintColor,
+           current.isInteractive == desiredEffect.isInteractive {
+            return
+        }
+
+        if transition.isAnimated {
+            transition.animateView { nativeView.effect = desiredEffect }
+        } else {
+            nativeView.effect = desiredEffect
+        }
+    }
+
+    private func applyNativeLuma(isDark: Bool, to nativeParamsView: EffectSettingsContainerView) {
+        if isDark {
+            nativeParamsView.lumaMin = 0.0
+            nativeParamsView.lumaMax = 0.15
+        } else {
+            nativeParamsView.lumaMin = 0.8
+            nativeParamsView.lumaMax = 0.801
+        }
     }
 
     private static var shouldUseSyntheticStrokeFallback: Bool {

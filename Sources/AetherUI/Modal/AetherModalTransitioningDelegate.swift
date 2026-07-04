@@ -14,10 +14,18 @@ final class AetherModalTransitioningDelegate: NSObject, UIViewControllerTransiti
         presenting: UIViewController,
         source: UIViewController
     ) -> UIViewControllerAnimatedTransitioning? {
+        if let modal = presented as? AetherModalController,
+           let animator = modal.transitionAnimation?.makePresentationAnimator(for: modal) {
+            return animator
+        }
         return AetherModalPresentAnimator()
     }
 
     func animationController(forDismissed dismissed: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+        if let modal = dismissed as? AetherModalController,
+           let animator = modal.transitionAnimation?.makeDismissalAnimator(for: modal) {
+            return animator
+        }
         return AetherModalDismissAnimator()
     }
 }

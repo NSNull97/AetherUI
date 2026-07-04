@@ -18,6 +18,8 @@ arbitration, keyboard handling, embedded navigation stack.
 - Keyboard handling: автоматический подъём footer'а над клавиатурой;
   `primaryScrollView.contentInset.bottom` обновляется на keyboard
   overlap.
+- Custom transition animations: source-to-modal morph из кнопки
+  или полностью свой `UIViewControllerAnimatedTransitioning`.
 - ``AetherModalNavigationController`` — wrapper с встроенным
   ``AetherNavigationController`` для модалок со стеком.
 
@@ -194,6 +196,65 @@ modal.setDetent(.stage2, animated: true)
 dismiss(animated: true)
 ```
 
+## Custom transition animations
+
+По умолчанию модалка открывается как bottom sheet снизу. Для morph
+из конкретной кнопки в модальное окно используйте встроенный source
+transition:
+
+```swift
+let modal = AetherModalNavigationController(
+    rootViewController: AttachmentsController(),
+    config: .init(detents: [.stage1], initialDetent: .stage1)
+)
+modal.useSourceTransition(from: attachmentButton)
+present(modal, animated: true)
+```
+
+Если source view живёт не дольше самой кнопки или frame уже рассчитан,
+можно передать frame в window coordinates:
+
+```swift
+let frame = attachmentButton.convert(attachmentButton.bounds, to: nil)
+modal.useSourceTransition(sourceFrameInWindow: frame)
+```
+
+Тонкая настройка:
+
+```swift
+modal.useSourceTransition(
+    from: attachmentButton,
+    configuration: .init(
+        presentationDuration: 0.5,
+        dismissalDuration: 0.24,
+        overscaleAmount: 0.018,
+        sourceCornerRadius: 22,
+        targetCornerRadius: 34
+    )
+)
+```
+
+Для полностью своей анимации присвойте объект, реализующий
+``AetherModalTransitionAnimation``:
+
+```swift
+final class MyModalTransition: AetherModalTransitionAnimation {
+    func makePresentationAnimator(
+        for modalController: AetherModalController
+    ) -> UIViewControllerAnimatedTransitioning? {
+        MyPresentAnimator()
+    }
+
+    func makeDismissalAnimator(
+        for modalController: AetherModalController
+    ) -> UIViewControllerAnimatedTransitioning? {
+        MyDismissAnimator()
+    }
+}
+
+modal.transitionAnimation = MyModalTransition()
+```
+
 ## Delegate
 
 ```swift
@@ -305,9 +366,12 @@ scroll arbitration).
 | `footerEdgeFadeHeight` / `footerEdgeTintColor` / `footerEdgeBlurRadius` | Кастомизация frost'а. |
 | `primaryScrollView` | Scroll view для arbitration + keyboard handling. |
 | `delegate` | Delegate. |
+| `transitionAnimation` | Optional custom present/dismiss animation provider. |
 | `currentDetent` | Текущий detent (read-only). |
 | `currentDetentProgress` | Прогресс drag'а. |
 | `setDetent(_:animated:)` | Программное переключение. |
+| `useSourceTransition(from:)` | Source-to-modal morph из `UIView`. |
+| `useSourceTransition(sourceFrameInWindow:)` | Source-to-modal morph из frame в window coordinates. |
 | `grabberContainerHeight` (static) | Высота grabber-полосы (17pt). |
 
 ### ``AetherModalControllerDelegate``
@@ -331,6 +395,17 @@ scroll arbitration).
 ### ``AetherModalContent`` (протокол)
 
 См. таблицу свойств выше.
+
+### ``AetherModalTransitionAnimation`` (протокол)
+
+Фабрика для кастомных `UIViewControllerAnimatedTransitioning` на
+presentation и dismissal. Верните `nil` для стороны, где нужно оставить
+default bottom-sheet animation.
+
+### ``AetherModalSourceTransition``
+
+Готовая реализация ``AetherModalTransitionAnimation`` для morph-а
+source view/frame в модалку и закрытия обратно в source.
 
 ## Edge cases
 

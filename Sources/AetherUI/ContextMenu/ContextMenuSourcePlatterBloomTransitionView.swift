@@ -34,6 +34,7 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
     private var animationFrom: CGFloat = 0
     private var animationTo: CGFloat = 0
     private var animationDirection: CGFloat = 1
+    private var animationDampingRatio: CGFloat = 0.65
     private var animationCompletion: (() -> Void)?
 
     init(
@@ -145,20 +146,20 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
         updateGeometry(progress: self.progress)
     }
 
-    func animateExpand(duration: TimeInterval, damping _: CGFloat, completion: (() -> Void)? = nil) {
+    func animateExpand(duration: TimeInterval, damping: CGFloat, completion: (() -> Void)? = nil) {
         if let frozenProgress = Self.debugFrozenProgress {
             setProgress(frozenProgress)
             completion?()
             return
         }
-        animateProgress(to: 1, duration: duration) { [weak self] in
+        animateProgress(to: 1, duration: duration, dampingRatio: damping) { [weak self] in
             self?.finishToFinalMenu()
             completion?()
         }
     }
 
-    func animateCollapse(duration: TimeInterval, damping _: CGFloat, completion: (() -> Void)? = nil) {
-        animateProgress(to: 0, duration: duration) { [weak self] in
+    func animateCollapse(duration: TimeInterval, damping: CGFloat, completion: (() -> Void)? = nil) {
+        animateProgress(to: 0, duration: duration, dampingRatio: damping) { [weak self] in
             self?.cancelOrDismiss()
             completion?()
         }
@@ -448,7 +449,7 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
                     : Self.dampedSpring01(
                         t,
                         response: 0.96,
-                        dampingRatio: 0.70,
+                        dampingRatio: animationDampingRatio,
                         overshootLimit: 1.046
                     )
             )
@@ -491,13 +492,20 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
             width: Self.lerpUnclamped(pulsedSize.width, targetSize.width, finalLockT),
             height: Self.lerpUnclamped(pulsedSize.height, targetSize.height, finalLockT)
         )
+        let targetIsStrictlyBelowSource = targetMenuFrameInOverlay.minY >= startFrame.maxY
+        let targetIsStrictlyAboveSource = targetMenuFrameInOverlay.maxY <= startFrame.minY
+        let targetOverlapsSourceVertically = !targetIsStrictlyBelowSource && !targetIsStrictlyAboveSource
+        let verticalCurveBias: CGFloat = targetOverlapsSourceVertically
+            ? 0.0
+            : (targetCenter.y >= sourceCenter.y ? 1.0 : -1.0)
+
         let fluidCenter = Self.fluidCurvePoint(
             from: sourceCenter,
             to: targetCenter,
             flow: flowVector,
             travelT: travelT,
             distance: distance,
-            lowerBias: targetCenter.y >= sourceCenter.y ? 1.0 : -1.0,
+            lowerBias: verticalCurveBias,
             reduceMotion: reduceMotion
         )
         var currentFrame = CGRect(
@@ -506,9 +514,12 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
             width: currentSize.width,
             height: currentSize.height
         )
-        if targetCenter.y >= sourceCenter.y, currentFrame.minY < startFrame.minY {
+        // Only pin when the menu is fully outside the source. Tall menus
+        // often cover the source while their center still sits below it;
+        // center-based pinning keeps them too low until the final lock.
+        if targetIsStrictlyBelowSource, currentFrame.minY < startFrame.minY {
             currentFrame.origin.y += startFrame.minY - currentFrame.minY
-        } else if targetCenter.y < sourceCenter.y, currentFrame.maxY > startFrame.maxY {
+        } else if targetIsStrictlyAboveSource, currentFrame.maxY > startFrame.maxY {
             currentFrame.origin.y -= currentFrame.maxY - startFrame.maxY
         }
         let circleLikeRadius = min(currentFrame.width, currentFrame.height) * 0.5
@@ -570,12 +581,14 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
     private func animateProgress(
         to target: CGFloat,
         duration: TimeInterval,
+        dampingRatio: CGFloat,
         completion: (() -> Void)?
     ) {
         cancelAnimation()
         animationFrom = progress
         animationTo = target
         animationDirection = target >= animationFrom ? 1 : -1
+        animationDampingRatio = dampingRatio
         animationCompletion = completion
 
         CATransaction.begin()
@@ -585,8 +598,8 @@ final class ContextMenuSourcePlatterBloomTransitionView: UIView {
         CATransaction.commit()
 
         let timing = UICubicTimingParameters(
-            controlPoint1: CGPoint(x: 0.0, y: 0.0),
-            controlPoint2: CGPoint(x: 1.0, y: 1.0)
+            controlPoint1: CGPoint(x: 0.2, y: 0.8),
+            controlPoint2: CGPoint(x: 0.2, y: 1.0)
         )
         let animator = UIViewPropertyAnimator(duration: max(0.001, duration), timingParameters: timing)
         animator.addAnimations { [weak self] in

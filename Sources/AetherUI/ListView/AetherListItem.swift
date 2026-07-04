@@ -58,6 +58,16 @@ public protocol AetherListItem: AnyObject {
     /// `headerAccessoryItem`.
     var headerAccessoryItem: Any? { get }
 
+    /// Telegram-style swipe actions displayed behind the row during
+    /// horizontal swipes. Positive offsets reveal `left`, negative offsets
+    /// reveal `right`.
+    var swipeActions: AetherListSwipeActions { get }
+
+    /// Called when one of the row's swipe actions is selected. `isFullSwipe`
+    /// is true when the user overswiped far enough to trigger the expanded
+    /// boundary action.
+    func swipeActionSelected(_ action: AetherListSwipeAction, listView: AetherListView, isFullSwipe: Bool)
+
     /// Called when the item is selected.
     func selected(listView: AetherListView)
 
@@ -113,6 +123,8 @@ public extension AetherListItem {
     var selectable: Bool { false }
     var accessoryItem: Any? { nil }
     var headerAccessoryItem: Any? { nil }
+    var swipeActions: AetherListSwipeActions { .none }
+    func swipeActionSelected(_ action: AetherListSwipeAction, listView: AetherListView, isFullSwipe: Bool) {}
     func selected(listView: AetherListView) {}
     func performSecondaryAction(listView: AetherListView) {}
     var isFloatingHeader: Bool { false }

@@ -25,6 +25,9 @@ public final class MenuGlassSurfaceView: UIView {
     private var glassInteractionTransform: CGAffineTransform = .identity
     private var fallbackInteractionRecognizer: GlassHighlightGestureRecognizer?
     private var surfaceCornerRadius: CGFloat = 0
+    private var forcesRoundedBoundsClip = false
+    private var suppressedNativeEffect: UIVisualEffect?
+    private var isGooeyMaterialSuppressed = false
     var routesTouchesToGlassSurface = false
 
     public init(isDark: Bool, effectsEnabled: Bool = true) {
@@ -170,14 +173,16 @@ public final class MenuGlassSurfaceView: UIView {
         surfaceCornerRadius = clampedRadius
         if #available(iOS 26.0, *), let nativeView {
             cornerConfiguration = UICornerConfiguration.uniformCorners(radius: .fixed(clampedRadius))
-            clipsToBounds = false
-            layer.cornerRadius = 0
-            layer.masksToBounds = false
+            clipsToBounds = forcesRoundedBoundsClip
+            layer.cornerRadius = forcesRoundedBoundsClip ? clampedRadius : 0
+            layer.cornerCurve = .continuous
+            layer.masksToBounds = forcesRoundedBoundsClip
 
             nativeView.cornerConfiguration = UICornerConfiguration.uniformCorners(radius: .fixed(clampedRadius))
-            nativeView.clipsToBounds = false
-            nativeView.layer.cornerRadius = 0
-            nativeView.layer.masksToBounds = false
+            nativeView.clipsToBounds = forcesRoundedBoundsClip
+            nativeView.layer.cornerRadius = forcesRoundedBoundsClip ? clampedRadius : 0
+            nativeView.layer.cornerCurve = .continuous
+            nativeView.layer.masksToBounds = forcesRoundedBoundsClip
 
             scatteringView.applyCornerRadius(clampedRadius, clipsChildren: true)
             contentView.applyCornerRadius(clampedRadius, clipsChildren: true)
@@ -198,6 +203,34 @@ public final class MenuGlassSurfaceView: UIView {
             style: .normal,
             transition: .immediate
         )
+    }
+
+    func setForcesRoundedBoundsClip(_ enabled: Bool) {
+        guard forcesRoundedBoundsClip != enabled else { return }
+        forcesRoundedBoundsClip = enabled
+        setSurfaceCornerRadius(surfaceCornerRadius)
+    }
+
+    func setGooeyMaterialSuppressed(_ suppressed: Bool) {
+        guard isGooeyMaterialSuppressed != suppressed else { return }
+        isGooeyMaterialSuppressed = suppressed
+
+        if suppressed {
+            if let nativeView {
+                suppressedNativeEffect = nativeView.effect
+                nativeView.effect = nil
+            }
+            legacyView?.isHidden = true
+            scatteringView.isHidden = true
+        } else {
+            if let nativeView, nativeView.effect == nil {
+                nativeView.effect = suppressedNativeEffect ?? SystemGlassEffect.make(isDark: isDark)
+            }
+            suppressedNativeEffect = nil
+            legacyView?.isHidden = false
+            scatteringView.isHidden = false
+            configureGlassInteraction()
+        }
     }
 
     private func configureGlassInteraction() {

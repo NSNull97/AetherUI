@@ -220,6 +220,15 @@ open class AetherModalController: UIViewController {
 
     public weak var delegate: AetherModalControllerDelegate?
 
+    /// Optional presentation/dismissal animation provider.
+    ///
+    /// `nil` keeps the default bottom-sheet slide animation. Set this to
+    /// `AetherModalSourceTransition(sourceView:)` for Telegram-style
+    /// expansion from a button, or provide your own
+    /// `AetherModalTransitionAnimation` implementation for fully custom
+    /// UIKit transition animators.
+    public var transitionAnimation: AetherModalTransitionAnimation?
+
     public private(set) var currentDetent: Detent = .stage1
     public var currentDetentProgress: CGFloat { detentProgress }
 

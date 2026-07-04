@@ -22,6 +22,7 @@ func makeComponentsRoot() -> AetherViewController {
 final class NavigationSurfaceDemoController: DemoController {
     override var demoTitle: String { "Navigation + Window" }
     private var detailCounter = 0
+    private weak var modalSourceButton: UIButton?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -39,7 +40,7 @@ final class NavigationSurfaceDemoController: DemoController {
         addLabel("Shared navigation bar: push/replace/pop use one bar hosted by AetherNavigationController.")
         addButton("Push detail") { [weak self] in self?.pushDetail() }
         addButton("Replace top") { [weak self] in self?.replaceTop() }
-        addButton("Present modal navigation") { [weak self] in self?.presentModalNavigation() }
+        modalSourceButton = addButton("Present modal navigation") { [weak self] in self?.presentModalNavigation() }
         addButton("Present global overlay") { [weak self] in self?.presentGlobalOverlay() }
         addButton("Show in-call status bar") { [weak self] in self?.showInCallStatusBar() }
         addButton("Toggle proximity dim") { [weak self] in self?.flashProximityDim() }
@@ -68,6 +69,9 @@ final class NavigationSurfaceDemoController: DemoController {
             rootViewController: root,
             config: .init(detents: [.stage1, .stage2], initialDetent: .stage2)
         )
+        if let modalSourceButton {
+            modal.useSourceTransition(from: modalSourceButton)
+        }
         present(modal, animated: true)
     }
 
@@ -401,6 +405,7 @@ private final class RuntimeOverlayController: AetherViewController {
 
 final class ButtonsDemoController: DemoController {
     override var demoTitle: String { "Buttons" }
+    private var attachmentMenuController: AetherAttachmentMenuController?
 
     override func buildDemo() {
         addLabel("UIKit-конфигурации:")
@@ -442,6 +447,41 @@ final class ButtonsDemoController: DemoController {
             menu.present()
         }
         addCenteredView(tinted, height: 44)
+
+        addLabel("Attachment morph:")
+        let composer = AttachmentComposerDemoView()
+        composer.onPlusTap = { [weak self, weak composer] button in
+            guard let self else { return }
+            let menu = AetherAttachmentMenuController(items: [
+                .init(title: "Камера", icon: UIImage(systemName: "camera")) {
+                    AetherToastController(content: .text("Camera")).present()
+                },
+                .init(title: "Фото", icon: UIImage(systemName: "photo")) {
+                    AetherToastController(content: .text("Photo")).present()
+                },
+                .init(title: "Файлы", icon: UIImage(systemName: "paperclip")) {
+                    AetherToastController(content: .text("Files")).present()
+                },
+                .init(title: "Плагины", icon: UIImage(systemName: "link.circle")) {
+                    AetherToastController(content: .text("Plugins")).present()
+                }
+            ])
+            menu.onDismiss = { [weak self, weak menu, weak composer] in
+                if let menu, self?.attachmentMenuController === menu {
+                    self?.attachmentMenuController = nil
+                }
+                composer?.setPlusSelected(false)
+            }
+            self.attachmentMenuController = menu
+            menu.present(from: button, in: self.view)
+            composer?.setPlusSelected(true)
+        }
+        composer.onMenuDismissRequest = { [weak self, weak composer] in
+            self?.attachmentMenuController?.dismiss()
+            composer?.setPlusSelected(false)
+        }
+        stack.addArrangedSubview(composer)
+        composer.heightAnchor.constraint(equalToConstant: 118).isActive = true
     }
 
     private func sampleItems() -> [ContextMenuItem] {
@@ -489,6 +529,97 @@ final class ButtonsDemoController: DemoController {
                 }
             ))
         ]
+    }
+}
+
+private final class AttachmentComposerDemoView: UIView {
+    var onPlusTap: ((UIView) -> Void)?
+    var onMenuDismissRequest: (() -> Void)?
+
+    private let plusButton = GlassBarButtonView(
+        icon: UIImage(systemName: "plus"),
+        title: nil,
+        state: .glass
+    )
+    private let inputPill = GlassBackgroundView(style: .regular)
+    private let placeholderLabel = UILabel()
+    private let stopButton = UIButton(type: .custom)
+    private var isPlusSelected = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        backgroundColor = .clear
+
+        plusButton.contentTintColor = .label
+        plusButton.action = { [weak self] button in
+            guard let self else { return }
+            if self.isPlusSelected {
+                self.onMenuDismissRequest?()
+            } else {
+                self.onPlusTap?(button)
+            }
+        }
+        addSubview(plusButton)
+
+        addSubview(inputPill)
+
+        placeholderLabel.text = "Спросить ChatGPT"
+        placeholderLabel.font = .systemFont(ofSize: 22, weight: .regular)
+        placeholderLabel.textColor = .tertiaryLabel
+        inputPill.contentView.addSubview(placeholderLabel)
+
+        stopButton.backgroundColor = .label
+        stopButton.tintColor = .systemBackground
+        stopButton.setImage(UIImage(systemName: "square.fill"), for: .normal)
+        stopButton.layer.cornerRadius = 24
+        stopButton.layer.cornerCurve = .continuous
+        inputPill.contentView.addSubview(stopButton)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let safeWidth = bounds.width
+        let buttonSide: CGFloat = 58
+        let bottomInset: CGFloat = 16
+        let y = bounds.height - bottomInset - buttonSide
+        plusButton.frame = CGRect(x: 0, y: y, width: buttonSide, height: buttonSide)
+        plusButton.layer.cornerRadius = buttonSide * 0.5
+
+        inputPill.frame = CGRect(
+            x: buttonSide + 12,
+            y: y,
+            width: max(0, safeWidth - buttonSide - 12),
+            height: buttonSide
+        )
+        inputPill.update(size: inputPill.bounds.size, cornerRadius: buttonSide * 0.5, transition: .immediate)
+
+        let stopSide: CGFloat = 48
+        stopButton.frame = CGRect(
+            x: inputPill.bounds.width - stopSide - 5,
+            y: (inputPill.bounds.height - stopSide) * 0.5,
+            width: stopSide,
+            height: stopSide
+        )
+        stopButton.layer.cornerRadius = stopSide * 0.5
+
+        placeholderLabel.frame = CGRect(
+            x: 20,
+            y: 0,
+            width: max(0, stopButton.frame.minX - 32),
+            height: inputPill.bounds.height
+        )
+    }
+
+    func setPlusSelected(_ selected: Bool) {
+        isPlusSelected = selected
+        UIView.animate(withDuration: 0.14, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.plusButton.transform = selected ? CGAffineTransform(rotationAngle: .pi / 4) : .identity
+        }
     }
 }
 
@@ -804,6 +935,7 @@ final class ContextMenuDemoController: DemoController {
     override var demoTitle: String { "Context Menu" }
 
     private weak var morphAnchor: UIView?
+    private weak var gooeyAnchor: UIView?
     private weak var previewAnchor: UIView?
     private weak var tapAnchor: UIView?
 
@@ -821,11 +953,18 @@ final class ContextMenuDemoController: DemoController {
     }
 
     override func buildDemo() {
-        addLabel("Long-press для morph / preview, tap — открыть меню.")
+        addLabel("Long-press для morph / gooey / preview, tap — открыть меню.")
 
         morphAnchor = addButton("Morph (long-press)") {}
         if let anchor = morphAnchor {
             let lp = UILongPressGestureRecognizer(target: self, action: #selector(morphLongPressed(_:)))
+            lp.minimumPressDuration = 0.25
+            anchor.addGestureRecognizer(lp)
+        }
+
+        gooeyAnchor = addButton("Gooey (long-press)") {}
+        if let anchor = gooeyAnchor {
+            let lp = UILongPressGestureRecognizer(target: self, action: #selector(gooeyLongPressed(_:)))
             lp.minimumPressDuration = 0.25
             anchor.addGestureRecognizer(lp)
         }
@@ -850,6 +989,16 @@ final class ContextMenuDemoController: DemoController {
         menu.present()
     }
 
+    @objc private func gooeyLongPressed(_ gr: UILongPressGestureRecognizer) {
+        guard gr.state == .began, let anchor = gooeyAnchor else { return }
+        let menu = ContextMenuController(
+            source: ContextMenuController.Source(view: anchor, cornerRadius: anchor.bounds.height / 2),
+            items: sampleItems(),
+            presentationStyle: .gooey()
+        )
+        menu.present()
+    }
+
     @objc private func previewLongPressed(_ gr: UILongPressGestureRecognizer) {
         guard gr.state == .began, let anchor = previewAnchor else { return }
         let menu = ContextMenuController(
@@ -865,7 +1014,7 @@ final class ContextMenuDemoController: DemoController {
         let menu = ContextMenuController(
             source: ContextMenuController.Source(view: anchor, cornerRadius: anchor.bounds.height / 2),
             items: sampleItems(),
-            presentationStyle: .fluidMorph
+            presentationStyle: .gooey()
         )
         menu.present()
     }

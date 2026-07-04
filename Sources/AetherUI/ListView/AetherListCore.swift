@@ -1367,7 +1367,9 @@ internal enum AetherListEffectiveInsetsPlanner {
         currentContentInset: UIEdgeInsets,
         currentContentOffset: CGPoint,
         isTrackingOrDragging: Bool,
-        bottomAnchorTolerance: CGFloat
+        bottomAnchorTolerance: CGFloat,
+        preserveContentOffset: Bool = false,
+        alwaysCompensateBottomInsetChanges: Bool = false
     ) -> AetherListEffectiveInsetsPlan {
         let contentInset = effectiveContentInset(
             baseInsets: baseInsets,
@@ -1384,7 +1386,9 @@ internal enum AetherListEffectiveInsetsPlanner {
             viewportHeight: viewportHeight,
             contentSizeHeight: contentSizeHeight,
             isTrackingOrDragging: isTrackingOrDragging,
-            bottomAnchorTolerance: bottomAnchorTolerance
+            bottomAnchorTolerance: bottomAnchorTolerance,
+            preserveContentOffset: preserveContentOffset,
+            alwaysCompensateBottomInsetChanges: alwaysCompensateBottomInsetChanges
         )
         return AetherListEffectiveInsetsPlan(
             contentInset: contentInset,
@@ -1427,10 +1431,28 @@ internal enum AetherListEffectiveInsetsPlanner {
         viewportHeight: CGFloat,
         contentSizeHeight: CGFloat,
         isTrackingOrDragging: Bool,
-        bottomAnchorTolerance: CGFloat
+        bottomAnchorTolerance: CGFloat,
+        preserveContentOffset: Bool,
+        alwaysCompensateBottomInsetChanges: Bool
     ) -> CGPoint? {
         guard oldContentInset != newContentInset else {
             return nil
+        }
+        guard !preserveContentOffset else {
+            return nil
+        }
+
+        let bottomDelta = newContentInset.bottom - oldContentInset.bottom
+        if alwaysCompensateBottomInsetChanges, abs(bottomDelta) > CGFloat.ulpOfOne {
+            let minY = -newContentInset.top
+            let maxY = maxContentOffsetY(
+                contentSizeHeight: contentSizeHeight,
+                viewportHeight: viewportHeight,
+                contentInset: newContentInset
+            )
+            let targetY = max(minY, min(maxY, currentContentOffset.y + bottomDelta))
+            let offset = CGPoint(x: currentContentOffset.x, y: targetY)
+            return offset != currentContentOffset ? offset : nil
         }
 
         let oldMaxY = maxContentOffsetY(
@@ -1936,6 +1958,34 @@ internal enum AetherListFrameMetrics {
         let minY = -contentInset.top
         let maxY = max(minY, contentSizeHeight + contentInset.bottom - viewportHeight)
         return (minY, maxY, max(0, maxY - minY))
+    }
+
+    static func pagedScrollToTopOffset(
+        currentOffsetY: CGFloat,
+        contentSizeHeight: CGFloat,
+        viewportHeight: CGFloat,
+        contentInset: UIEdgeInsets,
+        distance: CGFloat? = nil
+    ) -> CGFloat? {
+        let bounds = scrollBounds(
+            contentSizeHeight: contentSizeHeight,
+            viewportHeight: viewportHeight,
+            contentInset: contentInset
+        )
+        guard bounds.scrollableDistance > CGFloat.ulpOfOne,
+              currentOffsetY > bounds.minY + 0.5 else {
+            return nil
+        }
+
+        let visiblePageHeight = viewportHeight - contentInset.top - contentInset.bottom
+        let defaultDistance = visiblePageHeight * 2.0
+        let pageDistance = max(1.0, distance ?? defaultDistance)
+        let clampedCurrentY = min(bounds.maxY, max(bounds.minY, currentOffsetY))
+        let targetY = max(bounds.minY, clampedCurrentY - pageDistance)
+        guard targetY < currentOffsetY - 0.5 else {
+            return nil
+        }
+        return targetY
     }
 
     static func overscrollDistances(

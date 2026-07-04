@@ -32,23 +32,51 @@ internal enum AetherLegacyKeyboardRuntime {
         // keyboard outrun the interactive gesture.
         guard let keyboardView else {
             if let keyboardWindow {
-                applyWindowVerticalFallback(keyboardWindow, offset: offset)
-                lastWindowVerticalFallback = offset.isZero ? nil : keyboardWindow
+                applyWindowVerticalFallback(
+                    keyboardWindow,
+                    offset: offset,
+                    transition: transition
+                ) {
+                    if offset.isZero {
+                        self.lastWindowVerticalFallback = nil
+                    }
+                    completion?()
+                }
+                if !offset.isZero {
+                    lastWindowVerticalFallback = keyboardWindow
+                }
             } else if offset.isZero, let lastWindowVerticalFallback {
-                applyWindowVerticalFallback(lastWindowVerticalFallback, offset: 0.0)
-                self.lastWindowVerticalFallback = nil
+                applyWindowVerticalFallback(
+                    lastWindowVerticalFallback,
+                    offset: 0.0,
+                    transition: transition
+                ) {
+                    self.lastWindowVerticalFallback = nil
+                    completion?()
+                }
+            } else {
+                completion?()
             }
-            if offset.isZero, let lastInteractiveKeyboardView {
+            if !offset.isZero {
+                return
+            }
+            if keyboardWindow != nil || lastWindowVerticalFallback != nil {
+                return
+            }
+            if let lastInteractiveKeyboardView {
                 resetBounds(of: lastInteractiveKeyboardView)
                 lastInteractiveKeyboardView.transform = .identity
                 self.lastInteractiveKeyboardView = nil
             }
-            completion?()
             return
         }
 
         if let lastWindowVerticalFallback {
-            applyWindowVerticalFallback(lastWindowVerticalFallback, offset: 0.0)
+            applyWindowVerticalFallback(
+                lastWindowVerticalFallback,
+                offset: 0.0,
+                transition: .immediate
+            )
             self.lastWindowVerticalFallback = nil
         }
 
@@ -80,14 +108,17 @@ internal enum AetherLegacyKeyboardRuntime {
             transition: transition
         )
 
-        if surfaceTransition.isAnimated {
-            surfaceTransition.animateOffsetAdditive(
-                layer: keyboardView.layer,
-                offset: previousBounds.minY - updatedBounds.minY,
+        switch surfaceTransition {
+        case .immediate:
+            finish()
+        case let .animated(duration, curve):
+            keyboardView.layer.animateBounds(
+                from: previousBounds,
+                to: updatedBounds,
+                duration: duration,
+                timingFunction: curve.mediaTimingFunction(),
                 completion: { _ in finish() }
             )
-        } else {
-            finish()
         }
     }
 
@@ -243,15 +274,23 @@ internal enum AetherLegacyKeyboardRuntime {
         view.layer.bounds = CGRect(origin: .zero, size: view.bounds.size)
     }
 
-    private static func applyWindowVerticalFallback(_ window: UIWindow, offset: CGFloat) {
+    private static func applyWindowVerticalFallback(
+        _ window: UIWindow,
+        offset: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        completion: (() -> Void)? = nil
+    ) {
         window.transform = .identity
         let bounds = window.bounds
-        window.frame = CGRect(
+        let targetFrame = CGRect(
             x: bounds.minX,
             y: bounds.minY + offset,
             width: bounds.width,
             height: bounds.height
         )
+        transition.updateFrame(view: window, frame: targetFrame) { _ in
+            completion?()
+        }
     }
 
     private static func removeAnimationsRecursively(from view: UIView) {

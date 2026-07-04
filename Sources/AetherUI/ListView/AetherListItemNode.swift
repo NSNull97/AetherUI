@@ -1,9 +1,18 @@
 import UIKit
 
+internal let aetherListSwipeRevealBackgroundColor = UIColor { traits in
+    if traits.userInterfaceStyle == .dark {
+        return UIColor(red: 0.17, green: 0.17, blue: 0.18, alpha: 1.0)
+    } else {
+        return UIColor(red: 0.91, green: 0.92, blue: 0.94, alpha: 1.0)
+    }
+}
+
 /// List-owned gestures that may be routed through an item node.
 public enum AetherListItemGesture: Equatable {
     case tap
     case reorder
+    case swipe
 }
 
 /// Current sticky-header presentation state for a list item node.
@@ -48,6 +57,11 @@ open class AetherListItemNode: UIView {
     }
 
     private var accessorySlots: [AetherListAccessoryPlacement: AccessorySlot] = [:]
+    private var swipeRevealBackgroundView: UIView?
+    private var isSwipeRevealBackgroundActive = false
+    private var swipeRevealStoredBackgroundColor: UIColor?
+    private var swipeRevealStoredCornerRadius: CGFloat?
+    private var swipeRevealStoredMasksToBounds: Bool?
 
     // MARK: - Layout Properties
 
@@ -145,6 +159,11 @@ open class AetherListItemNode: UIView {
 
     open override func layoutSubviews() {
         super.layoutSubviews()
+        if let swipeRevealBackgroundView {
+            swipeRevealBackgroundView.frame = bounds
+            swipeRevealBackgroundView.layer.cornerRadius = min(26.0, bounds.height / 2.0)
+            sendSubviewToBack(swipeRevealBackgroundView)
+        }
         layoutAccessoryViews()
     }
 
@@ -232,7 +251,83 @@ open class AetherListItemNode: UIView {
             slot.view.removeFromSuperview()
         }
         accessorySlots.removeAll()
+        swipeRevealBackgroundView?.removeFromSuperview()
+        swipeRevealBackgroundView = nil
+        isSwipeRevealBackgroundActive = false
+        if let swipeRevealStoredBackgroundColor {
+            backgroundColor = swipeRevealStoredBackgroundColor
+        }
+        if let swipeRevealStoredCornerRadius {
+            layer.cornerRadius = swipeRevealStoredCornerRadius
+        }
+        if let swipeRevealStoredMasksToBounds {
+            clipsToBounds = swipeRevealStoredMasksToBounds
+        }
+        swipeRevealStoredBackgroundColor = nil
+        swipeRevealStoredCornerRadius = nil
+        swipeRevealStoredMasksToBounds = nil
         updateStickyHeaderState(.none, animated: false)
+    }
+
+    internal func setSwipeRevealBackgroundActive(
+        _ active: Bool,
+        transition: ContainedViewLayoutTransition
+    ) {
+        if !active, !isSwipeRevealBackgroundActive {
+            isSwipeRevealBackgroundActive = false
+            return
+        }
+
+        if active, !isSwipeRevealBackgroundActive {
+            swipeRevealStoredBackgroundColor = backgroundColor
+            swipeRevealStoredCornerRadius = layer.cornerRadius
+            swipeRevealStoredMasksToBounds = clipsToBounds
+        }
+        isSwipeRevealBackgroundActive = active
+        let activeCornerRadius = min(26.0, bounds.height / 2.0)
+
+        if active {
+            backgroundColor = aetherListSwipeRevealBackgroundColor
+            layer.cornerCurve = .continuous
+            layer.cornerRadius = activeCornerRadius
+            clipsToBounds = true
+        } else {
+            backgroundColor = swipeRevealStoredBackgroundColor
+            layer.cornerRadius = swipeRevealStoredCornerRadius ?? 0.0
+            clipsToBounds = swipeRevealStoredMasksToBounds ?? false
+            swipeRevealStoredBackgroundColor = nil
+            swipeRevealStoredCornerRadius = nil
+            swipeRevealStoredMasksToBounds = nil
+        }
+
+        let backgroundView: UIView
+        if let current = swipeRevealBackgroundView {
+            backgroundView = current
+        } else {
+            let current = UIView(frame: bounds)
+            current.backgroundColor = aetherListSwipeRevealBackgroundColor
+            current.layer.cornerCurve = .continuous
+            current.layer.cornerRadius = activeCornerRadius
+            current.alpha = 0.0
+            insertSubview(current, at: 0)
+            swipeRevealBackgroundView = current
+            backgroundView = current
+        }
+
+        backgroundView.frame = bounds
+        backgroundView.backgroundColor = aetherListSwipeRevealBackgroundColor
+        backgroundView.layer.cornerRadius = activeCornerRadius
+        sendSubviewToBack(backgroundView)
+
+        transition.updateAlpha(view: backgroundView, alpha: active ? 1.0 : 0.0) { [weak self, weak backgroundView] _ in
+            guard let self, let backgroundView, !self.isSwipeRevealBackgroundActive else {
+                return
+            }
+            backgroundView.removeFromSuperview()
+            if self.swipeRevealBackgroundView === backgroundView {
+                self.swipeRevealBackgroundView = nil
+            }
+        }
     }
 
     internal func updateStickyHeaderState(_ state: AetherListStickyHeaderState, animated: Bool) {

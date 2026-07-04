@@ -632,17 +632,17 @@ final class ContextMenuLensBloomTransitionView: UIView {
         let inflatePhaseT = Self.smootherstep(0.10, 0.52, geometryT)
         let inflateT = Self.dampedSpring01(
             inflatePhaseT,
-            response: 0.42,
+            response: 1,
             dampingRatio: 0.72,
-            overshootLimit: 1.06
+            overshootLimit: 2.05
         )
         let driftT = Self.smootherstep(0.18, 0.68, geometryT)
         let rectifyT = Self.smootherstep(0.68, 0.94, geometryT)
         let settleT = Self.dampedSpring01(
             Self.smootherstep(0.84, 1.00, geometryT),
-            response: 0.34,
+            response: 0.82,
             dampingRatio: 0.80,
-            overshootLimit: 1.03
+            overshootLimit: 1.05
         )
 
         let startRadius = startSize.width * 0.5

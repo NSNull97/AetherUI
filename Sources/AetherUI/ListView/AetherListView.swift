@@ -51,6 +51,11 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     /// new inserts should auto-scroll the view down.
     public var stackFromBottomAutoAnchorTolerance: CGFloat = 60
 
+    /// When true, any bottom inset delta also applies the same delta to
+    /// `contentOffset.y`. Use for keyboard/input-accessory driven insets
+    /// where visible content should travel with the keyboard.
+    public var compensatesBottomInsetChanges: Bool = false
+
     /// Edge insets for the list content. The list view owns the scroll
     /// view's content / indicator insets fully — system safe-area
     /// adjustment is disabled so what callers pass here is what they get.
@@ -138,10 +143,12 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         didSet {
             guard automaticallyAdjustsContentInsetForKeyboard != oldValue else { return }
             if automaticallyAdjustsContentInsetForKeyboard {
+                keyboardBottomInsetIsLayoutDriven = false
                 registerKeyboardObserver()
             } else {
                 unregisterKeyboardObserver()
                 if keyboardBottomInset != 0 {
+                    keyboardBottomInsetIsLayoutDriven = false
                     keyboardBottomInset = 0
                     applyEffectiveInsets()
                 }
@@ -152,8 +159,15 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     /// Bottom offset added by the on-screen keyboard. 0 when the
     /// keyboard is hidden or sitting outside the list's frame.
     private var keyboardBottomInset: CGFloat = 0
+    private var keyboardBottomInsetIsLayoutDriven = false
 
-    private func applyEffectiveInsets(transition: ContainedViewLayoutTransition = .immediate) {
+    private func applyEffectiveInsets(
+        transition: ContainedViewLayoutTransition = .immediate,
+        compensateBottomInsetChangesOverride: Bool? = nil,
+        preserveContentOffset: Bool = false
+    ) {
+        let shouldCompensateBottomInsetChanges = compensateBottomInsetChangesOverride
+            ?? compensatesBottomInsetChanges
         let plan = AetherListEffectiveInsetsPlanner.plan(
             baseInsets: insets,
             keyboardBottomInset: keyboardBottomInset,
@@ -164,8 +178,10 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             contentSizeHeight: scrollView.contentSize.height,
             currentContentInset: scrollView.contentInset,
             currentContentOffset: scrollView.contentOffset,
-            isTrackingOrDragging: scrollView.isTracking || scrollView.isDragging,
-            bottomAnchorTolerance: stackFromBottomAutoAnchorTolerance
+            isTrackingOrDragging: scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating,
+            bottomAnchorTolerance: stackFromBottomAutoAnchorTolerance,
+            preserveContentOffset: preserveContentOffset,
+            alwaysCompensateBottomInsetChanges: shouldCompensateBottomInsetChanges
         )
         switch transition {
         case .immediate:
@@ -196,11 +212,78 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     /// `contentOffset` for the delta. The plain `insets =` setter
     /// runs immediate; this one is the right call from inside a
     /// `containerLayoutUpdated` override.
-    public func updateInsets(_ insets: UIEdgeInsets, transition: ContainedViewLayoutTransition) {
+    public func updateInsets(
+        _ insets: UIEdgeInsets,
+        transition: ContainedViewLayoutTransition,
+        compensatesBottomInsetChanges: Bool? = nil,
+        preserveContentOffset: Bool = false
+    ) {
         // Bypass the setter so we don't fire an immediate
         // `applyEffectiveInsets()` on top of the animated one below.
         _insets = insets
-        applyEffectiveInsets(transition: transition)
+        applyEffectiveInsets(
+            transition: transition,
+            compensateBottomInsetChangesOverride: compensatesBottomInsetChanges,
+            preserveContentOffset: preserveContentOffset
+        )
+    }
+
+    /// Computes keyboard overlap from an Aether container layout. Use this
+    /// when the owning controller already receives `ContainerViewLayout`
+    /// updates from `AetherWindow`; it avoids listening to UIKit keyboard
+    /// notifications separately and keeps interactive dismissals on the
+    /// same frame-by-frame timeline as the rest of Aether layout.
+    public func keyboardBottomInset(for layout: ContainerViewLayout, in containerView: UIView) -> CGFloat {
+        let keyboardHeight = max(0.0, layout.inputHeight ?? 0.0)
+        guard keyboardHeight > 0.0, bounds.height > 0.0 else {
+            return 0.0
+        }
+
+        let keyboardTopInContainer = layout.size.height - keyboardHeight
+        let keyboardTopInList = convert(
+            CGPoint(x: containerView.bounds.midX, y: keyboardTopInContainer),
+            from: containerView
+        ).y
+        return max(0.0, bounds.maxY - keyboardTopInList)
+    }
+
+    /// Updates base content insets and layout-driven keyboard overlap in one
+    /// pass, so `contentOffset` compensation is calculated once from the
+    /// old effective inset to the new effective inset.
+    public func updateInsets(
+        _ insets: UIEdgeInsets,
+        keyboardBottomInset: CGFloat,
+        transition: ContainedViewLayoutTransition,
+        compensatesBottomInsetChanges: Bool = true,
+        preserveContentOffset: Bool = false
+    ) {
+        keyboardBottomInsetIsLayoutDriven = true
+        _insets = insets
+        self.keyboardBottomInset = max(0.0, keyboardBottomInset)
+        applyEffectiveInsets(
+            transition: transition,
+            compensateBottomInsetChangesOverride: compensatesBottomInsetChanges,
+            preserveContentOffset: preserveContentOffset
+        )
+    }
+
+    /// Convenience wrapper for AetherWindow-driven keyboard layout. During
+    /// an interactive keyboard gesture the inset is applied immediately per
+    /// frame; the final settle still uses the passed transition.
+    public func updateInsets(
+        _ insets: UIEdgeInsets,
+        keyboardLayout layout: ContainerViewLayout,
+        in containerView: UIView,
+        transition: ContainedViewLayoutTransition
+    ) {
+        let keyboardInset = keyboardBottomInset(for: layout, in: containerView)
+        updateInsets(
+            insets,
+            keyboardBottomInset: keyboardInset,
+            transition: layout.inputHeightIsInteractivellyChanging ? .immediate : transition,
+            compensatesBottomInsetChanges: !layout.inputHeightIsInteractivellyChanging,
+            preserveContentOffset: layout.inputHeightIsInteractivellyChanging
+        )
     }
 
     private func effectiveItemOffsetInsets(
@@ -285,6 +368,30 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         }
     }
 
+    /// Scroll upward by two visible pages by default, clamped at the top edge.
+    ///
+    /// This matches Telegram's status-bar tap behaviour for long virtualized
+    /// lists: repeated taps walk toward the beginning instead of jumping to
+    /// the first row immediately.
+    @discardableResult
+    public func scrollToTopInPages(animated: Bool, distance: CGFloat? = nil) -> Bool {
+        guard let targetY = AetherListFrameMetrics.pagedScrollToTopOffset(
+            currentOffsetY: scrollView.contentOffset.y,
+            contentSizeHeight: scrollView.contentSize.height,
+            viewportHeight: scrollView.bounds.height,
+            contentInset: scrollView.contentInset,
+            distance: distance
+        ) else {
+            return false
+        }
+
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: animated)
+        if !animated {
+            syncBackingViewBounds()
+        }
+        return true
+    }
+
     /// Heuristic: is the user parked near the bottom edge? Used by
     /// chat-style auto-anchoring on insert.
     private func isNearBottom(tolerance: CGFloat) -> Bool {
@@ -304,6 +411,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     }
 
     @objc private func handleKeyboardWillChangeFrame(_ note: Notification) {
+        guard !keyboardBottomInsetIsLayoutDriven else {
+            return
+        }
         guard let userInfo = note.userInfo,
               let frameValue = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else {
             return
@@ -314,6 +424,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     }
 
     @objc private func handleKeyboardWillHide(_ note: Notification) {
+        guard !keyboardBottomInsetIsLayoutDriven else {
+            return
+        }
         guard let userInfo = note.userInfo else { return }
         let duration = (userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
         let curveRaw = (userInfo[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt) ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
@@ -382,6 +495,20 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
     /// Called when an item is tapped.
     public var itemTapped: ((Int) -> Void)?
+
+    /// Called when a Telegram-style swipe action is selected. The item also
+    /// receives `swipeActionSelected(_:listView:isFullSwipe:)`.
+    public var swipeActionSelected: ((_ index: Int, _ action: AetherListSwipeAction, _ isFullSwipe: Bool) -> Void)?
+
+    /// Called when a row first opens its swipe actions through a user pan.
+    public var swipeActionsInteractivelyOpened: ((_ index: Int) -> Void)?
+
+    /// Called when an opened row is closed through a user interaction.
+    public var swipeActionsInteractivelyClosed: ((_ index: Int?) -> Void)?
+
+    /// Optional override for the haptic fired when the boundary action enters
+    /// or leaves the expanded full-swipe state.
+    public var swipeActionHapticFeedback: (() -> Void)?
 
     /// Optional final gate for list-owned item gestures. Return `false` when a
     /// screen-level context menu, swipe action, or nested custom gesture should
@@ -659,7 +786,13 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
     private weak var reorderRecognizer: UILongPressGestureRecognizer?
     private weak var tapRecognizer: UITapGestureRecognizer?
+    private weak var swipeRecognizer: AetherListSwipeGestureRecognizer?
     private var reorderState: ReorderState?
+    private var swipeState: SwipeState?
+    private var swipeOptionContainers: [ObjectIdentifier: AetherListSwipeOptionContainer] = [:]
+    private var revealedSwipeItemId: AnyHashable?
+    private var revealedSwipeOffset: CGFloat = 0.0
+    private var swipeHapticFeedbackGenerator: UIImpactFeedbackGenerator?
 
     private struct ReorderState {
         let originalIndex: Int
@@ -672,6 +805,13 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         let dragHeight: CGFloat
     }
 
+    private struct SwipeState {
+        let itemId: AnyHashable
+        weak var node: AetherListItemNode?
+        let initialRevealOffset: CGFloat
+        var didNotifyOpen: Bool
+    }
+
     private func setupReorderRecognizer() {
         let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleReorderGesture(_:)))
         lp.minimumPressDuration = 0.4
@@ -680,6 +820,14 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         lp.delegate = self
         scrollView.backingView.addGestureRecognizer(lp)
         reorderRecognizer = lp
+    }
+
+    private func setupSwipeRecognizer() {
+        let pan = AetherListSwipeGestureRecognizer(target: self, action: #selector(handleSwipeGesture(_:)))
+        pan.cancelsTouchesInView = false
+        pan.delegate = self
+        scrollView.backingView.addGestureRecognizer(pan)
+        swipeRecognizer = pan
     }
 
     @objc private func handleReorderGesture(_ gr: UILongPressGestureRecognizer) {
@@ -699,6 +847,10 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
     private func reorderBegan(at location: CGPoint) {
         guard reorderState == nil else { return }
+        if revealedSwipeItemId != nil || !swipeOptionContainers.isEmpty {
+            closeSwipeActions(animated: true)
+            return
+        }
         guard let node = itemNodeForListGesture(at: location, gesture: .reorder),
               let index = node.index, index >= 0, index < items.count,
               items[index].canReorder else {
@@ -799,6 +951,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                 var nf = n.frame
                 nf.origin.y = self.itemOffsets[i]
                 n.frame = nf
+                self.syncSwipeOptionContainerFrame(for: n)
             }
             if proposedIndex < self.itemOffsets.count, proposedIndex < self.itemHeights.count {
                 state.placeholderView.frame = self.alignedFrame(
@@ -882,6 +1035,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                     width: self.bounds.width,
                     height: self.itemHeights[index]
                 )
+                self.syncSwipeOptionContainerFrame(for: node)
             }
             if let targetFrame {
                 state.placeholderView.frame = targetFrame
@@ -934,6 +1088,377 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             guard let item = node.item else { continue }
             node.index = idMap[ObjectIdentifier(item)]
         }
+    }
+
+    // MARK: - Swipe Actions
+
+    @objc private func handleSwipeGesture(_ recognizer: AetherListSwipeGestureRecognizer) {
+        let location = recognizer.location(in: scrollView.backingView)
+
+        switch recognizer.state {
+        case .began:
+            swipeBegan(at: location, recognizer: recognizer)
+        case .changed:
+            swipeChanged(recognizer: recognizer)
+        case .ended:
+            swipeEnded(recognizer: recognizer)
+        case .cancelled, .failed:
+            swipeCancelled()
+        default:
+            break
+        }
+    }
+
+    private func swipeBegan(at location: CGPoint, recognizer: AetherListSwipeGestureRecognizer) {
+        guard reorderState == nil,
+              let node = itemNodeForListGesture(at: location, gesture: .swipe),
+              let index = node.index,
+              index >= 0,
+              index < items.count else {
+            recognizer.becomeCancelled()
+            return
+        }
+
+        let item = items[index]
+        let actions = item.swipeActions
+        guard !actions.isEmpty else {
+            recognizer.becomeCancelled()
+            return
+        }
+
+        let container = ensureSwipeOptionContainer(for: node, item: item)
+        let pointInContainer = container.convert(location, from: scrollView.backingView)
+        if container.isDisplayingRevealedOptions && container.containsAction(at: pointInContainer) {
+            recognizer.becomeCancelled()
+            return
+        }
+
+        closeSwipeActions(animated: true, except: item.stableId)
+        swipeState = SwipeState(
+            itemId: item.stableId,
+            node: node,
+            initialRevealOffset: container.revealOffset,
+            didNotifyOpen: !container.revealOffset.isZero
+        )
+    }
+
+    private func swipeChanged(recognizer: AetherListSwipeGestureRecognizer) {
+        guard var state = swipeState,
+              let node = state.node,
+              let index = node.index,
+              index >= 0,
+              index < items.count,
+              items[index].stableId == state.itemId else {
+            return
+        }
+
+        let actions = items[index].swipeActions
+        var offset = recognizer.translation(in: scrollView.backingView).x + state.initialRevealOffset
+        if actions.left.isEmpty {
+            offset = min(0.0, offset)
+        }
+        if actions.right.isEmpty {
+            offset = max(0.0, offset)
+        }
+
+        let container = ensureSwipeOptionContainer(for: node, item: items[index])
+        if offset > 0.0 {
+            container.ensureOptionsView(for: .left)
+            let revealWidth = container.revealWidth(for: .left)
+            offset = aetherListBoundedSwipeOffset(offset, revealWidth: revealWidth, viewportWidth: node.bounds.width)
+        } else if offset < 0.0 {
+            container.ensureOptionsView(for: .right)
+            let revealWidth = container.revealWidth(for: .right)
+            offset = aetherListBoundedSwipeOffset(offset, revealWidth: revealWidth, viewportWidth: node.bounds.width)
+        }
+        updateSwipeRevealOffset(offset, for: node, transition: .immediate)
+
+        if !offset.isZero, !state.didNotifyOpen {
+            state.didNotifyOpen = true
+            swipeActionsInteractivelyOpened?(index)
+        }
+        swipeState = state
+    }
+
+    private func swipeEnded(recognizer: AetherListSwipeGestureRecognizer) {
+        guard let state = swipeState,
+              let node = state.node,
+              let index = node.index,
+              index >= 0,
+              index < items.count,
+              let container = swipeOptionContainers[ObjectIdentifier(node)] else {
+            swipeState = nil
+            return
+        }
+
+        let offset = container.revealOffset
+        let velocity = recognizer.velocity(in: scrollView.backingView)
+
+        if offset > 0.0 {
+            finishSwipe(
+                side: .left,
+                offset: offset,
+                velocityX: velocity.x,
+                state: state,
+                node: node,
+                container: container
+            )
+        } else if offset < 0.0 {
+            finishSwipe(
+                side: .right,
+                offset: offset,
+                velocityX: velocity.x,
+                state: state,
+                node: node,
+                container: container
+            )
+        } else {
+            updateSwipeRevealOffset(0.0, for: node, transition: .animated(duration: 0.3, curve: .spring))
+            swipeActionsInteractivelyClosed?(index)
+        }
+
+        swipeState = nil
+    }
+
+    private func finishSwipe(
+        side: AetherListSwipeActionsSide,
+        offset: CGFloat,
+        velocityX: CGFloat,
+        state: SwipeState,
+        node: AetherListItemNode,
+        container: AetherListSwipeOptionContainer
+    ) {
+        let revealWidth = container.revealWidth(for: side)
+        guard revealWidth > 0.0 else {
+            updateSwipeRevealOffset(0.0, for: node, transition: .animated(duration: 0.3, curve: .spring))
+            swipeActionsInteractivelyClosed?(node.index)
+            return
+        }
+
+        let shouldReveal: Bool
+        if abs(velocityX) < 100.0 {
+            switch side {
+            case .left:
+                shouldReveal = state.initialRevealOffset.isZero ? offset > 0.0 : offset > revealWidth
+            case .right:
+                shouldReveal = state.initialRevealOffset.isZero ? offset < 0.0 : offset < -revealWidth
+            }
+        } else {
+            switch side {
+            case .left:
+                shouldReveal = velocityX > 0.0
+            case .right:
+                shouldReveal = velocityX < 0.0
+            }
+        }
+
+        if shouldReveal, let expandedAction = container.expandedAction(for: side) {
+            updateSwipeRevealOffset(0.0, for: node, transition: .animated(duration: 0.3, curve: .spring))
+            performSwipeAction(expandedAction, for: node, isFullSwipe: true)
+            return
+        }
+
+        let targetOffset: CGFloat
+        if shouldReveal {
+            targetOffset = side == .left ? revealWidth : -revealWidth
+        } else {
+            targetOffset = 0.0
+        }
+        updateSwipeRevealOffset(targetOffset, for: node, transition: .animated(duration: 0.3, curve: .spring))
+        if !shouldReveal {
+            swipeActionsInteractivelyClosed?(node.index)
+        }
+    }
+
+    private func swipeCancelled() {
+        guard let state = swipeState,
+              let node = state.node else {
+            swipeState = nil
+            return
+        }
+        updateSwipeRevealOffset(state.initialRevealOffset, for: node, transition: .animated(duration: 0.3, curve: .spring))
+        swipeState = nil
+    }
+
+    private func ensureSwipeOptionContainer(
+        for node: AetherListItemNode,
+        item: AetherListItem
+    ) -> AetherListSwipeOptionContainer {
+        let nodeId = ObjectIdentifier(node)
+        let container: AetherListSwipeOptionContainer
+        if let existing = swipeOptionContainers[nodeId] {
+            container = existing
+        } else {
+            let new = AetherListSwipeOptionContainer(
+                optionSelected: { [weak self, weak node] action, isFullSwipe in
+                    guard let self, let node else { return }
+                    self.performSwipeAction(action, for: node, isFullSwipe: isFullSwipe)
+                },
+                expandedStateChanged: { [weak self] in
+                    self?.performSwipeActionHaptic()
+                }
+            )
+            swipeOptionContainers[nodeId] = new
+            container = new
+        }
+
+        container.setActions(item.swipeActions)
+        syncSwipeOptionContainerFrame(for: node)
+        if container.superview !== scrollView.backingView {
+            scrollView.backingView.insertSubview(container, belowSubview: node)
+        } else {
+            scrollView.backingView.insertSubview(container, belowSubview: node)
+        }
+        return container
+    }
+
+    private func syncSwipeOptionContainerFrame(for node: AetherListItemNode) {
+        guard let container = swipeOptionContainers[ObjectIdentifier(node)] else {
+            return
+        }
+
+        if container.frame != node.frame {
+            container.frame = node.frame
+        }
+        let leftInset = layoutParams?.leftInset ?? safeAreaInsets.left
+        let rightInset = layoutParams?.rightInset ?? safeAreaInsets.right
+        container.updateLayout(size: node.bounds.size, leftInset: leftInset, rightInset: rightInset)
+    }
+
+    private func updateSwipeRevealOffset(
+        _ offset: CGFloat,
+        for node: AetherListItemNode,
+        transition: ContainedViewLayoutTransition
+    ) {
+        guard let item = node.item else {
+            return
+        }
+        let container = ensureSwipeOptionContainer(for: node, item: item)
+        let itemId = item.stableId
+
+        if offset.isZero {
+            if revealedSwipeItemId == itemId {
+                revealedSwipeItemId = nil
+                revealedSwipeOffset = 0.0
+            }
+        } else {
+            revealedSwipeItemId = itemId
+            revealedSwipeOffset = offset
+        }
+
+        node.setSwipeRevealBackgroundActive(!offset.isZero, transition: transition)
+        transition.updateTransform(view: node, transform: CGAffineTransform(translationX: offset, y: 0.0))
+        container.updateRevealOffset(offset, transition: transition) { [weak self, weak container, weak node] in
+            guard let self, let container, let node else { return }
+            if container.revealOffset.isZero {
+                self.removeSwipeOptionContainer(for: node)
+            }
+        }
+    }
+
+    private func closeSwipeActions(animated: Bool, except itemId: AnyHashable?) {
+        let transition: ContainedViewLayoutTransition = animated ? .animated(duration: 0.3, curve: .spring) : .immediate
+
+        for node in itemNodes {
+            guard let item = node.item else { continue }
+            if let itemId, item.stableId == itemId {
+                continue
+            }
+            if swipeOptionContainers[ObjectIdentifier(node)] != nil || item.stableId == revealedSwipeItemId {
+                updateSwipeRevealOffset(0.0, for: node, transition: transition)
+            }
+        }
+
+        if itemId == nil {
+            revealedSwipeItemId = nil
+            revealedSwipeOffset = 0.0
+        }
+    }
+
+    private func removeSwipeOptionContainer(for node: AetherListItemNode) {
+        let nodeId = ObjectIdentifier(node)
+        guard let container = swipeOptionContainers.removeValue(forKey: nodeId) else {
+            return
+        }
+        container.removeFromSuperview()
+        if node.transform != .identity, node.item?.stableId != revealedSwipeItemId {
+            node.transform = .identity
+        }
+    }
+
+    private func removeAllSwipeOptionContainers() {
+        for container in swipeOptionContainers.values {
+            container.removeFromSuperview()
+        }
+        swipeOptionContainers.removeAll()
+        for node in itemNodes where node.transform != .identity {
+            node.transform = .identity
+        }
+        for node in itemNodes {
+            node.setSwipeRevealBackgroundActive(false, transition: .immediate)
+        }
+        revealedSwipeItemId = nil
+        revealedSwipeOffset = 0.0
+    }
+
+    private func performSwipeAction(
+        _ action: AetherListSwipeAction,
+        for node: AetherListItemNode,
+        isFullSwipe: Bool
+    ) {
+        guard let index = node.index,
+              index >= 0,
+              index < items.count else {
+            return
+        }
+
+        let item = items[index]
+        closeSwipeActions(animated: true)
+        item.swipeActionSelected(action, listView: self, isFullSwipe: isFullSwipe)
+        swipeActionSelected?(index, action, isFullSwipe)
+    }
+
+    private func performSwipeActionHaptic() {
+        if let swipeActionHapticFeedback {
+            swipeActionHapticFeedback()
+            return
+        }
+        if swipeHapticFeedbackGenerator == nil {
+            swipeHapticFeedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
+        }
+        swipeHapticFeedbackGenerator?.impactOccurred()
+    }
+
+    private func swipeActionContainerContainsPoint(_ point: CGPoint) -> Bool {
+        for container in swipeOptionContainers.values {
+            let pointInContainer = container.convert(point, from: scrollView.backingView)
+            if container.containsAction(at: pointInContainer) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func syncRevealedSwipeStateAfterTransaction() {
+        guard let itemId = revealedSwipeItemId else {
+            return
+        }
+        guard let index = items.firstIndex(where: { $0.stableId == itemId }) else {
+            removeAllSwipeOptionContainers()
+            return
+        }
+
+        let actions = items[index].swipeActions
+        if actions.isEmpty || (revealedSwipeOffset > 0.0 && actions.left.isEmpty) || (revealedSwipeOffset < 0.0 && actions.right.isEmpty) {
+            closeSwipeActions(animated: true)
+            return
+        }
+
+        guard let node = nodeForItem(at: index) else {
+            removeAllSwipeOptionContainers()
+            return
+        }
+        updateSwipeRevealOffset(revealedSwipeOffset, for: node, transition: .immediate)
     }
 
     private func autoScrollForReorderIfNeeded(visibleY: CGFloat) {
@@ -1183,6 +1708,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         // screen.
         dustEffectView?.removeFromSuperview()
         dustEffectView = nil
+        removeAllSwipeOptionContainers()
         pendingLayoutTasks.values.forEach { $0.cancel() }
         customScrollIndicatorFadeWorkItem?.cancel()
     }
@@ -1217,11 +1743,15 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         tapRecognizer = tapGesture
 
         setupReorderRecognizer()
+        setupSwipeRecognizer()
         // Tap should only fire if the long-press doesn't pick up
         // first — without this gating a successful drag also fires
         // the row tap on release.
         if let lp = reorderRecognizer {
             tapGesture.require(toFail: lp)
+        }
+        if let swipeRecognizer {
+            tapGesture.require(toFail: swipeRecognizer)
         }
 
         isAccessibilityElement = false
@@ -1278,6 +1808,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         syncBackingViewBounds()
         updateCustomScrollIndicator()
         updateOverscrollState()
+        for node in itemNodes {
+            syncSwipeOptionContainerFrame(for: node)
+        }
         layoutDebugOverlay()
     }
 
@@ -1427,6 +1960,54 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         return itemNodes.first { $0.index == index }
     }
 
+    /// Index of the item whose swipe actions are currently revealed.
+    public var revealedSwipeItemIndex: Int? {
+        guard let revealedSwipeItemId else {
+            return nil
+        }
+        return items.firstIndex { $0.stableId == revealedSwipeItemId }
+    }
+
+    /// Current horizontal reveal offset for an item. Positive values reveal
+    /// left actions, negative values reveal right actions.
+    public func swipeRevealOffset(at index: Int) -> CGFloat {
+        guard index >= 0,
+              index < items.count,
+              items[index].stableId == revealedSwipeItemId else {
+            return 0.0
+        }
+        return revealedSwipeOffset
+    }
+
+    /// Programmatically reveal a row's swipe actions.
+    public func setSwipeActionsOpened(
+        _ side: AetherListSwipeActionsSide,
+        at index: Int,
+        animated: Bool
+    ) {
+        guard index >= 0,
+              index < items.count,
+              let node = nodeForItem(at: index) else {
+            return
+        }
+        let actions = items[index].swipeActions
+        guard !actions.actions(for: side).isEmpty else {
+            return
+        }
+
+        closeSwipeActions(animated: animated, except: items[index].stableId)
+        let container = ensureSwipeOptionContainer(for: node, item: items[index])
+        container.ensureOptionsView(for: side)
+        let width = container.revealWidth(for: side)
+        let offset = side == .left ? width : -width
+        updateSwipeRevealOffset(offset, for: node, transition: animated ? .animated(duration: 0.3, curve: .spring) : .immediate)
+    }
+
+    /// Close the currently revealed swipe actions, if any.
+    public func closeSwipeActions(animated: Bool) {
+        closeSwipeActions(animated: animated, except: nil)
+    }
+
     func itemNodeForListGesture(
         at point: CGPoint,
         gesture: AetherListItemGesture,
@@ -1454,6 +2035,12 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
             if gesture == .reorder {
                 guard allowsReorder, items[index].canReorder else {
+                    continue
+                }
+            }
+
+            if gesture == .swipe {
+                guard !items[index].swipeActions.isEmpty else {
                     continue
                 }
             }
@@ -1726,6 +2313,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         private let snapshot: TransactionLoadedNodeSnapshot
         fileprivate var mutationPhase: TransactionModelMutationPhase
         fileprivate var insertedNodes: [AetherListItemNode] = []
+        fileprivate var didChangeHeights = false
 
         init(
             listView: AetherListView,
@@ -1776,6 +2364,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                 if mount.didAcquireFreshNode {
                     insertedNodes.append(mount.node)
                 }
+                if mount.didChangeHeight {
+                    didChangeHeights = true
+                }
             }
         }
     }
@@ -1819,6 +2410,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                 if node.frame != frame {
                     node.frame = frame
                 }
+                listView.syncSwipeOptionContainerFrame(for: node)
                 node.updateStickyHeaderState(state, animated: false)
                 node.layer.zPosition = zPosition
                 if bringToFront {
@@ -1875,6 +2467,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                 }
                 node.frame = frame
                 node.updateAbsoluteRect(frame, within: listView.bounds.size)
+                listView.syncSwipeOptionContainerFrame(for: node)
             }
         }
     }
@@ -1978,21 +2571,27 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
                 guard let node = nodesById[nodeId] else { return }
                 node.frame = frame
                 node.updateAbsoluteRect(frame, within: listView.bounds.size)
+                listView.syncSwipeOptionContainerFrame(for: node)
 
             case let .animateFrame(nodeId, from, to, duration, curve):
                 guard let node = nodesById[nodeId] else { return }
                 node.frame = from
+                listView.syncSwipeOptionContainerFrame(for: node)
                 UIView.animate(
                     withDuration: duration,
                     delay: 0,
                     options: curve.uiViewAnimationOptions,
-                    animations: { node.frame = to },
+                    animations: {
+                        node.frame = to
+                        self.listView.syncSwipeOptionContainerFrame(for: node)
+                    },
                     completion: nil
                 )
 
             case let .insert(nodeId, frame, animation):
                 guard let node = nodesById[nodeId] else { return }
                 node.frame = frame
+                listView.syncSwipeOptionContainerFrame(for: node)
                 switch animation {
                 case .none:
                     break
@@ -2015,6 +2614,11 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
             case let .remove(nodeId, animation, hint):
                 guard let node = nodesById[nodeId] else { return }
+                if let item = node.item, item.stableId == listView.revealedSwipeItemId {
+                    listView.revealedSwipeItemId = nil
+                    listView.revealedSwipeOffset = 0.0
+                }
+                listView.removeSwipeOptionContainer(for: node)
                 guard let animation else {
                     listView.recycleNode(node)
                     return
@@ -2080,6 +2684,10 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     ) {
         isProcessingTransaction = true
         debugInstrumentation.recordTransaction()
+        if (!deleteIndices.isEmpty || !moveIndices.isEmpty || !insertIndicesAndItems.isEmpty),
+           revealedSwipeItemId != nil || !swipeOptionContainers.isEmpty {
+            closeSwipeActions(animated: false)
+        }
         if let updateOpaqueState {
             opaqueState = updateOpaqueState
         }
@@ -2117,6 +2725,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             snapshot: snapshot,
             mutationPhase: mutationPhase
         )
+        syncRevealedSwipeStateAfterTransaction()
         applyStickyHeaderLayout()
         prefetchAsyncLayouts(in: materializationPhase.visibleRange, params: params)
         assertNoDuplicateVisibleNodes()
@@ -2323,30 +2932,48 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
         rebuildOffsets()
 
-        let visibleRange = computeVisibleRange()
-        let visibleMaterializationCommands = AetherListVisibleNodeMaterializationCommandPlanner.commands(
-            visibleRange: visibleRange,
-            insertPreviousIndexByTargetIndex: mutationPhase.insertPreviousIndexByTargetIndex,
-            materializationPlanner: &mutationPhase.materializationPlanner
-        )
-        var visibleMaterializationExecutor = UIKitVisibleNodeMaterializationCommandExecutor(
-            listView: self,
-            params: params,
-            updateAnimation: itemUpdateAnimation(for: initialReplayPlan.updateAnimation),
-            snapshot: snapshot,
-            mutationPhase: mutationPhase
-        )
-        for command in visibleMaterializationCommands {
-            visibleMaterializationExecutor.execute(command)
+        var visibleRange = computeVisibleRange()
+        var insertedNodes: [AetherListItemNode] = []
+        while true {
+            let visibleMaterializationCommands = AetherListVisibleNodeMaterializationCommandPlanner.commands(
+                visibleRange: visibleRange,
+                insertPreviousIndexByTargetIndex: mutationPhase.insertPreviousIndexByTargetIndex,
+                materializationPlanner: &mutationPhase.materializationPlanner
+            )
+            var visibleMaterializationExecutor = UIKitVisibleNodeMaterializationCommandExecutor(
+                listView: self,
+                params: params,
+                updateAnimation: itemUpdateAnimation(for: initialReplayPlan.updateAnimation),
+                snapshot: snapshot,
+                mutationPhase: mutationPhase
+            )
+            for command in visibleMaterializationCommands {
+                visibleMaterializationExecutor.execute(command)
+            }
+            mutationPhase = visibleMaterializationExecutor.mutationPhase
+            insertedNodes.append(contentsOf: visibleMaterializationExecutor.insertedNodes)
+
+            guard visibleMaterializationExecutor.didChangeHeights else {
+                break
+            }
+
+            itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
+            rebuildOffsets()
+            updateContentSize()
+
+            let correctedVisibleRange = computeVisibleRange()
+            guard correctedVisibleRange != visibleRange else {
+                break
+            }
+            visibleRange = correctedVisibleRange
         }
-        mutationPhase = visibleMaterializationExecutor.mutationPhase
 
         itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
         rebuildOffsets()
         updateContentSize()
 
         return TransactionNodeMaterializationPhase(
-            insertedNodes: visibleMaterializationExecutor.insertedNodes,
+            insertedNodes: insertedNodes,
             visibleRange: visibleRange
         )
     }
@@ -2764,6 +3391,11 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         if node.superview !== scrollView.backingView {
             scrollView.backingView.addSubview(node)
         }
+        if item.stableId == revealedSwipeItemId, !revealedSwipeOffset.isZero {
+            updateSwipeRevealOffset(revealedSwipeOffset, for: node, transition: .immediate)
+        } else if swipeOptionContainers[ObjectIdentifier(node)] != nil {
+            syncSwipeOptionContainerFrame(for: node)
+        }
         if notifyWillDisplay {
             item.willDisplay(node: node, at: index)
         }
@@ -2808,6 +3440,7 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             let y = itemOffsets[index]
             node.frame = alignedFrame(x: 0, y: y, width: bounds.width, height: itemHeights[index])
             node.updateAbsoluteRect(node.frame, within: bounds.size)
+            syncSwipeOptionContainerFrame(for: node)
         }
     }
 
@@ -2822,6 +3455,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             let newLayout = resolvedLayout(for: item, node: node, fallback: fallbackLayout)
             node.applyLayout(newLayout)
             syncAccessories(for: node, item: item)
+            if let container = swipeOptionContainers[ObjectIdentifier(node)] {
+                container.setActions(item.swipeActions)
+            }
             recordLayout(newLayout, for: item)
             itemHeights[index] = newLayout.totalHeight
         }
@@ -2888,8 +3524,13 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         assertMainThread()
         if let item = node.item, let index = node.index {
             item.didEndDisplay(node: node, at: index)
+            if item.stableId == revealedSwipeItemId {
+                revealedSwipeItemId = nil
+                revealedSwipeOffset = 0.0
+            }
         }
         let key = node.item?.reuseIdentifier
+        removeSwipeOptionContainer(for: node)
         node.prepareForReuse()
         node.removeFromSuperview()
         node.index = nil
@@ -3012,6 +3653,9 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             prepared.apply(node)
             node.applyLayout(prepared.layout)
             syncAccessories(for: node, item: item)
+            if let container = swipeOptionContainers[ObjectIdentifier(node)] {
+                container.setActions(item.swipeActions)
+            }
         }
         rebuildOffsets()
         positionNodes()
@@ -3076,37 +3720,51 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
     /// Add/remove nodes to match the visible range.
     private func updateVisibleNodes(isUserInitiated: Bool = false) {
-        guard !items.isEmpty, let params = layoutParams else { return }
-
-        let visibleRange = computeVisibleRange()
-        // Keep currently-pinned floating headers alive even when
-        // their indices fall outside the regular preload range.
-        let pinnedIndices = currentStickyHeaderIndices()
-
-        var executor = UIKitVirtualizationCommandExecutor(listView: self, params: params)
-        for command in makeVirtualizationCommands(visibleRange: visibleRange, pinnedIndices: pinnedIndices) {
-            switch command {
-            case .recycle, .mount:
-                executor.execute(command)
-            case .setFrame:
-                break
+        guard !items.isEmpty, let params = layoutParams else {
+            if items.isEmpty {
+                removeAllSwipeOptionContainers()
             }
+            return
         }
 
-        if executor.didMutateNodes {
-            itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
-        }
-        
-        if executor.didChangeHeights {
-            rebuildOffsets()
-            positionNodes()
-            updateContentSize()
-        } else {
+        var visibleRange = computeVisibleRange()
+        while true {
+            // Keep currently-pinned floating headers alive even when
+            // their indices fall outside the regular preload range.
+            let pinnedIndices = currentStickyHeaderIndices()
+
+            var executor = UIKitVirtualizationCommandExecutor(listView: self, params: params)
             for command in makeVirtualizationCommands(visibleRange: visibleRange, pinnedIndices: pinnedIndices) {
-                if case .setFrame = command {
+                switch command {
+                case .recycle, .mount:
                     executor.execute(command)
+                case .setFrame:
+                    break
                 }
             }
+
+            if executor.didMutateNodes {
+                itemNodes.sort { ($0.index ?? 0) < ($1.index ?? 0) }
+            }
+
+            if executor.didChangeHeights {
+                rebuildOffsets()
+                positionNodes()
+                updateContentSize()
+
+                let correctedVisibleRange = computeVisibleRange()
+                if correctedVisibleRange != visibleRange {
+                    visibleRange = correctedVisibleRange
+                    continue
+                }
+            } else {
+                for command in makeVirtualizationCommands(visibleRange: visibleRange, pinnedIndices: pinnedIndices) {
+                    if case .setFrame = command {
+                        executor.execute(command)
+                    }
+                }
+            }
+            break
         }
 
         applyStickyHeaderLayout()
@@ -3466,6 +4124,12 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             return true
         }
         let point = touch.location(in: scrollView.backingView)
+        if gesture == .tap, revealedSwipeItemId != nil, swipeActionContainerContainsPoint(point) {
+            return false
+        }
+        if gesture == .swipe {
+            configureSwipeRecognizerForGestureStart(at: point)
+        }
         return canReceiveListItemGesture(gesture, at: point, consultExternalGate: false)
     }
 
@@ -3474,6 +4138,23 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
             return true
         }
         let point = gestureRecognizer.location(in: scrollView.backingView)
+        if gesture == .reorder, revealedSwipeItemId != nil || !swipeOptionContainers.isEmpty {
+            closeSwipeActions(animated: true)
+            return false
+        }
+        if gesture == .swipe, reorderState != nil {
+            return false
+        }
+        if gesture == .swipe {
+            configureSwipeRecognizerForGestureStart(at: point)
+            if let swipeRecognizer = gestureRecognizer as? AetherListSwipeGestureRecognizer,
+               swipeRecognizer.numberOfTouches == 0 {
+                let velocity = swipeRecognizer.velocity(in: swipeRecognizer.view)
+                if abs(velocity.y) > 4.0 && abs(velocity.y) > abs(velocity.x) * 2.5 {
+                    return false
+                }
+            }
+        }
         return canReceiveListItemGesture(gesture, at: point, consultExternalGate: true)
     }
 
@@ -3492,7 +4173,24 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         if let reorderRecognizer, recognizer === reorderRecognizer {
             return .reorder
         }
+        if let swipeRecognizer, recognizer === swipeRecognizer {
+            return .swipe
+        }
         return nil
+    }
+
+    private func configureSwipeRecognizerForGestureStart(at point: CGPoint) {
+        guard let swipeRecognizer,
+              let node = itemNodeForListGesture(at: point, gesture: .swipe, consultExternalGate: false),
+              let index = node.index,
+              index >= 0,
+              index < items.count else {
+            swipeRecognizer?.allowAnyDirection = false
+            return
+        }
+
+        let actions = items[index].swipeActions
+        swipeRecognizer.allowAnyDirection = !actions.left.isEmpty || !swipeRevealOffset(at: index).isZero
     }
 
     private func canReceiveListItemGesture(
@@ -3506,8 +4204,13 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
 
         switch gesture {
         case .tap:
+            if revealedSwipeItemId != nil {
+                return true
+            }
             return !limitsListGestureHitTestingToVisibleItemNodes
         case .reorder:
+            return false
+        case .swipe:
             return false
         }
     }
@@ -3530,7 +4233,15 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
         didScrollWithOffset?(deltaY, .immediate, nil, isUserInitiated)
     }
 
+    public func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        scrollToTopInPages(animated: true)
+        return false
+    }
+
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        if swipeState == nil, revealedSwipeItemId != nil || !swipeOptionContainers.isEmpty {
+            closeSwipeActions(animated: true)
+        }
         beganInteractiveDragging?()
     }
 
@@ -3600,6 +4311,12 @@ open class AetherListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDele
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended else { return }
         let point = gesture.location(in: scrollView.backingView)
+        if revealedSwipeItemId != nil, !swipeActionContainerContainsPoint(point) {
+            let closedIndex = revealedSwipeItemIndex
+            closeSwipeActions(animated: true)
+            swipeActionsInteractivelyClosed?(closedIndex)
+            return
+        }
         guard let node = itemNodeForListGesture(at: point, gesture: .tap),
               let index = node.index,
               index >= 0,

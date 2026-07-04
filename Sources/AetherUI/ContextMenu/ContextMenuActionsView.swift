@@ -49,6 +49,7 @@ final class ContextMenuActionsView: UIView {
     /// the outer `ContextMenuController.menuContainer` (UIVisualEffectView
     /// with UIGlassEffect / UIBlurEffect) — this view is just rows on
     /// transparent background.
+    private let scrollView = UIScrollView()
     private let contentContainer = UIView()
     /// Native context menus use a quiet grey row selection here, not a
     /// second glass lens. This pill still tracks between rows with the same
@@ -81,6 +82,9 @@ final class ContextMenuActionsView: UIView {
     private var trackedTouch: UITouch?
     private var highlightedIndex: Int?
     private var rowRevealProgress: CGFloat = 1.0
+    private var interactionStartPoint: CGPoint?
+    private var interactionLastPoint: CGPoint?
+    private var isScrollingInteraction = false
 
     /// Hooks the controller can use to apply the rubber-band stretch on the
     /// outer container (the whole menu chrome, not just the rows). Reporting
@@ -128,8 +132,17 @@ final class ContextMenuActionsView: UIView {
 
         backgroundColor = .clear
 
+        scrollView.backgroundColor = .clear
+        scrollView.clipsToBounds = true
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = false
+        scrollView.isUserInteractionEnabled = false
+        addSubview(scrollView)
+
         contentContainer.clipsToBounds = false
-        addSubview(contentContainer)
+        scrollView.addSubview(contentContainer)
 
         // Highlight sits BENEATH the rows so text + icons stay readable on
         // top. Its alpha controls visibility (0 = hidden, 1 = visible at the
@@ -153,13 +166,22 @@ final class ContextMenuActionsView: UIView {
     /// `contentInset` top + bottom.
     func preferredSize(maxWidth: CGFloat) -> CGSize {
         let width = min(maxWidth, ContextMenuActionsView.preferredWidth)
+        return CGSize(width: width, height: preferredHeight())
+    }
+
+    func preferredSize(maxWidth: CGFloat, maxHeight: CGFloat) -> CGSize {
+        let size = preferredSize(maxWidth: maxWidth)
+        return CGSize(width: size.width, height: min(size.height, max(1.0, maxHeight)))
+    }
+
+    private func preferredHeight() -> CGFloat {
         let inset = ContextMenuActionsView.contentInset
         var height: CGFloat = inset.top + inset.bottom
         if hasHeader { height += ContextMenuActionsView.backRowHeight }
         for item in items {
             height += heightForItem(item)
         }
-        return CGSize(width: width, height: height)
+        return height
     }
 
     private var hasHeader: Bool {
@@ -172,12 +194,28 @@ final class ContextMenuActionsView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // contentContainer is inset by 16pt on all sides. Rows live inside
+        // contentContainer is inset by 16pt on all sides inside a passive
+        // scroll viewport. Rows live inside
         // and are positioned in contentContainer-local coords starting at
         // (0, 0). Each row's internal slots already use 0 horizontal inset
         // (the outer 16pt is enough), so text/icons sit visually 16pt
         // from the menu's glass edge.
-        contentContainer.frame = bounds.inset(by: ContextMenuActionsView.contentInset)
+        scrollView.frame = bounds
+
+        let totalHeight = preferredHeight()
+        scrollView.contentSize = CGSize(width: bounds.width, height: totalHeight)
+        let maxOffsetY = max(0.0, totalHeight - bounds.height)
+        if scrollView.contentOffset.y > maxOffsetY {
+            scrollView.contentOffset.y = maxOffsetY
+        }
+
+        let inset = ContextMenuActionsView.contentInset
+        contentContainer.frame = CGRect(
+            x: inset.left,
+            y: inset.top,
+            width: max(0.0, bounds.width - inset.left - inset.right),
+            height: max(0.0, totalHeight - inset.top - inset.bottom)
+        )
 
         let contentWidth = contentContainer.bounds.width
         var y: CGFloat = 0.0
@@ -241,22 +279,22 @@ final class ContextMenuActionsView: UIView {
         guard trackedTouch == nil, let touch = touches.first else { return }
         trackedTouch = touch
         let point = touch.location(in: self)
+        beginInteraction(at: point)
         onStretchUpdate?(point)
-        moveHighlight(to: point, animated: false)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
         let point = tracked.location(in: self)
         onStretchUpdate?(point)
-        moveHighlight(to: point, animated: true)
+        updateInteraction(at: point, animated: true)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let tracked = trackedTouch, touches.contains(tracked) else { return }
         trackedTouch = nil
         onStretchRelease?()
-        commitTouch(at: tracked.location(in: self))
+        endInteraction(at: tracked.location(in: self))
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -264,7 +302,7 @@ final class ContextMenuActionsView: UIView {
             trackedTouch = nil
         }
         onStretchRelease?()
-        clearHighlight(animated: true)
+        cancelInteraction(animated: true)
     }
 
     /// Drive row selection from an outer glass-surface gesture. This lets the
@@ -272,19 +310,84 @@ final class ContextMenuActionsView: UIView {
     /// touch stream while the rows remain a passive visual layer.
     func beginExternalInteraction(at point: CGPoint) {
         trackedTouch = nil
-        moveHighlight(to: point, animated: false)
+        beginInteraction(at: point)
     }
 
     func updateExternalInteraction(at point: CGPoint) {
-        moveHighlight(to: point, animated: true)
+        updateInteraction(at: point, animated: true)
     }
 
     func endExternalInteraction(at point: CGPoint) {
-        commitTouch(at: point)
+        endInteraction(at: point)
     }
 
     func cancelExternalInteraction() {
-        clearHighlight(animated: true)
+        cancelInteraction(animated: true)
+    }
+
+    // MARK: - Scroll + selection routing
+
+    private var canScrollVertically: Bool {
+        scrollView.contentSize.height > scrollView.bounds.height + 0.5
+    }
+
+    private func beginInteraction(at point: CGPoint) {
+        interactionStartPoint = point
+        interactionLastPoint = point
+        isScrollingInteraction = false
+        moveHighlight(to: point, animated: false)
+    }
+
+    private func updateInteraction(at point: CGPoint, animated: Bool) {
+        if updateScrollIfNeeded(to: point) {
+            clearHighlight(animated: animated)
+            return
+        }
+        moveHighlight(to: point, animated: animated)
+    }
+
+    private func endInteraction(at point: CGPoint) {
+        let wasScrolling = isScrollingInteraction
+        resetInteractionTracking()
+        if wasScrolling {
+            clearHighlight(animated: true)
+        } else {
+            commitTouch(at: point)
+        }
+    }
+
+    private func cancelInteraction(animated: Bool) {
+        resetInteractionTracking()
+        clearHighlight(animated: animated)
+    }
+
+    private func resetInteractionTracking() {
+        interactionStartPoint = nil
+        interactionLastPoint = nil
+        isScrollingInteraction = false
+    }
+
+    private func updateScrollIfNeeded(to point: CGPoint) -> Bool {
+        guard canScrollVertically else {
+            interactionLastPoint = point
+            return false
+        }
+
+        let start = interactionStartPoint ?? point
+        let last = interactionLastPoint ?? point
+        interactionLastPoint = point
+
+        let translationX = point.x - start.x
+        let translationY = point.y - start.y
+        let shouldStartScroll = abs(translationY) > 8.0 && abs(translationY) > abs(translationX) * 1.1
+        guard isScrollingInteraction || shouldStartScroll else { return false }
+
+        isScrollingInteraction = true
+        let maxOffsetY = max(0.0, scrollView.contentSize.height - scrollView.bounds.height)
+        let nextOffsetY = min(max(0.0, scrollView.contentOffset.y + last.y - point.y), maxOffsetY)
+        guard abs(nextOffsetY - scrollView.contentOffset.y) > 0.001 else { return true }
+        scrollView.contentOffset.y = nextOffsetY
+        return true
     }
 
     // MARK: - Highlight tracking
@@ -474,10 +577,7 @@ final class ContextMenuActionsView: UIView {
     }
 
     private func convertToContentContainer(_ point: CGPoint) -> CGPoint {
-        return CGPoint(
-            x: point.x - contentContainer.frame.minX,
-            y: point.y - contentContainer.frame.minY
-        )
+        return contentContainer.convert(point, from: self)
     }
 
     private func highlightFrame(forRowAt index: Int) -> CGRect {
@@ -679,5 +779,31 @@ final class ContextMenuActionsView: UIView {
             make.centerY.equalToSuperview()
         }
         return container
+    }
+}
+
+extension ContextMenuActionsView: AetherContextMenuContentAnimatable {
+    func prepareForGooeyOpen() {
+        setRevealProgress(0.0)
+    }
+
+    func updateGooeyOpenProgress(_ progress: CGFloat) {
+        setRevealProgress(progress)
+    }
+
+    func finishGooeyOpen() {
+        setRevealProgress(1.0)
+    }
+
+    func prepareForGooeyClose() {
+        setRevealProgress(1.0)
+    }
+
+    func updateGooeyCloseProgress(_ progress: CGFloat) {
+        setRevealProgress(progress)
+    }
+
+    func finishGooeyClose() {
+        setRevealProgress(0.0)
     }
 }

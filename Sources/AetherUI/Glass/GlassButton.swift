@@ -2,93 +2,78 @@ import UIKit
 
 // MARK: - GlassButton
 
-/// Generic glass-styled tap target — a rounded-rect view with an optional
-/// title, optional leading icon, and a glass background. Designed to be
-/// dropped anywhere (card bottoms, toolbars, free-standing actions), not
-/// tied to nav bar sizing like `GlassBarButtonView`.
+/// Generic glass-styled control with optional title, optional leading icon,
+/// loading state and native liquid-glass interaction.
 ///
-/// **Press feedback**
-/// Deliberately NOT a `UIControl` and NOT animated manually. Touches flow
-/// straight into the `GlassBackgroundView` subview (its
-/// `isUserInteractionEnabled` stays `true`), which lets iOS 26's native
-/// `UIGlassEffect.isInteractive` observer run the liquid-warp deformation
-/// exactly like a standalone `GlassBackgroundView` would. A layered
-/// UIControl + manual scale/alpha spring approach was tried and consistently
-/// interfered with the native warp — either the UIControl swallowed the
-/// touch before UIGlassEffect could observe it, or our `self.transform`
-/// scale fought the warp's coordinate math. Letting the glass own the
-/// touch gives the real "стеклянная" feel with zero custom code.
-///
-/// Tap dispatch goes through a plain `UITapGestureRecognizer` on the
-/// button; `action` fires on a completed tap. No highlight state to track.
-///
-/// **Sizing contract**
-///   - Only `image` → square-ish sized by `intrinsicContentSize` (36×36
-///     default, configurable via `minimumSize` / explicit frame).
-///   - Only `title` → pill-sized with horizontal padding around the label.
-///   - Both → icon leading + label trailing inside the pill.
-///
-/// **Glass**
-///   - Uses `GlassBackgroundView(style: .regular)` internally.
-///   - `isDark` auto-derives from the view's trait collection (overrideable
-///     via `isDarkAppearance` property if the surface sits on a custom dark
-///     background while the system is in light mode).
-///   - Corner radius defaults to `bounds.height / 2` (pill) — override via
-///     `cornerRadius` if a specific rect shape is needed.
-public final class GlassButton: UIView {
-    // MARK: - Subviews
+/// The control keeps its visible content inside `GlassBackgroundView.contentView`
+/// so native `UIGlassEffect` deformation affects the surface and content as
+/// one unit. Touch tracking is driven by a non-cancelling gesture recognizer:
+/// this lets the inner visual-effect view keep receiving touches for native
+/// glass feedback while `GlassButton` still exposes normal `UIControl` events.
+public final class GlassButton: UIControl {
+    private enum Constants {
+        static let defaultHeight: CGFloat = 36.0
+        static let iconOnlySize = CGSize(width: 36.0, height: 36.0)
+        static let minIconSide: CGFloat = 20.0
+        static let maxIconSide: CGFloat = 28.0
+        static let fallbackIconSide: CGFloat = 22.0
+        static let maxMeasuredTextWidth: CGFloat = 240.0
+        static let loadingFadeDuration: TimeInterval = 0.18
+    }
+
+    // MARK: Subviews
 
     private let glassBackground: GlassBackgroundView
     private let contentContainer = UIView()
     private var iconView: UIImageView?
     private var titleLabel: UILabel?
     private var loadingIndicator: UIActivityIndicatorView?
-    private var tapRecognizer: UITapGestureRecognizer?
+    private var pressRecognizer: GlassButtonPressGestureRecognizer?
     private var elasticRecognizer: GlassHighlightGestureRecognizer?
 
-    // MARK: - Properties
+    // MARK: Public API
 
-    /// Tap handler. Fires on a completed tap (finger down + up within the
-    /// button's bounds, short duration). `sender` is the button itself.
+    /// Back-compat closure for existing call sites. Standard `UIControl`
+    /// target/action users can also subscribe to `.touchUpInside` or
+    /// `.primaryActionTriggered`.
     public var action: ((GlassButton) -> Void)?
 
-    /// Minimum content size used when the image/title don't provide their own.
-    public var minimumSize: CGSize = CGSize(width: 36, height: 36)
+    /// Minimum content size used when the image/title do not provide one.
+    public var minimumSize: CGSize = Constants.iconOnlySize {
+        didSet { invalidateIntrinsicContentSize(); setNeedsLayout() }
+    }
 
-    /// Corner radius. `nil` (default) → pill (bounds.height / 2).
+    /// Corner radius. `nil` means capsule (`bounds.height / 2`).
     public var cornerRadius: CGFloat? {
         didSet { setNeedsLayout() }
     }
 
-    /// Horizontal padding around the content (icon + label).
-    public var contentPadding: CGFloat = 14 {
-        didSet { setNeedsLayout(); invalidateIntrinsicContentSize() }
-    }
-    
-    public var tint: GlassBackgroundView.TintColor = .init(kind: .panel) {
-        didSet { setNeedsLayout(); invalidateIntrinsicContentSize() }
+    /// Horizontal padding around title/icon content.
+    public var contentPadding: CGFloat = 14.0 {
+        didSet { invalidateIntrinsicContentSize(); setNeedsLayout() }
     }
 
-    /// Spacing between icon and title when both are shown.
-    public var iconTitleSpacing: CGFloat = 8 {
+    public var tint: GlassBackgroundView.TintColor = .init(kind: .panel) {
         didSet { setNeedsLayout() }
     }
 
-    /// Tint color for icon + title. Defaults to `.label` so it adapts to
-    /// light / dark automatically.
+    public var font: UIFont? {
+        get { titleLabel?.font }
+        set { titleLabel?.font = newValue }
+    }
+
+    /// Spacing between icon and title when both are visible.
+    public var iconTitleSpacing: CGFloat = 8.0 {
+        didSet { invalidateIntrinsicContentSize(); setNeedsLayout() }
+    }
+
+    /// Tint color for icon, title and loading indicator.
     public var contentColor: UIColor = .label {
-        didSet {
-            iconView?.tintColor = contentColor
-            iconView?.setMonochromaticEffect(tintColor: contentColor)
-            titleLabel?.textColor = contentColor
-            loadingIndicator?.color = contentColor
-        }
+        didSet { applyContentColor() }
     }
 
     /// Override for the `isDark` flag passed to the glass background.
-    /// `nil` (default) → derived from `traitCollection.userInterfaceStyle`.
-    /// Forwarded to `GlassBackgroundView.isDarkOverride` so the glass also
-    /// picks up the override on its own auto-layout / trait-change paths.
+    /// `nil` follows `traitCollection.userInterfaceStyle`.
     public var isDarkAppearance: Bool? {
         didSet {
             glassBackground.isDarkOverride = isDarkAppearance
@@ -98,115 +83,79 @@ public final class GlassButton: UIView {
 
     public var title: String? {
         didSet {
-            if title == oldValue { return }
-            configureTitleIfNeeded()
-            titleLabel?.text = title
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
+            guard title != oldValue else { return }
+            updateTitleView()
         }
     }
 
     public var image: UIImage? {
         didSet {
-            configureIconIfNeeded()
-            iconView?.image = image?.withRenderingMode(.alwaysTemplate)
-            invalidateIntrinsicContentSize()
-            setNeedsLayout()
+            guard image !== oldValue else { return }
+            updateIconView()
         }
     }
 
-    /// Whether the button accepts taps. Disabled buttons dim to 0.4 and
-    /// don't fire `action`. Mirrors the old UIControl-era property name
-    /// for familiarity but is just a UIView with interaction gated.
-    public var isEnabled: Bool = true {
+    public override var isEnabled: Bool {
         didSet {
-            if isEnabled == oldValue { return }
-            alpha = isEnabled ? 1.0 : 0.4
-            tapRecognizer?.isEnabled = isEnabled && !isLoading
-            elasticRecognizer?.isEnabled = isEnabled && !isLoading
+            guard isEnabled != oldValue else { return }
+            updateInteractionState()
         }
     }
 
-    /// Waiting/loading state. Swaps the icon+title for a centered spinner,
-    /// blocks taps, and keeps the glass pill at full opacity (this is a
-    /// "working on it" affordance, not a disabled look — use `isEnabled`
-    /// for that). Transition is a short crossfade.
+    /// Waiting/loading state. Swaps title/icon content for a centered spinner
+    /// and blocks primary actions without applying the disabled alpha.
     public var isLoading: Bool = false {
         didSet {
-            if isLoading == oldValue { return }
-            tapRecognizer?.isEnabled = isEnabled && !isLoading
-            elasticRecognizer?.isEnabled = isEnabled && !isLoading
+            guard isLoading != oldValue else { return }
+            updateInteractionState()
             updateLoadingState(animated: true)
         }
     }
 
-    // MARK: - Init
+    // MARK: Init
 
     public init(title: String? = nil, image: UIImage? = nil) {
         self.glassBackground = GlassBackgroundView(style: .regular)
         super.init(frame: .zero)
 
-        // Glass stays fully interactive — this is the whole point of the
-        // UIView (not UIControl) design. Touches reach the
-        // UIVisualEffectView under the glass, UIGlassEffect's
-        // `isInteractive` observer picks up finger position, and the
-        // native liquid warp runs with zero involvement from us.
+        updateAccessibilityState()
+
         glassBackground.isUserInteractionEnabled = true
         addSubview(glassBackground)
 
-        // Content lives INSIDE the glass's own content host (the
-        // UIVisualEffectView.contentView). When UIGlassEffect warps on
-        // press, the effect view's rendering chain deforms the entire
-        // content layer in lockstep — so the icon/label ride the liquid
-        // wave together with the glass surface instead of staying pinned
-        // while only the glass moves.
         contentContainer.isUserInteractionEnabled = false
         glassBackground.contentView.addSubview(contentContainer)
 
         self.title = title
         self.image = image
-        configureTitleIfNeeded()
-        configureIconIfNeeded()
-        titleLabel?.text = title
-        iconView?.image = image?.withRenderingMode(.alwaysTemplate)
+        updateTitleView()
+        updateIconView()
 
-        // Gesture recognizers sit above UIResponder's delivery path — they
-        // observe the touch stream but don't consume it during the press
-        // phase, which is exactly what we need: glass gets to warp, tap
-        // still fires on release. `cancelsTouchesInView` is left at its
-        // default `true`; on recognition (tap-up) the remaining touch is
-        // cancelled in the subview, but by then the warp has already done
-        // its work and the press is over anyway.
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
-        addGestureRecognizer(tap)
-        self.tapRecognizer = tap
+        let press = GlassButtonPressGestureRecognizer(target: self, action: #selector(handlePressGesture(_:)))
+        addGestureRecognizer(press)
+        self.pressRecognizer = press
 
-        // Press feedback is version-gated:
-        //   - iOS 26+: native UIGlassEffect.isInteractive does the surface
-        //     warp under the finger (handled in GlassBackgroundView.update).
-        //   - iOS ≤25: no native warp available, so attach the ported
-        //     Telegram TouchEffect — drag stretches the button via
-        //     sublayerTransform, release springs back, radial highlight
-        //     tracks the finger.
-        if #available(iOS 26.0, *) {
-            // native path
-        } else {
+        if #unavailable(iOS 26.0) {
             let elastic = GlassHighlightGestureRecognizer(target: nil, action: nil)
             elastic.touchEffectView = self
             elastic.highlightContainerView = glassBackground.contentView
             addGestureRecognizer(elastic)
             self.elasticRecognizer = elastic
         }
+
+        updateInteractionState()
     }
 
-    public required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    public required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
-    // MARK: - Layout
+    // MARK: Layout
 
     public override func layoutSubviews() {
         super.layoutSubviews()
 
-        let resolvedCorner = cornerRadius ?? (bounds.height / 2.0)
+        let resolvedCorner = cornerRadius ?? bounds.height / 2.0
         let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
 
         glassBackground.frame = bounds
@@ -218,27 +167,27 @@ public final class GlassButton: UIView {
             cornerRadius: resolvedCorner,
             isDark: resolvedDark,
             tintColor: tint,
-            isInteractive: true,
+            isInteractive: isInteractionAvailable,
             isVisible: true,
             transition: .immediate
         )
 
         contentContainer.frame = bounds
         layoutContent()
+        layoutLoadingIndicator()
     }
-    
+
     @discardableResult
     public func update(
         cornerRadius: CGFloat,
         tintColor: GlassBackgroundView.TintColor,
         isInteractive: Bool = true,
-        isVisible: Bool = true,
+        isVisible: Bool = true
     ) -> Self {
         self.tint = tintColor
         self.cornerRadius = cornerRadius
 
         let resolvedDark = isDarkAppearance ?? (traitCollection.userInterfaceStyle == .dark)
-
         if #available(iOS 26.0, *) {
             glassBackground.setNativeUniformCornerRadius(cornerRadius)
         }
@@ -247,109 +196,183 @@ public final class GlassButton: UIView {
             cornerRadius: cornerRadius,
             isDark: resolvedDark,
             tintColor: tintColor,
-            isInteractive: isInteractive,
+            isInteractive: isInteractive && isInteractionAvailable,
             isVisible: isVisible,
             transition: .immediate
         )
-        
+
         return self
     }
 
-    private func layoutContent() {
-        let iconSize = iconView?.image?.size.width ?? 0
-        let clampedIconSize: CGFloat = iconSize > 0 ? max(20, min(28, iconSize)) : 0
-        let titleSize = titleLabel?.sizeThatFits(CGSize(width: bounds.width - 2 * contentPadding, height: bounds.height)) ?? .zero
-
-        let hasIcon = (iconView?.image != nil)
-        let hasTitle = (titleLabel?.text?.isEmpty == false)
-
-        if let indicator = loadingIndicator {
-            let size = indicator.intrinsicContentSize
-            indicator.frame = CGRect(
-                x: (bounds.width - size.width) / 2.0,
-                y: (bounds.height - size.height) / 2.0,
-                width: size.width, height: size.height
-            )
-        }
-
-        if hasIcon && hasTitle {
-            let spacing = iconTitleSpacing
-            let totalW = clampedIconSize + spacing + titleSize.width
-            let startX = (bounds.width - totalW) / 2.0
-            iconView?.frame = CGRect(
-                x: startX,
-                y: (bounds.height - clampedIconSize) / 2.0,
-                width: clampedIconSize, height: clampedIconSize
-            )
-            titleLabel?.frame = CGRect(
-                x: startX + clampedIconSize + spacing,
-                y: 0, width: titleSize.width, height: bounds.height
-            )
-        } else if hasIcon {
-            iconView?.frame = CGRect(
-                x: (bounds.width - clampedIconSize) / 2.0,
-                y: (bounds.height - clampedIconSize) / 2.0,
-                width: clampedIconSize, height: clampedIconSize
-            )
-        } else if hasTitle {
-            titleLabel?.frame = CGRect(
-                x: contentPadding, y: 0,
-                width: bounds.width - 2 * contentPadding, height: bounds.height
-            )
-        }
-    }
-
     public override var intrinsicContentSize: CGSize {
-        let hasIcon = (image != nil)
-        let hasTitle = !(title ?? "").isEmpty
+        let hasIcon = image != nil
+        let hasTitle = title?.isEmpty == false
 
-        if hasIcon && hasTitle {
-            let iconW: CGFloat = 22
-            let textW = titleLabel?.sizeThatFits(CGSize(width: 240, height: 40)).width ?? 60
-            return CGSize(width: iconW + iconTitleSpacing + textW + 2 * contentPadding, height: 36)
+        switch (hasIcon, hasTitle) {
+        case (true, true):
+            let width = Constants.fallbackIconSide + iconTitleSpacing + measuredTitleWidth + 2.0 * contentPadding
+            return CGSize(width: max(minimumSize.width, ceil(width)), height: max(minimumSize.height, Constants.defaultHeight))
+        case (true, false):
+            return CGSize(
+                width: max(minimumSize.width, Constants.iconOnlySize.width),
+                height: max(minimumSize.height, Constants.iconOnlySize.height)
+            )
+        case (false, true):
+            let width = measuredTitleWidth + 2.0 * contentPadding
+            return CGSize(width: max(minimumSize.width, ceil(width)), height: max(minimumSize.height, Constants.defaultHeight))
+        case (false, false):
+            return minimumSize
         }
-        if hasIcon {
-            return CGSize(width: max(minimumSize.width, 36), height: max(minimumSize.height, 36))
-        }
-        if hasTitle {
-            let textW = titleLabel?.sizeThatFits(CGSize(width: 240, height: 40)).width ?? 60
-            return CGSize(width: max(minimumSize.width, textW + 2 * contentPadding), height: 36)
-        }
-        return minimumSize
     }
 
-    // MARK: - Lazy subviews
+    public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
 
-    private func configureTitleIfNeeded() {
-        guard title != nil, titleLabel == nil else { return }
+        guard previousTraitCollection?.userInterfaceStyle != traitCollection.userInterfaceStyle else { return }
+        applyContentColor()
+        setNeedsLayout()
+    }
+
+    // MARK: Content
+
+    private var measuredTitleWidth: CGFloat {
+        titleLabel?.sizeThatFits(
+            CGSize(width: Constants.maxMeasuredTextWidth, height: Constants.defaultHeight)
+        ).width ?? 0.0
+    }
+
+    private var resolvedIconSide: CGFloat {
+        guard let image else { return 0.0 }
+        let side = max(image.size.width, image.size.height)
+        guard side > 0.0 else { return Constants.fallbackIconSide }
+        return max(Constants.minIconSide, min(Constants.maxIconSide, side))
+    }
+
+    private var isInteractionAvailable: Bool {
+        isEnabled && !isLoading
+    }
+
+    private func updateTitleView() {
+        if title?.isEmpty == false {
+            let label = titleLabel ?? makeTitleLabel()
+            label.text = title
+            label.isHidden = false
+        } else {
+            titleLabel?.text = nil
+            titleLabel?.isHidden = true
+        }
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    private func updateIconView() {
+        if let image {
+            let view = iconView ?? makeIconView()
+            view.image = image.withRenderingMode(.alwaysTemplate)
+            view.isHidden = false
+        } else {
+            iconView?.image = nil
+            iconView?.isHidden = true
+        }
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+    }
+
+    private func makeTitleLabel() -> UILabel {
         let label = UILabel()
-        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.font = .systemFont(ofSize: 15.0, weight: .medium)
         label.textColor = contentColor
         label.textAlignment = .center
         contentContainer.addSubview(label)
         titleLabel = label
+        return label
     }
 
-    private func configureIconIfNeeded() {
-        guard image != nil, iconView == nil else { return }
+    private func makeIconView() -> UIImageView {
         let view = UIImageView()
         view.contentMode = .center
         view.tintColor = contentColor
         view.setMonochromaticEffect(tintColor: contentColor)
         contentContainer.addSubview(view)
         iconView = view
+        return view
     }
+
+    private func applyContentColor() {
+        iconView?.tintColor = contentColor
+        iconView?.setMonochromaticEffect(tintColor: contentColor)
+        titleLabel?.textColor = contentColor
+        loadingIndicator?.color = contentColor
+    }
+
+    private func layoutContent() {
+        let hasIcon = image != nil
+        let hasTitle = title?.isEmpty == false
+        let iconSide = resolvedIconSide
+        let maxTitleWidth = max(0.0, bounds.width - 2.0 * contentPadding)
+        let titleSize = titleLabel?.sizeThatFits(CGSize(width: maxTitleWidth, height: bounds.height)) ?? .zero
+
+        switch (hasIcon, hasTitle) {
+        case (true, true):
+            let titleWidth = min(titleSize.width, max(0.0, bounds.width - 2.0 * contentPadding - iconSide - iconTitleSpacing))
+            let totalWidth = iconSide + iconTitleSpacing + titleWidth
+            let startX = floor((bounds.width - totalWidth) / 2.0)
+            iconView?.frame = CGRect(
+                x: startX,
+                y: floor((bounds.height - iconSide) / 2.0),
+                width: iconSide,
+                height: iconSide
+            )
+            titleLabel?.frame = CGRect(
+                x: startX + iconSide + iconTitleSpacing,
+                y: 0.0,
+                width: titleWidth,
+                height: bounds.height
+            )
+
+        case (true, false):
+            iconView?.frame = CGRect(
+                x: floor((bounds.width - iconSide) / 2.0),
+                y: floor((bounds.height - iconSide) / 2.0),
+                width: iconSide,
+                height: iconSide
+            )
+
+        case (false, true):
+            titleLabel?.frame = CGRect(
+                x: contentPadding,
+                y: 0.0,
+                width: maxTitleWidth,
+                height: bounds.height
+            )
+
+        case (false, false):
+            break
+        }
+    }
+
+    // MARK: Loading
 
     private func configureLoadingIndicatorIfNeeded() {
         guard loadingIndicator == nil else { return }
-        let style: UIActivityIndicatorView.Style = .medium
-        let indicator = UIActivityIndicatorView(style: style)
+        let indicator = UIActivityIndicatorView(style: .medium)
         indicator.hidesWhenStopped = false
         indicator.color = contentColor
-        indicator.alpha = 0
+        indicator.alpha = 0.0
         glassBackground.contentView.addSubview(indicator)
         loadingIndicator = indicator
         setNeedsLayout()
+    }
+
+    private func layoutLoadingIndicator() {
+        guard let indicator = loadingIndicator else { return }
+        let size = indicator.intrinsicContentSize
+        indicator.frame = CGRect(
+            x: floor((bounds.width - size.width) / 2.0),
+            y: floor((bounds.height - size.height) / 2.0),
+            width: size.width,
+            height: size.height
+        )
     }
 
     private func updateLoadingState(animated: Bool) {
@@ -358,32 +381,138 @@ public final class GlassButton: UIView {
             loadingIndicator?.startAnimating()
         }
 
-        let contentTarget: CGFloat = isLoading ? 0.0 : 1.0
-        let indicatorTarget: CGFloat = isLoading ? 1.0 : 0.0
+        let contentTargetAlpha: CGFloat = isLoading ? 0.0 : 1.0
+        let indicatorTargetAlpha: CGFloat = isLoading ? 1.0 : 0.0
 
-        let apply = {
-            self.contentContainer.alpha = contentTarget
-            self.loadingIndicator?.alpha = indicatorTarget
+        let changes = {
+            self.contentContainer.alpha = contentTargetAlpha
+            self.loadingIndicator?.alpha = indicatorTargetAlpha
         }
-        let finalize = { [weak self] in
-            guard let self = self else { return }
+        let completion = { [weak self] in
+            guard let self else { return }
             if !self.isLoading {
                 self.loadingIndicator?.stopAnimating()
             }
         }
 
         if animated {
-            UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .curveEaseInOut], animations: apply) { _ in finalize() }
+            UIView.animate(
+                withDuration: Constants.loadingFadeDuration,
+                delay: 0.0,
+                options: [.beginFromCurrentState, .curveEaseInOut],
+                animations: changes,
+                completion: { _ in completion() }
+            )
         } else {
-            apply()
-            finalize()
+            changes()
+            completion()
         }
     }
 
-    // MARK: - Actions
+    // MARK: Interaction
 
-    @objc private func handleTap() {
-        guard isEnabled, !isLoading else { return }
-        action?(self)
+    private func updateInteractionState() {
+        let enabled = isInteractionAvailable
+        alpha = isEnabled ? 1.0 : 0.4
+        pressRecognizer?.isEnabled = enabled
+        elasticRecognizer?.isEnabled = enabled
+        if !enabled {
+            isHighlighted = false
+        }
+        updateAccessibilityState()
+        setNeedsLayout()
+    }
+
+    private func updateAccessibilityState() {
+        var traits = accessibilityTraits
+        traits.insert(.button)
+        if isEnabled {
+            traits.remove(.notEnabled)
+        } else {
+            traits.insert(.notEnabled)
+        }
+        accessibilityTraits = traits
+    }
+
+    @objc private func handlePressGesture(_ recognizer: GlassButtonPressGestureRecognizer) {
+        guard isInteractionAvailable else { return }
+
+        let location = recognizer.location(in: self)
+        let isInside = bounds.contains(location)
+
+        switch recognizer.state {
+        case .began:
+            isHighlighted = isInside
+            if isInside {
+                sendActions(for: .touchDown)
+            }
+
+        case .changed:
+            if isInside != isHighlighted {
+                sendActions(for: isInside ? .touchDragEnter : .touchDragExit)
+            }
+            isHighlighted = isInside
+            sendActions(for: isInside ? .touchDragInside : .touchDragOutside)
+
+        case .ended:
+            isHighlighted = false
+            if isInside {
+                sendActions(for: .touchUpInside)
+                action?(self)
+                sendActions(for: .primaryActionTriggered)
+            } else {
+                sendActions(for: .touchUpOutside)
+            }
+
+        case .cancelled, .failed:
+            isHighlighted = false
+            sendActions(for: .touchCancel)
+
+        default:
+            break
+        }
+    }
+}
+
+private final class GlassButtonPressGestureRecognizer: UIGestureRecognizer {
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        requiresExclusiveTouchType = false
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+        false
+    }
+
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+        false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard touches.count == 1 else {
+            state = .failed
+            return
+        }
+        state = .began
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else { return }
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard state == .began || state == .changed else {
+            state = .failed
+            return
+        }
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        state = .cancelled
     }
 }

@@ -426,9 +426,7 @@ public final class AetherNativeWindow: UIWindow, AetherWindowHost {
         windowPanRecognizer?.isEnabled = true
 
         if windowLayout.upperKeyboardInputPositionBound != nil {
-            updateLayout {
-                $0.updateUpperKeyboardInputPositionBound(nil, transition: .animated(duration: 0.25, curve: .spring), overrideTransition: false)
-            }
+            returnInteractiveKeyboardGestureToRest()
         }
         keyboardGestureBeginLocation = nil
     }
@@ -944,6 +942,8 @@ public final class AetherNativeWindow: UIWindow, AetherWindowHost {
         if canDismiss,
            let inputHeight = windowLayout.inputHeight,
            location.y + accessoryHeight > windowLayout.size.height - inputHeight {
+            beginInteractiveKeyboardDismissalCleanup()
+
             let dismissDuration: CGFloat
             if #available(iOS 26.0, *) {
                 dismissDuration = 0.3832
@@ -958,9 +958,37 @@ public final class AetherNativeWindow: UIWindow, AetherWindowHost {
                 )
             }
         } else {
+            returnInteractiveKeyboardGestureToRest()
+        }
+    }
+
+    private func returnInteractiveKeyboardGestureToRest(
+        transition: ContainedViewLayoutTransition = .animated(duration: 0.25, curve: .easeInOut)
+    ) {
+        guard let inputHeight = windowLayout.inputHeight, inputHeight > 0.0 else {
             updateLayout {
-                $0.updateUpperKeyboardInputPositionBound(nil, transition: .animated(duration: 0.25, curve: .easeInOut), overrideTransition: false)
+                $0.updateUpperKeyboardInputPositionBound(nil, transition: transition, overrideTransition: false)
             }
+            return
+        }
+
+        let restingBound = windowLayout.size.height - inputHeight
+        updateLayout {
+            $0.updateUpperKeyboardInputPositionBound(restingBound, transition: transition, overrideTransition: false)
+        }
+    }
+
+    private func finishInteractiveKeyboardReturnToRest() {
+        guard let inputHeight = windowLayout.inputHeight,
+              let bound = windowLayout.upperKeyboardInputPositionBound else {
+            return
+        }
+        let restingBound = windowLayout.size.height - inputHeight
+        guard abs(bound - restingBound) < 0.5 else {
+            return
+        }
+        updateLayout {
+            $0.updateUpperKeyboardInputPositionBound(nil, transition: .immediate, overrideTransition: false)
         }
     }
 
@@ -1116,13 +1144,32 @@ public final class AetherNativeWindow: UIWindow, AetherWindowHost {
         if !previousInputOffset.isEqual(to: updatedInputOffset), !shouldDeferKeyboardOffsetReset {
             let isHiding = pending.transition.isAnimated
                 && pending.layout.upperKeyboardInputPositionBound == pending.layout.size.height
-            updateInteractiveKeyboardOffset(
-                updatedInputOffset,
-                transition: pending.transition
-            ) { [weak self] in
-                guard let self, isHiding else { return }
-                self.beginInteractiveKeyboardDismissalCleanup()
+            let targetInputHeight = pending.layout.inputHeight ?? 0.0
+            let restingKeyboardBound = pending.layout.size.height - targetInputHeight
+            let isReturningToRest = pending.transition.isAnimated
+                && targetInputHeight > 0.0
+                && pending.layout.upperKeyboardInputPositionBound != nil
+                && abs((pending.layout.upperKeyboardInputPositionBound ?? 0.0) - restingKeyboardBound) < 0.5
+            let shouldLetUIKitFinishKeyboardDismissal = isCompletingInteractiveKeyboardDismissal && isHiding
+            if !shouldLetUIKitFinishKeyboardDismissal {
+                updateInteractiveKeyboardOffset(
+                    updatedInputOffset,
+                    transition: pending.transition
+                ) { [weak self] in
+                    guard let self else { return }
+                    if isHiding {
+                        self.beginInteractiveKeyboardDismissalCleanup()
+                    } else if isReturningToRest {
+                        self.finishInteractiveKeyboardReturnToRest()
+                    }
+                }
             }
+        } else if pending.transition.isAnimated,
+                  let targetInputHeight = pending.layout.inputHeight,
+                  targetInputHeight > 0.0,
+                  let bound = pending.layout.upperKeyboardInputPositionBound,
+                  abs(bound - (pending.layout.size.height - targetInputHeight)) < 0.5 {
+            finishInteractiveKeyboardReturnToRest()
         }
 
         // Update covering view

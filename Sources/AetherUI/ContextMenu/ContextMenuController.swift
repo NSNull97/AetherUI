@@ -6,6 +6,10 @@ import UIKit
 /// default `.morph` path keeps the older rounded-rect morph, while
 /// `.fluidMorph` uses a source-to-platter bloom: one visible glass surface
 /// expands from the source frame through a soft bubble into the final menu.
+/// `.gooey` is the liquid connector transition path: it keeps the menu
+/// controller/action pipeline intact and adds a temporary source↔menu
+/// shell overlay with a metaball bridge and optical highlight while the real
+/// menu remains fixed at its final layout size.
 ///
 /// Two presentation flavours:
 ///   - `.morph`   (default) — uses `ContextMenuMorphHostView`.
@@ -30,8 +34,9 @@ public final class ContextMenuController {
     ///   open    ~ 0.36s  soft spring-driven ease-out; the overshoot lives in
     ///                    the main geometry curve, not as a late extra pulse.
     ///   dismiss ~ 0.28s  inverse curve: decisive start, soft source settle.
-    private static let morphDuration: TimeInterval = 0.36
-    private static let dismissDuration: TimeInterval = 0.28
+    private static let morphDuration: TimeInterval = 0.88
+    private static let dismissDuration: TimeInterval = 0.78
+    private static let previewOpenDuration: TimeInterval = 0.34
     private static let previewDismissDuration: TimeInterval = 0.34
     private static let previewDismissMenuScale: CGFloat = 0.82
     private static let previewDismissMenuOffsetY: CGFloat = 14.0
@@ -40,11 +45,21 @@ public final class ContextMenuController {
     ///   1.0 = critically damped (no bounce, just glides in)
     ///   0.7 = noticeable overshoot, ~one settle cycle — "fluid"
     ///   0.5 = lots of wobble
-    /// 0.72 is the sweet spot for "tactile, playful, but not silly".
-    /// Close uses 0.86 — much firmer, just enough give to not feel
+    /// 0.72 is the sweet spot for the older `.morph` host. `.fluidMorph`
+    /// opens at 0.65 so the platter bloom has a more visible liquid settle.
+    /// Close uses 0.84 — much firmer, just enough give to not feel
     /// snap-to-invisibility.
     private static let morphDamping: CGFloat = 0.72
-    private static let dismissDamping: CGFloat = 0.84
+    private static let fluidMorphDamping: CGFloat = 0.77
+    private static let previewDamping: CGFloat = 0.77
+    private static let dismissDamping: CGFloat = 0.77
+
+    private static func previewBezierTimingParameters() -> UICubicTimingParameters {
+        UICubicTimingParameters(
+            controlPoint1: CGPoint(x: 0.2, y: 0.8),
+            controlPoint2: CGPoint(x: 0.2, y: 1.0)
+        )
+    }
 
     private static let dimAlpha: CGFloat = 0.08  // very faint separation veil (rec: ≤0.06-0.12)
     /// Radius of the backdrop blur applied to the dim layer, in points.
@@ -147,6 +162,10 @@ public final class ContextMenuController {
         /// future menu anchor, expands as a circular/oval lens, then rectifies
         /// into the final rounded menu platter.
         case fluidMorph
+        /// Gooey source→menu transition. Implemented as a visual transition
+        /// overlay around the existing menu surface; actions, gestures,
+        /// dismissal and accessibility remain owned by ContextMenuController.
+        case gooey(configuration: AetherGooeyContextMenuTransitionConfiguration? = nil)
     }
 
     // MARK: - State
@@ -174,6 +193,9 @@ public final class ContextMenuController {
     /// is transparent; its single visible glass surface animates frame and
     /// corner radius from source to menu.
     private var platterBloomHost: ContextMenuSourcePlatterBloomTransitionView?
+    /// For `.gooey`: reusable transition primitive and final glass surface.
+    private var gooeyTransition: AetherGooeyContextMenuTransition?
+    private var gooeySurfaceView: MenuGlassSurfaceView?
     /// For `.preview` style only: the outer wrapper holding the (static-
     /// size) glass menu. Left `nil` for `.morph` — morphHost plays that role.
     private var sdfHost: UIView?
@@ -188,7 +210,7 @@ public final class ContextMenuController {
     /// for `.fluidMorph` it's the platter bloom glass surface; for `.preview` it's
     /// `sdfHost`. Collapsed into a single property so downstream wiring
     /// code doesn't have to branch on presentation style.
-    private var surfaceView: UIView? { morphHost ?? platterBloomHost?.finalMenuGlassSurfaceView ?? sdfHost }
+    private var surfaceView: UIView? { morphHost ?? platterBloomHost?.finalMenuGlassSurfaceView ?? gooeySurfaceView ?? sdfHost }
     private var surfaceOverlayView: UIView? { surfaceView }
     /// Inline submenu overlay (Yandex Music style). When non-nil, the parent
     /// `actionsView` is dimmed + disabled and `submenuCard` is overlaid on
@@ -257,6 +279,15 @@ public final class ContextMenuController {
         self.onDismiss = onDismiss
     }
 
+    private var usesLeasedSourcePresentation: Bool {
+        switch presentationStyle {
+        case .fluidMorph, .gooey:
+            return true
+        case .morph, .preview:
+            return false
+        }
+    }
+
     // MARK: - Public entry points
 
     /// Present the menu as an overlay on the window hosting the source view.
@@ -298,14 +329,17 @@ public final class ContextMenuController {
 
         // Compute menu metrics.
         let actionsView = ContextMenuActionsView(items: items)
-        let maxWidth = min(host.bounds.width - 24.0, ContextMenuActionsView.preferredWidth)
-        let menuSize = actionsView.preferredSize(maxWidth: maxWidth)
+        let maxWidth = min(max(1.0, host.bounds.width - 24.0), ContextMenuActionsView.preferredWidth)
+        let menuSize = actionsView.preferredSize(
+            maxWidth: maxWidth,
+            maxHeight: maximumMenuHeight(hostBounds: host.bounds)
+        )
         var sourceCornerRadius = self.source.cornerRadius ?? source.layer.cornerRadius
         let activeSourceLease: SourcePresentationLease?
         let sourceVisualMode: ContextMenuSourceVisualMode?
         let sourceRectInHost: CGRect
 
-        if case .fluidMorph = presentationStyle {
+        if usesLeasedSourcePresentation {
             guard let descriptor = makeSourceDescriptor(hitView: source, overlayView: host) else {
                 host.removeFromSuperview()
                 isPresented = false
@@ -364,7 +398,7 @@ public final class ContextMenuController {
             menuFrame = computeMenuFrame(sourceRect: sourceRectInHost, menuSize: menuSize, hostBounds: host.bounds)
         }
         #if DEBUG
-        if case .fluidMorph = presentationStyle {
+        if usesLeasedSourcePresentation {
             assert(menuFrame.width <= host.bounds.width - 32.0 || host.bounds.width < 64.0, "Context menu target frame must be menu-sized, not overlay-sized.")
             assert(menuFrame.height < host.bounds.height * 0.75 || host.bounds.height < 64.0, "Context menu target frame is too tall for platter bloom geometry.")
             assert(menuFrame != host.bounds, "Context menu target frame must not equal overlay bounds.")
@@ -379,7 +413,7 @@ public final class ContextMenuController {
         // that a shared setup path stopped paying its way.
         let isDark = self.isDark ?? (source.traitCollection.userInterfaceStyle == .dark)
         let snapshot: UIView?
-        if case .fluidMorph = presentationStyle {
+        if usesLeasedSourcePresentation {
             snapshot = nil
         } else {
             snapshot = makeSourceSnapshot(
@@ -387,7 +421,7 @@ public final class ContextMenuController {
                 preferRenderedImage: {
                     if #available(iOS 26.0, *) {
                         switch presentationStyle {
-                        case .morph, .fluidMorph:
+                        case .morph, .fluidMorph, .gooey:
                             return true
                         case .preview:
                             return false
@@ -424,6 +458,15 @@ public final class ContextMenuController {
                 sourceRectInHost: sourceRectInHost,
                 sourceCornerRadius: sourceCornerRadius,
                 menuFrame: menuFrame
+            )
+        case let .gooey(configuration):
+            setupGooeyStyle(
+                host: host,
+                isDark: isDark,
+                sourceLease: activeSourceLease,
+                actionsView: actionsView,
+                menuFrame: menuFrame,
+                configuration: configuration
             )
         case .preview:
             guard let snapshot else { return }
@@ -724,6 +767,43 @@ public final class ContextMenuController {
         self.menuContainer = platterHost.finalMenuGlassSurfaceView
     }
 
+    /// Wires up the `.gooey` path. The final menu surface is pre-staged
+    /// invisible at its final frame; `AetherGooeyContextMenuTransition`
+    /// drives a temporary shell/bridge overlay so the real row hierarchy
+    /// never gets resized during the morph.
+    private func setupGooeyStyle(
+        host: UIView,
+        isDark: Bool,
+        sourceLease _: SourcePresentationLease?,
+        actionsView: ContextMenuActionsView,
+        menuFrame: CGRect,
+        configuration: AetherGooeyContextMenuTransitionConfiguration?
+    ) {
+        let menuSurface = MenuGlassSurfaceView(isDark: isDark)
+        menuSurface.frame = menuFrame
+        menuSurface.autoresizingMask = []
+        menuSurface.setForcesRoundedBoundsClip(true)
+        menuSurface.layer.allowsEdgeAntialiasing = true
+        menuSurface.setSurfaceCornerRadius(ContextMenuActionsView.cornerRadius)
+        menuSurface.alpha = 0.0
+        menuSurface.isUserInteractionEnabled = false
+        host.addSubview(menuSurface)
+        menuSurface.setNeedsLayout()
+        menuSurface.layoutIfNeeded()
+
+        actionsView.frame = menuSurface.contentView.bounds
+        actionsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        actionsView.setRevealProgress(0)
+        menuSurface.contentView.addSubview(actionsView)
+
+        let resolvedConfiguration = configuration ?? .default(appearance: AetherAppearance.runtimeCurrent)
+        let transition = AetherGooeyContextMenuTransition(configuration: resolvedConfiguration)
+
+        self.gooeySurfaceView = menuSurface
+        self.menuContainer = menuSurface
+        self.gooeyTransition = transition
+    }
+
     private struct PreviewLayout {
         let initialPreviewFrame: CGRect
         let previewFrame: CGRect
@@ -780,7 +860,7 @@ public final class ContextMenuController {
 
         if let accessory = previewLayout.accessory,
            let accessoryFrame = previewLayout.accessoryFrame {
-            let accessoryContainer = UIView(frame: accessoryFrame)
+            let accessoryContainer = PreviewAccessoryContainerView(frame: accessoryFrame)
             accessoryContainer.clipsToBounds = false
             accessory.view.frame = accessoryContainer.bounds
             accessory.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -815,6 +895,8 @@ public final class ContextMenuController {
         let dim = dimView
         let morphHost = self.morphHost
         let platterBloomHost = self.platterBloomHost
+        let gooeyTransition = self.gooeyTransition
+        let gooeySurfaceView = self.gooeySurfaceView
         let sdfHost = self.sdfHost
         let container = menuContainer
         let snapshot = snapshotView
@@ -874,10 +956,13 @@ public final class ContextMenuController {
             self?.submenuCard?.tearDownGlassEffect()
             morphHost?.glass.tearDownGlassEffect()
             platterBloomHost?.finalMenuGlassSurfaceView.tearDownGlassEffect()
+            gooeySurfaceView?.tearDownGlassEffect()
+            gooeyTransition?.cancel()
             self?.onWillRemoveOverlay?()
             dim?.removeFromSuperview()
             morphHost?.removeFromSuperview()
             platterBloomHost?.removeFromSuperview()
+            gooeySurfaceView?.removeFromSuperview()
             sdfHost?.removeFromSuperview()
             container?.removeFromSuperview()
             actionsView?.removeFromSuperview()
@@ -889,6 +974,8 @@ public final class ContextMenuController {
             self?.dimView = nil
             self?.morphHost = nil
             self?.platterBloomHost = nil
+            self?.gooeyTransition = nil
+            self?.gooeySurfaceView = nil
             self?.sourcePresentationLease = nil
             self?.sdfHost = nil
             self?.sdfFilter = nil
@@ -937,6 +1024,8 @@ public final class ContextMenuController {
             animateOutMorph(dim: dim, cleanup: cleanup)
         case .fluidMorph:
             animateOutFluidMorph(dim: dim, cleanup: cleanup)
+        case .gooey:
+            animateOutGooey(dim: dim, cleanup: cleanup)
         case .preview:
             if let sdfHost {
                 animateOutPreview(
@@ -1103,10 +1192,9 @@ public final class ContextMenuController {
             completion: { _ in completion() }
         )
 
-        UIView.animate(
-            withDuration: ContextMenuController.previewDismissDuration * 0.58,
+        Self.animateWithPreviewBezier(
+            duration: ContextMenuController.previewDismissDuration * 0.58,
             delay: ContextMenuController.previewDismissDuration * 0.22,
-            options: [.curveEaseIn, .beginFromCurrentState, .allowUserInteraction],
             animations: {
                 // Delayed fade keeps the geometry visible long enough to
                 // read before the snapshot hands back to the real source.
@@ -1137,6 +1225,8 @@ public final class ContextMenuController {
             animateInMorph(sourceMinSide: sourceMinSide)
         case .fluidMorph:
             animateInFluidMorph()
+        case .gooey:
+            animateInGooey()
         case let .preview(_, lift, _, _):
             if let sdfHost { animateInPreview(sdfHost: sdfHost, lift: lift) }
         }
@@ -1217,8 +1307,29 @@ public final class ContextMenuController {
         guard let platterBloomHost else { return }
         platterBloomHost.animateExpand(
             duration: ContextMenuController.morphDuration,
-            damping: ContextMenuController.morphDamping,
+            damping: ContextMenuController.fluidMorphDamping,
             completion: nil
+        )
+    }
+
+    /// Drive the `.gooey` transition overlay from source proxy into the
+    /// already-created final menu surface.
+    private func animateInGooey() {
+        guard
+            let host = hostView,
+            let menuSurface = gooeySurfaceView,
+            let transition = gooeyTransition
+        else { return }
+
+        let sourceView = sourcePresentationLease?.proxyView ?? source.view
+        guard let sourceView else { return }
+
+        transition.animateOpen(
+            sourceView: sourceView,
+            menuView: menuSurface,
+            containerView: host,
+            placement: currentContextMenuPlacement(),
+            completion: { _ in }
         )
     }
 
@@ -1246,19 +1357,56 @@ public final class ContextMenuController {
         )
     }
 
+    /// Reverse of `.gooey`: row content fades out, then the temporary shell
+    /// overlay collapses back toward the source proxy.
+    private func animateOutGooey(
+        dim: UIView?,
+        cleanup: @escaping () -> Void
+    ) {
+        guard
+            let host = hostView,
+            let menuSurface = gooeySurfaceView,
+            let transition = gooeyTransition
+        else {
+            cleanup()
+            return
+        }
+
+        menuSurface.resetGlassInteractionTransform()
+
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn], animations: {
+            dim?.alpha = 0.0
+        })
+
+        transition.animateClose(
+            sourceView: sourcePresentationLease?.proxyView ?? source.view,
+            menuView: menuSurface,
+            containerView: host,
+            placement: currentContextMenuPlacement(),
+            completion: { _ in cleanup() }
+        )
+    }
+
     /// Lifted preview + below-source menu spring-in (no morph).
     private func animateInPreview(sdfHost: UIView, lift: CGFloat) {
         // sdfHost was pre-staged at scale 0.9 + alpha 0; spring it to
         // identity. Menu chrome reads as "appearing fresh below the lifted
         // preview".
         UIView.animate(
-            withDuration: ContextMenuController.morphDuration,
+            withDuration: ContextMenuController.previewOpenDuration,
             delay: 0,
-            usingSpringWithDamping: 0.72,
+            usingSpringWithDamping: ContextMenuController.previewDamping,
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState, .allowUserInteraction],
             animations: {
                 sdfHost.transform = .identity
+            },
+            completion: nil
+        )
+        Self.animateWithPreviewBezier(
+            duration: ContextMenuController.previewOpenDuration,
+            delay: 0,
+            animations: {
                 sdfHost.alpha = 1.0
             },
             completion: nil
@@ -1270,9 +1418,9 @@ public final class ContextMenuController {
             let finalCenter = previewFinalCenterInHost ?? preview.center
             preview.transform = .identity
             UIView.animate(
-                withDuration: ContextMenuController.morphDuration,
+                withDuration: ContextMenuController.previewOpenDuration,
                 delay: 0,
-                usingSpringWithDamping: 0.72,
+                usingSpringWithDamping: ContextMenuController.previewDamping,
                 initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .allowUserInteraction],
                 animations: {
@@ -1285,18 +1433,42 @@ public final class ContextMenuController {
 
         if let accessory = previewAccessoryContainer {
             UIView.animate(
-                withDuration: ContextMenuController.morphDuration,
+                withDuration: ContextMenuController.previewOpenDuration,
                 delay: 0,
-                usingSpringWithDamping: 0.72,
+                usingSpringWithDamping: ContextMenuController.previewDamping,
                 initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .allowUserInteraction],
                 animations: {
                     accessory.transform = .identity
+                },
+                completion: nil
+            )
+            Self.animateWithPreviewBezier(
+                duration: ContextMenuController.previewOpenDuration,
+                delay: 0,
+                animations: {
                     accessory.alpha = 1.0
                 },
                 completion: nil
             )
         }
+    }
+
+    private static func animateWithPreviewBezier(
+        duration: TimeInterval,
+        delay: TimeInterval,
+        animations: @escaping () -> Void,
+        completion: (() -> Void)?
+    ) {
+        let animator = UIViewPropertyAnimator(
+            duration: max(0.001, duration),
+            timingParameters: previewBezierTimingParameters()
+        )
+        animator.addAnimations(animations)
+        if let completion {
+            animator.addCompletion { _ in completion() }
+        }
+        animator.startAnimation(afterDelay: delay)
     }
 
     // MARK: - Source snapshot
@@ -1318,6 +1490,20 @@ public final class ContextMenuController {
 
     // MARK: - Menu placement
 
+    private func maximumMenuHeight(hostBounds: CGRect) -> CGFloat {
+        let window = source.view?.window
+        let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
+        let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
+        let availableHeight = max(1.0, hostBounds.height - safeTop - safeBottom)
+
+        switch presentationStyle {
+        case .fluidMorph, .gooey:
+            return min(availableHeight, max(1.0, hostBounds.height * 0.74))
+        case .morph, .preview:
+            return availableHeight
+        }
+    }
+
     /// Non-preview menu placement. `.preview` uses `computePreviewLayout`
     /// because it owns a full vertical stack: accessory, preview, menu.
     ///
@@ -1336,7 +1522,7 @@ public final class ContextMenuController {
         switch presentationStyle {
         case .morph:
             initialY = sourceRect.minY
-        case .fluidMorph:
+        case .fluidMorph, .gooey:
             // Lens bloom behaves like UIKit's menu platter: it may cover the
             // original trigger. Keeping a source gap makes the lens look like
             // a detached popover and also leaves the trigger awkwardly visible
@@ -1371,8 +1557,35 @@ public final class ContextMenuController {
                 y = hostBounds.maxY - safeBottom - menuSize.height
             }
         }
+        if y < safeTop {
+            y = safeTop
+        }
 
         return CGRect(x: x, y: y, width: menuSize.width, height: menuSize.height)
+    }
+
+    private func currentContextMenuPlacement() -> AetherContextMenuPlacement {
+        let sourceRect = sourceRectInHost
+        let menuFrame = menuFrameInHost
+        if menuFrame.minY >= sourceRect.maxY {
+            return .below
+        }
+        if menuFrame.maxY <= sourceRect.minY {
+            return .above
+        }
+        if menuFrame.minX >= sourceRect.maxX {
+            return .trailing
+        }
+        if menuFrame.maxX <= sourceRect.minX {
+            return .leading
+        }
+
+        let dx = menuFrame.midX - sourceRect.midX
+        let dy = menuFrame.midY - sourceRect.midY
+        if abs(dy) >= abs(dx) {
+            return dy >= 0.0 ? .below : .above
+        }
+        return dx >= 0.0 ? .trailing : .leading
     }
 
     private func computePreviewLayout(
@@ -1388,50 +1601,65 @@ public final class ContextMenuController {
         let window = source.view?.window
         let safeTop: CGFloat = max(window?.safeAreaInsets.top ?? hostView?.safeAreaInsets.top ?? 0.0, 12.0)
         let safeBottom: CGFloat = max(window?.safeAreaInsets.bottom ?? hostView?.safeAreaInsets.bottom ?? 0.0, 12.0)
-        let maxContentWidth = max(0.0, hostBounds.width - sideInset * 2.0)
+        let maxContentWidth = max(1.0, hostBounds.width - sideInset * 2.0)
         let safeBottomY = hostBounds.maxY - safeBottom
         let spacing = max(0.0, verticalSpacing)
-
-        let previewSize = content?.preferredSize ?? sourceRect.size
         let effectiveLift = max(0.01, lift)
+
+        func clamped(_ value: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
+            guard upper >= lower else { return lower }
+            return min(max(value, lower), upper)
+        }
+
+        let rawPreviewSize = content?.preferredSize ?? sourceRect.size
+        let maxPreviewWidth = max(1.0, maxContentWidth / effectiveLift)
+        let previewWidth = min(maxPreviewWidth, max(1.0, rawPreviewSize.width))
 
         let accessorySize = resolvedPreviewAccessorySize(
             accessory,
             maxWidth: maxContentWidth,
-            fallbackWidth: min(max(previewSize.width, menuSize.width), maxContentWidth)
+            fallbackWidth: min(max(previewWidth, menuSize.width), maxContentWidth)
         )
         let hasAccessory = accessory != nil && accessorySize.width > 0.0 && accessorySize.height > 0.0
         let accessorySpacing = hasAccessory ? max(0.0, accessory?.spacing ?? 0.0) : 0.0
         let topBlockHeight = hasAccessory ? accessorySpacing + accessorySize.height : 0.0
 
-        let initialPreviewFrame: CGRect
-        if content == nil {
-            initialPreviewFrame = sourceRect
-        } else {
-            initialPreviewFrame = CGRect(
-                x: sourceRect.midX - previewSize.width / 2.0,
-                y: sourceRect.midY - previewSize.height / 2.0,
-                width: previewSize.width,
-                height: previewSize.height
-            )
-        }
-        let initialLiftedPreviewFrame = initialPreviewFrame.insetBy(
-            dx: -initialPreviewFrame.width * (effectiveLift - 1.0) / 2.0,
-            dy: -initialPreviewFrame.height * (effectiveLift - 1.0) / 2.0
+        let availableBlockHeight = max(1.0, safeBottomY - safeTop)
+        let maxLiftedPreviewHeight = max(
+            1.0,
+            availableBlockHeight - topBlockHeight - spacing - menuSize.height
         )
-        let requiredBottomOverflow = max(
-            0.0,
-            initialLiftedPreviewFrame.maxY + spacing + menuSize.height - safeBottomY
+        let maxPreviewHeight = max(1.0, maxLiftedPreviewHeight / effectiveLift)
+        let previewHeight = min(maxPreviewHeight, max(1.0, rawPreviewSize.height))
+        let previewSize = CGSize(width: previewWidth, height: previewHeight)
+        let liftInsetX = previewSize.width * (effectiveLift - 1.0) / 2.0
+        let liftInsetY = previewSize.height * (effectiveLift - 1.0) / 2.0
+
+        let minPreviewX = sideInset + liftInsetX
+        let maxPreviewX = hostBounds.maxX - sideInset - previewSize.width - liftInsetX
+        let previewX = clamped(
+            sourceRect.midX - previewSize.width / 2.0,
+            lower: minPreviewX,
+            upper: maxPreviewX
         )
-        let maxUpwardShift = max(
-            0.0,
-            initialLiftedPreviewFrame.minY - topBlockHeight - safeTop
+
+        let minPreviewY = safeTop + topBlockHeight + liftInsetY
+        let maxPreviewY = safeBottomY - spacing - menuSize.height - previewSize.height - liftInsetY
+        let previewY = clamped(
+            sourceRect.midY - previewSize.height / 2.0,
+            lower: minPreviewY,
+            upper: maxPreviewY
         )
-        let upwardShift = min(requiredBottomOverflow, maxUpwardShift)
-        let previewFrame = initialPreviewFrame.offsetBy(dx: 0.0, dy: -upwardShift)
+        let previewFrame = CGRect(
+            x: previewX,
+            y: previewY,
+            width: previewSize.width,
+            height: previewSize.height
+        )
+        let initialPreviewFrame = content == nil ? sourceRect : previewFrame
         let liftedPreviewFrame = previewFrame.insetBy(
-            dx: -previewFrame.width * (effectiveLift - 1.0) / 2.0,
-            dy: -previewFrame.height * (effectiveLift - 1.0) / 2.0
+            dx: -liftInsetX,
+            dy: -liftInsetY
         )
 
         let accessoryFrame: CGRect?
@@ -1449,7 +1677,11 @@ public final class ContextMenuController {
         }
 
         let menuX = computePreviewMenuX(sourceRect: previewFrame, menuSize: menuSize, hostBounds: hostBounds)
-        let menuY = liftedPreviewFrame.maxY + spacing
+        let menuY = clamped(
+            liftedPreviewFrame.maxY + spacing,
+            lower: safeTop,
+            upper: safeBottomY - menuSize.height
+        )
 
         return PreviewLayout(
             initialPreviewFrame: initialPreviewFrame,
@@ -1901,6 +2133,22 @@ public final class ContextMenuController {
             translationX: normal.x * stretchMaxOffset * k,
             y: normal.y * stretchMaxOffset * k
         ).scaledBy(x: scaleX, y: scaleY)
+    }
+}
+
+private final class PreviewAccessoryContainerView: UIView {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if super.point(inside: point, with: event) {
+            return true
+        }
+
+        for subview in subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
+            let pointInSubview = subview.convert(point, from: self)
+            if subview.point(inside: pointInSubview, with: event) {
+                return true
+            }
+        }
+        return false
     }
 }
 
