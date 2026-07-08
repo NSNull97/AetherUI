@@ -464,16 +464,13 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
             guard let coordinator = transitionCoordinator, !coordinator.animatingCompletion else {
                 break
             }
-            // Thresholds match Telegram-iOS: a deliberate 20% drag OR a fast
-            // flick (>1000pt/s). The previous 30%/500pt/s was too easy to
-            // trigger accidentally during vertical-leaning drags.
-            let shouldComplete = progress > 0.2 || velocity.x > 1000
+            if recognizer.state == .ended {
+                coordinator.updateProgressForRelease(progress, velocity: velocity.x)
+            }
+            let shouldComplete = recognizer.state == .ended && coordinator.shouldCompleteInteractivePop(progress: progress, velocity: velocity.x)
             if shouldComplete {
                 let committedController = controllers.last!
                 let completionTransition = coordinator.completionTransition(velocity: velocity.x)
-                navigationBarTransitionResolutionBegan?(true, completionTransition)
-                bottomBarTransitionResolutionBegan?(true, completionTransition)
-                controllerRemovalCommitted?(committedController)
                 coordinator.animateCompletion(velocity: velocity.x) { [weak self] in
                     guard let self = self else { return }
                     let removed = self.controllers.removeLast()
@@ -485,9 +482,11 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                         self?.controllerRemoved?(removed)
                     }
                 }
+                navigationBarTransitionResolutionBegan?(true, completionTransition)
+                bottomBarTransitionResolutionBegan?(true, completionTransition)
+                controllerRemovalCommitted?(committedController)
             } else {
-                navigationBarTransitionResolutionBegan?(false, coordinator.cancelTransition)
-                bottomBarTransitionResolutionBegan?(false, coordinator.cancelTransition)
+                let cancelTransition = coordinator.cancelTransition
                 coordinator.animateCancel { [weak self] in
                     guard let self = self else { return }
                     let previousController = self.controllers[self.controllers.count - 2]
@@ -497,6 +496,8 @@ public final class NavigationContainer: UIView, UIGestureRecognizerDelegate {
                     self.bottomBarTransitionEnded?(false)
                     self.applyPendingControllersUpdateIfPossible(deferred: true)
                 }
+                navigationBarTransitionResolutionBegan?(false, cancelTransition)
+                bottomBarTransitionResolutionBegan?(false, cancelTransition)
             }
 
         default:
